@@ -70,6 +70,24 @@ export interface ConnectedScope {
   health: ScopeHealth;
 }
 
+/**
+ * A downloadable partner security artifact (MSP-B13 T5 / AC3/AC4) — the minimal
+ * read-only AWS IAM policy or Azure Reader RBAC role a security reviewer needs.
+ * Metadata only; the file content is served by the backend download route.
+ */
+export interface SecurityArtifact {
+  /** Stable download key referenced by the download route. */
+  id: string;
+  /** Human label shown on the card. */
+  label: string;
+  /** One-line description of what the artifact grants. */
+  description: string;
+  /** Suggested download filename. */
+  filename: string;
+  /** MIME type (e.g. application/json, text/markdown). */
+  media_type: string;
+}
+
 /** Result of a Test Connection attempt (T1-AC3). */
 export interface TestConnectionResult {
   ok: boolean;

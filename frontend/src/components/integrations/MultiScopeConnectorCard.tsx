@@ -30,13 +30,11 @@ import {
   PlugZap,
   Trash2,
   CheckCircle2,
-  AlertTriangle,
   XCircle,
-  Clock,
-  HelpCircle,
+  ShieldCheck,
+  Download,
   Lock,
   Loader2,
-  type LucideIcon,
 } from 'lucide-react';
 import Button from '../common/Button';
 import PasswordInput from '../auth/PasswordInput';
@@ -45,56 +43,29 @@ import {
   ConnectorFormField,
   MultiScopeConnectorConfig,
   ScopeHealthStatus,
+  SecurityArtifact,
   TestConnectionResult,
 } from '../../types/multiScopeConnector';
+import { scopeHealthPresentation } from './scopeHealthVocabulary';
 
 const INPUT_CLS =
   'w-full rounded-lg border border-border bg-bg/30 px-3 py-2 text-sm text-text ' +
   'placeholder:text-muted/60 outline-none transition-colors hover:border-accent/40 ' +
   'focus:border-accent focus:ring-2 focus:ring-accent/20';
 
-// ── Per-scope health presentation ──────────────────────────────────────────
-const HEALTH_PRESENTATION: Record<
-  ScopeHealthStatus,
-  { label: string; cls: string; Icon: LucideIcon }
-> = {
-  ok: {
-    label: 'Healthy',
-    cls: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
-    Icon: CheckCircle2,
-  },
-  partial: {
-    label: 'Partial',
-    cls: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
-    Icon: AlertTriangle,
-  },
-  auth_failed: {
-    label: 'Auth failed',
-    cls: 'border-red-500/30 bg-red-500/10 text-red-300',
-    Icon: XCircle,
-  },
-  failed: {
-    label: 'Failed',
-    cls: 'border-red-500/30 bg-red-500/10 text-red-300',
-    Icon: XCircle,
-  },
-  pending: {
-    label: 'Pending',
-    cls: 'border-sky-500/30 bg-sky-500/10 text-sky-300',
-    Icon: Clock,
-  },
-  unknown: {
-    label: 'Unknown',
-    cls: 'border-border bg-slate-500/10 text-muted',
-    Icon: HelpCircle,
-  },
-};
-
+// ── Per-scope health badge ──────────────────────────────────────────────────
+// Renders the SHARED run-health vocabulary (T5-AC1) from scopeHealthVocabulary so
+// the card and any run-health surface use the identical status words. The
+// `data-tone` marker carries the healthy/warn/error/neutral severity so healthy
+// and failed scopes are unambiguously distinguishable (T5-AC2), independent of
+// colour (the icon reinforces it too).
 function ScopeHealthBadge({ status }: { status: ScopeHealthStatus }) {
-  const p = HEALTH_PRESENTATION[status] ?? HEALTH_PRESENTATION.unknown;
+  const p = scopeHealthPresentation(status);
   const { Icon } = p;
   return (
     <span
+      data-testid="scope-health-badge"
+      data-tone={p.tone}
       className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium leading-none ${p.cls}`}
     >
       <Icon size={11} className="shrink-0" />
@@ -232,6 +203,15 @@ interface Props {
   onPinCandidate?: (candidateId: string) => Promise<void>;
   /** Unpin a scope by id. */
   onRemoveScope?: (scopeId: string) => Promise<void>;
+  /**
+   * Downloadable partner security artifacts — the minimal read-only IAM policy
+   * (AWS) / Reader RBAC role (Azure). Shown in the "Security & compliance" section
+   * so a reviewer can grab them in the flow (T5-AC3/AC4). Read-only, so available
+   * regardless of `canManage`.
+   */
+  securityArtifacts?: SecurityArtifact[];
+  /** Download one security artifact by id (the parent triggers the save). */
+  onDownloadArtifact?: (artifactId: string) => Promise<void> | void;
 }
 
 export default function MultiScopeConnectorCard({
@@ -250,6 +230,8 @@ export default function MultiScopeConnectorCard({
   onAddScope,
   onPinCandidate,
   onRemoveScope,
+  securityArtifacts = [],
+  onDownloadArtifact,
 }: Props) {
   // ── Connection form state ─────────────────────────────────────────────────
   const [credValues, setCredValues] = useState<Record<string, string>>(() =>
@@ -274,6 +256,7 @@ export default function MultiScopeConnectorCard({
   const [scopeError, setScopeError] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [pinningId, setPinningId] = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   const disabledTitle = !canManage ? manageDisabledReason : undefined;
 
@@ -371,6 +354,18 @@ export default function MultiScopeConnectorCard({
       await onPinCandidate(candidateId);
     } finally {
       setPinningId(null);
+    }
+  }
+
+  async function handleDownloadArtifact(artifactId: string) {
+    // Downloads are read-only partner docs — available to any role (not gated by
+    // canManage), so a security reviewer can grab them without edit rights.
+    if (!onDownloadArtifact) return;
+    setDownloadingId(artifactId);
+    try {
+      await onDownloadArtifact(artifactId);
+    } finally {
+      setDownloadingId(null);
     }
   }
 
@@ -671,6 +666,53 @@ export default function MultiScopeConnectorCard({
           </form>
         )}
       </section>
+
+      {/* ── Security & compliance (T5-AC3/AC4) ── */}
+      {securityArtifacts.length > 0 && (
+        <section
+          className="mt-6 border-t border-border pt-5"
+          data-testid="security-artifacts"
+        >
+          <div className="mb-2 flex items-center gap-2 text-sm font-medium text-text">
+            <ShieldCheck size={14} className="shrink-0 text-accent" />
+            Security &amp; compliance
+          </div>
+          <p className="mb-3 text-[11px] leading-relaxed text-muted">
+            The minimal read-only access this connector needs — hand these to your
+            security reviewer.
+          </p>
+          <ul className="space-y-2" aria-label="Security artifacts">
+            {securityArtifacts.map((artifact) => (
+              <li
+                key={artifact.id}
+                className="flex items-start justify-between gap-3 rounded-lg border border-border bg-bg/20 px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium text-text">
+                    {artifact.label}
+                  </div>
+                  <div className="mt-0.5 break-words text-[11px] text-muted">
+                    {artifact.description}
+                  </div>
+                </div>
+                {onDownloadArtifact && (
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadArtifact(artifact.id)}
+                    disabled={downloadingId === artifact.id}
+                    aria-label={`Download ${artifact.label}`}
+                    title={`Download ${artifact.filename}`}
+                    className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-muted transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                  >
+                    <Download size={13} className="shrink-0" />
+                    {downloadingId === artifact.id ? 'Downloading…' : 'Download'}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }

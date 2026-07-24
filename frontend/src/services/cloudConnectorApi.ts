@@ -9,7 +9,7 @@
  * Shapes mirror the backend Pydantic models exactly (see the API contract entry
  * "Cloud Connector Onboarding — AWS & Azure Events").
  */
-import { apiGet, apiPost, apiDelete } from '../lib/apiClient';
+import { apiGet, apiGetBlob, apiPost, apiDelete } from '../lib/apiClient';
 
 /** Non-secret status of a cloud connection (never carries a credential). */
 export interface CloudConnectionStatus {
@@ -118,4 +118,67 @@ export function fetchCloudScopeHealth(
   return apiGet<CloudScopeHealthResponse>(
     `/api/connectors/${connectorId}/scopes/${encodeURIComponent(scopeId)}/health`,
   );
+}
+
+// ── Security artifacts (MSP-B13 / T5, AT-747 — AC3/AC4) ─────────────────────────
+
+/** One downloadable partner security artifact (IAM policy / RBAC role). */
+export interface CloudSecurityArtifact {
+  id: string;
+  label: string;
+  description: string;
+  filename: string;
+  media_type: string;
+}
+
+/** The connector's downloadable security artifacts. */
+export interface CloudSecurityArtifactsResponse {
+  connector_id: string;
+  provider: string;
+  artifacts: CloudSecurityArtifact[];
+}
+
+/** GET /api/connectors/{id}/security-artifacts — Viewer+: list the partner docs. */
+export function fetchSecurityArtifacts(
+  connectorId: string,
+): Promise<CloudSecurityArtifactsResponse> {
+  return apiGet<CloudSecurityArtifactsResponse>(
+    `/api/connectors/${connectorId}/security-artifacts`,
+  );
+}
+
+/**
+ * Download one security artifact and hand it to the browser as a file. The
+ * content is fetched with the auth header (a plain link cannot carry it) and saved
+ * under the server-suggested filename. Non-secret partner documentation (AC3/AC4).
+ */
+export async function downloadSecurityArtifact(
+  connectorId: string,
+  artifactId: string,
+  fallbackFilename?: string,
+): Promise<void> {
+  const { blob, filename } = await apiGetBlob(
+    `/api/connectors/${connectorId}/security-artifacts/${encodeURIComponent(artifactId)}`,
+  );
+  triggerBrowserDownload(blob, filename ?? fallbackFilename ?? artifactId);
+}
+
+/**
+ * Save a Blob to the user's machine via a transient object-URL anchor. Guarded so
+ * it degrades to a no-op in a non-browser/test environment that lacks
+ * `URL.createObjectURL`.
+ */
+export function triggerBrowserDownload(blob: Blob, filename: string): void {
+  if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return;
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }

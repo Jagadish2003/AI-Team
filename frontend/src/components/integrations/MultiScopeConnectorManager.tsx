@@ -21,12 +21,15 @@ import React, { useCallback, useEffect, useState } from 'react';
 import MultiScopeConnectorCard from './MultiScopeConnectorCard';
 import { multiScopeConnectorConfig } from './multiScopeConnectors';
 import { connectorIcons } from './ConnectorIcons';
+import { toScopeHealthStatus } from './scopeHealthVocabulary';
 import { Connector } from '../../types/connector';
-import { ConnectedScope, ScopeHealthStatus, TestConnectionResult } from '../../types/multiScopeConnector';
+import { ConnectedScope, SecurityArtifact, TestConnectionResult } from '../../types/multiScopeConnector';
 import {
   CloudScopeView,
   createCloudConnection,
+  downloadSecurityArtifact,
   fetchCloudScopes,
+  fetchSecurityArtifacts,
   pinCloudScope,
   testCloudConnection,
   unpinCloudScope,
@@ -36,21 +39,6 @@ import { useAuthOptional } from '../../context/AuthContext';
 import { useToast } from '../common/Toast';
 import { useDataCache } from '../../lib/dataCache';
 import { cacheKeys } from '../../lib/cacheKeys';
-
-const KNOWN_STATUSES: ReadonlySet<ScopeHealthStatus> = new Set<ScopeHealthStatus>([
-  'ok',
-  'partial',
-  'auth_failed',
-  'failed',
-  'pending',
-  'unknown',
-]);
-
-function toHealthStatus(status: string): ScopeHealthStatus {
-  return (KNOWN_STATUSES as Set<string>).has(status)
-    ? (status as ScopeHealthStatus)
-    : 'unknown';
-}
 
 /** Map a backend ScopeView onto the card's ConnectedScope shape. */
 function toConnectedScope(view: CloudScopeView): ConnectedScope {
@@ -65,7 +53,9 @@ function toConnectedScope(view: CloudScopeView): ConnectedScope {
     label: view.label ?? undefined,
     regions: view.regions && view.regions.length ? view.regions : undefined,
     health: {
-      status: toHealthStatus(view.status),
+      // The shared run-health vocabulary (T5-AC1): the backend scope status word
+      // maps 1:1 to the card's status set, unknown values degrade to 'unknown'.
+      status: toScopeHealthStatus(view.status),
       message: parts.length ? parts.join(' · ') : undefined,
       lastChecked: view.last_checkpoint_at ?? null,
     },
@@ -123,6 +113,7 @@ export default function MultiScopeConnectorManager({
   const [scopes, setScopes] = useState<ConnectedScope[]>([]);
   const [candidates, setCandidates] = useState<string[]>([]);
   const [loadingScopes, setLoadingScopes] = useState<boolean>(true);
+  const [securityArtifacts, setSecurityArtifacts] = useState<SecurityArtifact[]>([]);
 
   // Re-sync to the backend state whenever the connector prop refreshes (e.g.
   // after a create invalidates the connectors cache and the list refetches). This
@@ -157,6 +148,22 @@ export default function MultiScopeConnectorManager({
   }, [connector.id]);
 
   useEffect(() => loadScopes(), [loadScopes]);
+
+  // Load the connector's downloadable security artifacts (IAM policy / RBAC role).
+  // Best-effort: a read failure just hides the section — it never blocks onboarding.
+  useEffect(() => {
+    let alive = true;
+    fetchSecurityArtifacts(connector.id)
+      .then((resp) => {
+        if (alive) setSecurityArtifacts(resp.artifacts ?? []);
+      })
+      .catch(() => {
+        if (alive) setSecurityArtifacts([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [connector.id]);
 
   // A cloud connection is a new "system" set — refresh the tile list + license
   // banner after any connection/scope change so the hub reflects it with no reload.
@@ -233,6 +240,18 @@ export default function MultiScopeConnectorManager({
     }
   }
 
+  async function handleDownloadArtifact(artifactId: string) {
+    const artifact = securityArtifacts.find((a) => a.id === artifactId);
+    try {
+      await downloadSecurityArtifact(connector.id, artifactId, artifact?.filename);
+    } catch (err) {
+      toast.push(
+        asCardError(err, 'Could not download the security artifact.').message,
+        'error',
+      );
+    }
+  }
+
   // Not a multi-scope connector (shouldn't happen — the panel gates on id) → render
   // nothing rather than a broken card.
   if (!config) return null;
@@ -255,6 +274,8 @@ export default function MultiScopeConnectorManager({
       onAddScope={handleAddScope}
       onPinCandidate={isAzure ? handlePinCandidate : undefined}
       onRemoveScope={handleRemoveScope}
+      securityArtifacts={securityArtifacts}
+      onDownloadArtifact={handleDownloadArtifact}
     />
   );
 }
