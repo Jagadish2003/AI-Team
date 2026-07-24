@@ -15,11 +15,14 @@ from .rbac import require_role
 
 WORKSPACE_CATALOG_PATH = "/api/integration-hub/workspace-catalog"
 
+CLOUD_OPS_CATEGORY = "cloud_operations"
+
 CATEGORY_KEYS = [
     "primary_platforms",
     "operational_systems",
     "comms_knowledge",
     "data_engineering",
+    CLOUD_OPS_CATEGORY,
 ]
 
 SYSTEM_CATEGORY: Dict[str, str] = {
@@ -34,8 +37,6 @@ SYSTEM_CATEGORY: Dict[str, str] = {
     "azure_devops": "operational_systems",
     "linear": "operational_systems",
     "zendesk": "operational_systems",
-    "aws_event_source": "operational_systems",
-    "azure_event_source": "operational_systems",
     "slack": "comms_knowledge",
     "teams": "comms_knowledge",
     "confluence": "comms_knowledge",
@@ -71,7 +72,22 @@ class WorkspaceCatalogResponse(BaseModel):
     operational_systems: List[CatalogSystemItem]
     comms_knowledge: List[CatalogSystemItem]
     data_engineering: List[CatalogSystemItem]
+    cloud_operations: List[CatalogSystemItem]
     missing_categories: List[str]
+
+
+def _category_for_connector(system_id: str, connector: Dict[str, Any]) -> str | None:
+    """Which catalog bucket a connector belongs to.
+
+    Cloud Operations membership is derived from the connector's ``multiScope``
+    flag — the SAME registry-driven rule the Integration Hub uses — so AWS/Azure
+    Events and any future multi-account/subscription cloud connector bucket here
+    automatically, with no hardcoded id list. All other connectors fall back to
+    the static ``SYSTEM_CATEGORY`` map.
+    """
+    if connector.get("multiScope"):
+        return CLOUD_OPS_CATEGORY
+    return SYSTEM_CATEGORY.get(system_id)
 
 
 def _normalise_status(status: Any) -> str:
@@ -109,7 +125,7 @@ def build_workspace_catalog(
         if not system_id:
             continue
 
-        category = SYSTEM_CATEGORY.get(system_id)
+        category = _category_for_connector(system_id, connector)
         if category is None:
             continue
 
@@ -137,6 +153,7 @@ def build_workspace_catalog(
         operational_systems=buckets["operational_systems"],
         comms_knowledge=buckets["comms_knowledge"],
         data_engineering=buckets["data_engineering"],
+        cloud_operations=buckets[CLOUD_OPS_CATEGORY],
         missing_categories=missing_categories,
     )
 

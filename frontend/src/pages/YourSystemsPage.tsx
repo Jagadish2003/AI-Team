@@ -50,6 +50,7 @@
 import React, { useMemo } from 'react';
 import {
   ArrowLeft,
+  Cloud,
   Code2,
   CircleCheck,
   Database,
@@ -95,6 +96,11 @@ const SYSTEM_DISPLAY: Record<string, {
   azure_devops:   { logoInitials: 'ADO', logoColor: 'bg-blue-700',   category: 'ALM / CI/CD' },
   linear:         { logoInitials: 'LN',  logoColor: 'bg-violet-600', category: 'Product / issues' },
   zendesk:        { logoInitials: 'ZD',  logoColor: 'bg-green-600',  category: 'Support' },
+  // Cloud Operations (MSP-B13) — canonical connector ids are aws_events / azure_events.
+  // The *_event_source ids below are the legacy template-suggestion ids kept for
+  // the template-suggested fallback section.
+  aws_events:         { logoInitials: 'AWS', logoColor: 'bg-orange-600', category: 'Cloud operational events' },
+  azure_events:       { logoInitials: 'AZ',  logoColor: 'bg-blue-600',   category: 'Cloud operational events' },
   aws_event_source:   { logoInitials: 'AWS', logoColor: 'bg-orange-600', category: 'Cloud operational events' },
   azure_event_source: { logoInitials: 'AZ',  logoColor: 'bg-blue-600',   category: 'Cloud operational events' },
   // Comms & knowledge
@@ -156,6 +162,13 @@ const GROUPS: GroupDef[] = [
     subLabel:    'Source control, databases, and data platform connectors',
     icon:        <Code2 size={16} />,
     group:       'code_engineering',
+  },
+  {
+    categoryKey: 'cloud_operations',
+    label:       'Group D — Cloud Operations',
+    subLabel:    'Multi-account/subscription cloud event connectors (AWS, Azure)',
+    icon:        <Cloud size={16} />,
+    group:       'cloud_operations',
   },
 ];
 
@@ -349,7 +362,7 @@ export default function YourSystemsPage({ setupState, catalog }: Props) {
     return GROUPS
       .map(groupDef => ({
         groupDef,
-        systems: (catalog[groupDef.categoryKey] as CatalogSystemItem[]).map(item =>
+        systems: ((catalog[groupDef.categoryKey] as CatalogSystemItem[] | undefined) ?? []).map(item =>
           catalogItemToSystemCard(item, groupDef.group)
         ),
       }))

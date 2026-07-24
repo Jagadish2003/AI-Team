@@ -482,6 +482,115 @@ def _ingest_ops_event_bridge(org_id: str, run_id: str) -> Dict[str, Any]:
     return {"records": collected, "health": health}
 
 
+def _ingest_azure_events(org_id: str, run_id: str) -> Dict[str, Any]:
+    """Drive the native MSP-B2 Azure Event Connector on the shared checkpoint path.
+
+    The live counterpart of the MSP-B8 Event-History Bridge: it polls Azure Monitor
+    Alerts, the Activity Log (Administrative only), and Service Health for the pinned
+    subscriptions, normalises each through its MSP-B0 mapper, and emits the SAME
+    OperationalEvent record shape the bridge emits. Records are validated inside
+    ``process_batch`` (a malformed or cross-org record raises before the
+    ``(org, "azure_events")`` checkpoint can advance), and the collected records are
+    merged into the cloud-ops assembly alongside the bridge records — where the
+    OpsEventStream folds duplicate signatures, so a native event and its bridged twin
+    never double-count.
+
+    Mirrors :func:`_ingest_ops_event_bridge` exactly (same change-runner path, same
+    non-blocking posture, same health-block shape). Returns ``{"records", "health"}``.
+    """
+    try:
+        from .cloud_ops_runtime import operational_event_from_bridge_record
+        from .ingest import change_runner
+        from .ingest.azure_events import build_ingestor as build_azure_ingestor
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Azure event connector import failed (non-blocking): [%s]",
+            type(exc).__name__,
+        )
+        return {
+            "records": [],
+            "health": {"status": "unavailable", "reason": type(exc).__name__, "records": 0},
+        }
+
+    try:
+        ingestor = build_azure_ingestor(org_id)
+    except Exception as exc:  # noqa: BLE001 — a present-but-invalid config must not crash the run
+        logger.warning(
+            "Azure event connector config invalid (non-blocking) org=%s: [%s]",
+            org_id,
+            type(exc).__name__,
+        )
+        return {
+            "records": [],
+            "health": {"status": "unavailable", "reason": type(exc).__name__, "records": 0},
+        }
+
+    if ingestor is None:
+        # Not configured for this org (no pinned subscriptions / no config) — the
+        # connector simply contributes nothing, exactly like an unconfigured source.
+        return {"records": [], "health": {"status": "not_configured", "records": 0}}
+
+    collected: List[Dict[str, Any]] = []
+
+    def _process_batch(batch: Any) -> None:
+        for record in batch.records:
+            if not isinstance(record, dict):
+                raise TypeError("azure event connector emitted a non-mapping record")
+            # Validate (and org-scope) each event exactly as the bridge does, so a
+            # bad record cannot advance the checkpoint.
+            operational_event_from_bridge_record(record, org_id=org_id)
+            collected.append(dict(record))
+
+    try:
+        result = change_runner.ingest_with_checkpoint(
+            ingestor,
+            org_id,
+            process_batch=_process_batch,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Azure event connector failed (non-blocking) org=%s run=%s: [%s]",
+            org_id,
+            run_id,
+            type(exc).__name__,
+        )
+        return {
+            "records": collected,
+            "health": {
+                "status": "unavailable",
+                "reason": type(exc).__name__,
+                "records": len(collected),
+            },
+        }
+
+    status = "degraded" if result.error is not None else "ok"
+    health: Dict[str, Any] = {
+        "status": status,
+        "records": len(collected),
+        "reported_records": int(result.records),
+        "batches": int(result.batches),
+        "complete": bool(result.complete),
+        "first_run": bool(result.first_run),
+        "checkpoint_advanced": bool(result.checkpoint_advanced),
+    }
+    if result.error is not None:
+        health["reason"] = type(result.error).__name__
+        logger.warning(
+            "Azure event connector degraded org=%s run=%s: [%s]",
+            org_id,
+            run_id,
+            type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "Azure ingestion: %d event(s), %d batch(es), checkpoint_advanced=%s",
+            len(collected),
+            result.batches,
+            result.checkpoint_advanced,
+        )
+    return {"records": collected, "health": health}
+
+
 def _ingest_java_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     """Drive Java application change-based ingestion and build its corroboration block.
 
@@ -1166,6 +1275,11 @@ def run(
         "records": [],
         "health": {"status": "not_selected", "records": 0},
     }
+    # MSP-B2: native Azure Event Connector output (same record shape as the bridge).
+    azure_events_data: Dict[str, Any] = {
+        "records": [],
+        "health": {"status": "not_selected", "records": 0},
+    }
     cloud_ops_runtime_health: Dict[str, Any] = {"status": "not_selected"}
     logger.info(f"Systems: {sorted(list(_systems))}")
 
@@ -1337,6 +1451,16 @@ def run(
     if _any_cloud_ops:
         ops_event_bridge_data = _ingest_ops_event_bridge(org_id, run_id)
 
+    # MSP-B2: the NATIVE Azure Event Connector is the live counterpart of the B8
+    # bridge — the SAME OperationalEvent record shape, its own (org, "azure_events")
+    # checkpoint. It runs only when the Azure connector is connected+selected AND a
+    # cloud_ops pack is selected (so its events are actually consumed), and its
+    # records feed the SAME cloud-ops assembly seam as the bridge, where the
+    # OpsEventStream folds duplicate signatures — so native + bridge never
+    # double-count. Non-blocking, exactly like the bridge.
+    if _any_cloud_ops and "azure_events" in _systems:
+        azure_events_data = _ingest_azure_events(org_id, run_id)
+
     # Single-ingest: materialization now hands the runner ALL connected systems
     # (not just the ones a probe pre-pass confirmed had data), so guard against
     # aborting a run that still has usable data. Abort only when NO system of
@@ -1348,6 +1472,7 @@ def run(
         and not sn_data
         and not jira_data
         and not ops_event_bridge_data.get("records")
+        and not azure_events_data.get("records")
     ):
         logger.error("No system-of-record data available — cannot run detectors. Aborting.")
         try:
@@ -1377,6 +1502,7 @@ def run(
         empty["perSystem"], empty["succeeded"], empty["ingestErrors"] = _ps, _succ, _errs
         empty["cloudOpsRuntime"] = {
             "eventBridge": dict(ops_event_bridge_data.get("health") or {}),
+            "azureEvents": dict(azure_events_data.get("health") or {}),
             "assembly": cloud_ops_runtime_health,
         }
         return empty
@@ -1648,10 +1774,18 @@ def run(
             if not isinstance(sn_data, dict):
                 sn_data = {}
             sn_data.setdefault("org_id", org_id)
+            # Native Azure events (MSP-B2) and staged bridge events (MSP-B8) are the
+            # SAME OperationalEvent record shape and are merged into ONE assembly
+            # call. The runtime's OpsEventStream folds identical event_signatures, so
+            # a native event and its bridged twin collapse to one signal rather than
+            # double-counting (MSP §15 transport equivalence).
+            _cloud_event_records = list(ops_event_bridge_data.get("records") or ()) + list(
+                azure_events_data.get("records") or ()
+            )
             runtime = build_cloud_ops_runtime(
                 org_id,
                 sn_data,
-                bridge_records=ops_event_bridge_data.get("records") or (),
+                bridge_records=_cloud_event_records,
                 bridge_health=ops_event_bridge_data.get("health"),
             )
             sn_data["cloud_ops"] = runtime.block
@@ -2373,6 +2507,7 @@ def run(
         "secopsVolume": secops_volume_measurements,
         "cloudOpsRuntime": {
             "eventBridge": dict(ops_event_bridge_data.get("health") or {}),
+            "azureEvents": dict(azure_events_data.get("health") or {}),
             "assembly": cloud_ops_runtime_health,
         },
     }

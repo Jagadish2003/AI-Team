@@ -24,6 +24,10 @@ export interface WorkspaceCatalogResponse {
   operational_systems: CatalogSystemItem[];
   comms_knowledge:     CatalogSystemItem[];
   data_engineering:    CatalogSystemItem[];
+  // MSP-B13: Cloud Operations (AWS/Azure Events + future multi-account/subscription
+  // cloud connectors). Optional so pre-MSP-B13 catalog fixtures/responses still
+  // typecheck; the backend always returns it now.
+  cloud_operations?:   CatalogSystemItem[];
   missing_categories:  string[];
 }
 
@@ -34,6 +38,7 @@ export function flattenCatalog(catalog: WorkspaceCatalogResponse): CatalogSystem
     ...catalog.operational_systems,
     ...catalog.comms_knowledge,
     ...catalog.data_engineering,
+    ...(catalog.cloud_operations ?? []),
   ];
 }
 

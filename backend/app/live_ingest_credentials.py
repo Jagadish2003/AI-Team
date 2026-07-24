@@ -607,9 +607,78 @@ def resolve_live_systems(org_id: str) -> List[str]:
     # ``resolve_secret`` reads it safely (never from config — AC4).
     _resolve_dotnet_app(org_id, connectors, live)
 
+    # Native Azure Event Connector (MSP-B2). URL-less and vault-resolving like
+    # GitHub — the connector mints its OWN ARM token from the vaulted service
+    # principal (acquire_arm_token), so nothing is published to the per-run context;
+    # it only needs the run promoted to live + azure_events in the systems set. The
+    # discovery runner still gates the actual poll on a cloud_ops pack being selected.
+    _resolve_azure_events(org_id, live)
+
     # Publish to the per-run context (empty dict clears any prior credentials).
     set_live_connectors(connectors)
     return live
+
+
+def _resolve_azure_events(org_id: str, live: List[str]) -> None:
+    """Add the native Azure Event Connector (MSP-B2) to the live set when connected.
+
+    Azure is URL-less here and resolves its OWN ARM token from the vaulted service
+    principal inside the connector (via ``acquire_arm_token``) — like GitHub, nothing
+    is published to the per-run ``connectors`` context. It is promoted to live only
+    when BOTH a non-secret Azure event config (the pinned-subscription set) AND a
+    complete service principal in the vault exist for the org — i.e. the connector is
+    genuinely connected. Including ``'azure_events'`` here is what puts it into the
+    runner's ``_systems`` for a live run; the runner then still gates the actual
+    poll on a cloud_ops pack being selected. Mutates ``live`` in place; never raises —
+    any failure simply leaves Azure out (degrade, don't crash), matching the other
+    resolvers.
+    """
+    try:
+        from discovery.ingest.azure_events import get_service_principal
+        from discovery.ingest.azure_events_config import load_azure_event_config
+    except Exception:  # pragma: no cover - import guard
+        logger.exception(
+            "Azure event connector modules unavailable; skipping live ingest (org=%s)",
+            org_id,
+        )
+        return
+
+    try:
+        config = load_azure_event_config(org_id)
+    except Exception:
+        # A present-but-invalid config must not break live resolution for the run.
+        logger.exception(
+            "Azure event config invalid for org %s; skipping live ingest", org_id
+        )
+        return
+
+    if config is None:
+        logger.info(
+            "Connector azure_events not configured for org %s — skipping live ingest; "
+            "connect it in the Integration Hub.",
+            org_id,
+        )
+        return
+
+    try:
+        sp = get_service_principal(org_id, credential_ref=config.credential_ref)
+    except Exception:
+        logger.exception(
+            "Failed to load Azure service principal for org %s; skipping live ingest",
+            org_id,
+        )
+        return
+
+    if sp is None or not sp.is_complete():
+        logger.info(
+            "Connector azure_events has no complete service principal in the vault for "
+            "org %s — skipping live ingest; connect it in the Integration Hub.",
+            org_id,
+        )
+        return
+
+    live.append("azure_events")
+    logger.info("Live ingest enabled for connector azure_events (org=%s)", org_id)
 
 
 def _resolve_github(org_id: str, live: List[str]) -> None:
