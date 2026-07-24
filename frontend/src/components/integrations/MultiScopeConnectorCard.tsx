@@ -33,6 +33,7 @@ import {
   XCircle,
   ShieldCheck,
   Download,
+  Lock,
 } from 'lucide-react';
 import Button from '../common/Button';
 import PasswordInput from '../auth/PasswordInput';
@@ -379,6 +380,21 @@ export default function MultiScopeConnectorCard({
           </div>
         )}
       </div>
+
+      {/* RBAC (MSP-B13 AT-748, T6-AC3): Analyst/Viewer see the scope panel +
+          per-scope health but cannot modify the configuration. Make the
+          read-only posture explicit; the write controls below stay disabled. */}
+      {!canManage && (
+        <div
+          data-testid="cloud-connector-readonly"
+          className="mt-4 flex items-center gap-2 rounded-lg border border-border bg-bg/20 px-3 py-2 text-[11px] text-muted"
+        >
+          <Lock size={13} className="shrink-0" />
+          <span>
+            Read-only — {manageDisabledReason ?? 'you can view connection health but not modify it.'}
+          </span>
+        </div>
+      )}
 
       {/* ── Connection credentials (T1-AC1 / AC2) ── */}
       <section className="mt-5">

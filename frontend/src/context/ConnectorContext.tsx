@@ -82,6 +82,11 @@ function normalizeConnector(raw: ConnectorPayload): Connector | null {
     products: Array.isArray(raw.products)
       ? raw.products.filter((product): product is string => typeof product === 'string')
       : [],
+    // MSP-B13 (AT-748): catalog-driven multi-scope flag + scope noun, carried
+    // through so the hub can register cloud tiles from the catalog with no
+    // hardcoded id list.
+    multiScope: raw.multiScope === true,
+    scopeNoun: typeof raw.scopeNoun === 'string' ? raw.scopeNoun : undefined,
   };
 }
 
