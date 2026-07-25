@@ -185,16 +185,46 @@ def test_missing_credential_surfaces_actionable_health():
     assert "java_app" in health["message"]
 
 
-def test_health_slate_is_reset_each_pass():
+def test_health_slate_accumulates_until_explicit_run_reset():
     ingestor = _FakeIngestor(
         targets=[_Target("payments-api", credential_ref="java_app")],
         vault={},
     )
     _drive(ingestor)
     assert len(ingestor.credential_health) == 1
-    # Fix the credential and re-run: the prior miss must not linger.
-    ingestor._vault = {"java_app": {"token": "OK"}}
+    ingestor._targets = [_Target("orders-api", credential_ref="orders_ref")]
     _drive(ingestor)
+    assert {h["appId"] for h in ingestor.credential_health} == {
+        "payments-api",
+        "orders-api",
+    }
+
+    ingestor.reset_credential_health()
+    assert ingestor.credential_health == []
+
+
+def test_change_runner_resets_health_at_distinct_run_start():
+    from discovery.ingest import change_runner
+
+    ingestor = _FakeIngestor(
+        targets=[_Target("payments-api", credential_ref="java_app")],
+        vault={},
+    )
+    change_runner.ingest_with_checkpoint(
+        ingestor,
+        ORG,
+        read_checkpoint=lambda org_id, connector_id: None,
+        save_checkpoint=lambda checkpoint: None,
+    )
+    assert len(ingestor.credential_health) == 1
+
+    ingestor._vault = {"java_app": {"token": "OK"}}
+    change_runner.ingest_with_checkpoint(
+        ingestor,
+        ORG,
+        read_checkpoint=lambda org_id, connector_id: None,
+        save_checkpoint=lambda checkpoint: None,
+    )
     assert ingestor.credential_health == []
 
 

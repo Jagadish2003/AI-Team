@@ -76,8 +76,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from . import get_live_connector, is_live
 from .operational_config import (
+    classify_endpoint_error,
     find_inline_secret_keys,
+    log_endpoint_failure,
     resolve_target_secret,
+    safe_endpoint_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,6 +93,17 @@ _TARGETS_ENV = "DOTNET_APP_TARGETS"
 #: Default vault connector key used when a target does not name its own
 #: ``credential_ref``. Mirrors the connector_id of the ingestor.
 DEFAULT_CREDENTIAL_REF = "dotnet_app"
+
+__all__ = [
+    "DEFAULT_CREDENTIAL_REF",
+    "DotNetAppConfigError",
+    "DotNetAppTarget",
+    "classify_endpoint_error",
+    "load_targets",
+    "log_endpoint_failure",
+    "resolve_secret",
+    "safe_endpoint_error",
+]
 
 
 class DotNetAppConfigError(Exception):
@@ -272,80 +286,5 @@ def resolve_secret(
 # Safe failure reporting (AC4 — never log credentials / connection strings)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def classify_endpoint_error(exc: BaseException) -> str:
-    """Map an endpoint failure to a SAFE, credential-free error category.
-
-    The category is derived by inspecting the exception type/message, but ONLY the
-    category string is ever returned — the raw message (which can embed a
-    connection string or credential) is never surfaced. Categories:
-    ``timeout`` | ``connection_error`` | ``auth_error`` | ``tls_error`` |
-    ``http_error`` | ``parse_error`` | ``unknown_error``.
-    """
-    name = type(exc).__name__.lower()
-    msg = str(exc).lower()
-    if "timeout" in name or "timeout" in msg or "timed out" in msg:
-        return "timeout"
-    if any(t in name for t in ("ssl", "certificate")) or "certificate" in msg or "tls" in msg:
-        return "tls_error"
-    if (
-        "auth" in name
-        or "unauthorized" in msg
-        or "forbidden" in msg
-        or " 401" in f" {msg}"
-        or " 403" in f" {msg}"
-    ):
-        return "auth_error"
-    if "connection" in name or "connection" in msg or "refused" in msg or "unreachable" in msg:
-        return "connection_error"
-    if "http" in name or any(code in msg for code in ("404", "500", "502", "503")):
-        return "http_error"
-    if any(t in name for t in ("json", "decode", "parse", "value")):
-        return "parse_error"
-    return "unknown_error"
-
-
-def safe_endpoint_error(
-    target: DotNetAppTarget,
-    endpoint_type: str,
-    exc: BaseException,
-) -> Dict[str, str]:
-    """Build a credential-free error record for a failed endpoint read (AC4).
-
-    Reports only SAFE information — application id, endpoint type, error category,
-    and the exception CLASS name — so a diagnostics/log failure can be logged and
-    audited without leaking credentials or sensitive connection strings. The raw
-    exception message is deliberately excluded (it commonly embeds a connection
-    string or secret). ``endpoint_type`` is a caller-supplied label such as
-    ``"diagnostics"`` or ``"logs"``.
-    """
-    return {
-        "app_id": target.app_id,
-        "endpoint_type": str(endpoint_type),
-        "error_category": classify_endpoint_error(exc),
-        "exception_type": type(exc).__name__,
-        "environment": target.environment,
-    }
-
-
-def log_endpoint_failure(
-    org_id: str,
-    target: DotNetAppTarget,
-    endpoint_type: str,
-    exc: BaseException,
-) -> Dict[str, str]:
-    """Log a failed endpoint read using ONLY safe fields, and return the safe record.
-
-    Convenience wrapper so collection code logs a credential-free line
-    consistently. Returns the same dict :func:`safe_endpoint_error` builds so the
-    caller can also attach it to a degraded-signal payload.
-    """
-    safe = safe_endpoint_error(target, endpoint_type, exc)
-    logger.warning(
-        "dotnet_app: endpoint read failed org=%s app_id=%s endpoint=%s category=%s (%s)",
-        org_id,
-        safe["app_id"],
-        safe["endpoint_type"],
-        safe["error_category"],
-        safe["exception_type"],
-    )
-    return safe
+# The public helper names are imported from ``operational_config`` above so Java
+# and .NET share one classifier/logging implementation.
