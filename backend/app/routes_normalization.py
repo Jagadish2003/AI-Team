@@ -7,8 +7,18 @@ Returns normalization mapping rows for a specific run.
 Data source priority:
   1. Run KV key "normalization" — written by normalization_enrichment.py
      when enrich_ambiguous_mappings() is wired into the runner.
-  2. Derived from run evidence and opportunity data — always available
-     as a fallback, producing real rows from actual ingested data.
+  2. Derived from run evidence and opportunity data — available whenever a
+     detector fired, producing real rows from actual ingested data.
+  3. Derived from the run's persisted signal snapshots (the `signal_snapshots`
+     table, written by temporal.snapshot_signals for EVERY detector evaluation,
+     fired or not). Tiers 1 and 2 both depend on a detector having FIRED: an
+     evidence item only exists behind an opportunity. A run that ingested real
+     data and evaluated it — but crossed no threshold — therefore produced no
+     rows at all under tiers 1-2, and Source Intelligence rendered it exactly
+     like a run that ingested nothing. Tier 3 closes that gap from data the
+     pipeline already persists: it contributes rows ONLY for sources tiers 1-2
+     did not already cover, so a source that produced evidence keeps its
+     evidence-derived rows unchanged.
 
 This endpoint replaces the frontend mockMappings.json. The context
 (NormalizationContext.tsx) calls this endpoint using the current runId.
@@ -30,7 +40,14 @@ from .rbac import require_role
 from . import db
 
 from .normalization_enrichment import KV_NORMALIZATION  # shared key — Issue 1 fix
+from .source_keys import source_key_for
+
 KV_EVIDENCE = "evidence"
+
+# Internal-only marker on an evidence-derived row recording the
+# (sourceSystem, detector) pair it approximates. Stripped before serialization —
+# it is never part of the response contract.
+_DETECTOR_KEY = "_detectorKey"
 
 # ── Response models ───────────────────────────────────────────────────────────
 
@@ -134,6 +151,11 @@ def _derive_from_evidence(run_id: str) -> List[Dict[str, Any]]:
             continue
         seen.add(key)
 
+        # Carried so the caller can drop this approximation when the persisted
+        # snapshots describe the SAME (source, detector) at their real grain.
+        # Stripped before serialization — never part of the response contract.
+        detector_key = (source, ev_type)
+
         # Map evidenceType to a sourceType label
         source_type_map = {
             "Metric":  "CRM" if source == "Salesforce" else "ITSM" if source == "ServiceNow" else "Tickets",
@@ -164,8 +186,128 @@ def _derive_from_evidence(run_id: str) -> List[Dict[str, Any]]:
             "confidence":   confidence,
             "sampleValues": [],
             "notes":        f"Derived from evidence: {title[:60]}",
+            _DETECTOR_KEY:  detector_key,
         })
     return rows
+
+
+# ── Derivation from persisted signal snapshots ────────────────────────────────
+
+
+def _run_org_id(run: Dict[str, Any]) -> str:
+    """The org a run belongs to, matching how every other run reader resolves it."""
+    inputs = run.get("inputs") or {}
+    input_org = None
+    if isinstance(inputs, dict):
+        input_org = inputs.get("orgId") or inputs.get("org_id")
+    return str(run.get("orgId") or run.get("org_id") or input_org or "")
+
+
+def _derive_from_signal_snapshots(
+    run_id: str,
+    org_id: str,
+) -> List[Dict[str, Any]]:
+    """Derive normalization rows from the run's persisted signal snapshots.
+
+    Every detector evaluation of a run is persisted to ``signal_snapshots`` by
+    ``temporal.snapshot_signals`` — including evaluations that did NOT fire —
+    with the ``signal_source`` the detector explicitly declared. That table is
+    therefore the authoritative per-source record of "what this run actually read
+    and evaluated", independent of whether anything crossed a threshold.
+
+    Rows are emitted at the table's own grain (one per detector metric) and are
+    marked MAPPED/HIGH because the source→signal association is DECLARED by the
+    detector (``signal_source`` + ``signal_key``), not inferred from a string
+    convention — there is nothing ambiguous to resolve. ``sampleValues`` carries
+    the real observed ``metric_value``; no value is invented.
+
+    Every snapshot is emitted; the CALLER removes the evidence-derived rows these
+    supersede (see ``_merge_snapshot_rows``), so nothing is double-counted and no
+    source loses its finer-grained record.
+
+    A read failure degrades to no extra rows: the endpoint must keep serving the
+    evidence-derived view rather than 500.
+    """
+    if not org_id:
+        return []
+
+    try:
+        from .temporal import get_run_signal_rows
+
+        snapshots = get_run_signal_rows(org_id, run_id)
+    except Exception:  # noqa: BLE001 — a snapshot read must never break the endpoint
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    for snap in snapshots:
+        signal_source = str(snap.get("signal_source") or "").strip()
+        if not signal_source:
+            continue
+
+        source_system = source_key_for(signal_source)
+        detector_id = str(snap.get("detector_id") or "").strip()
+        metric_name = str(snap.get("metric_name") or "").strip()
+        if not detector_id or not metric_name:
+            continue
+
+        key = (source_system, detector_id, metric_name)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        metric_value = snap.get("metric_value")
+        rows.append({
+            "id":           f"norm_sig_{snap.get('id')}",
+            "sourceSystem": source_system,
+            "sourceType":   "Detector Signal",
+            "sourceField":  f"{signal_source}.{metric_name}",
+            "commonEntity": "Signal",
+            "commonField":  f"{detector_id}.{metric_name}",
+            "status":       "MAPPED",
+            "confidence":   "HIGH",
+            "sampleValues": [] if metric_value is None else [str(metric_value)],
+            "notes":        (
+                f"Signal read from {source_system} and evaluated by "
+                f"{detector_id}{' (threshold met)' if snap.get('fired') else ''}."
+            ),
+            _DETECTOR_KEY: (source_system, detector_id),
+        })
+
+    return rows
+
+
+def _merge_snapshot_rows(
+    prior_rows: List[Dict[str, Any]],
+    snapshot_rows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Combine higher-priority rows with snapshot rows without double-counting.
+
+    A snapshot row is the authoritative record of a signal the run actually read:
+    it names the source, the detector, the metric and its observed value. An
+    evidence-derived row is a coarser APPROXIMATION invented when nothing better
+    existed — one row per (source, detector), regardless of how many signals that
+    detector read.
+
+    So where both describe the same ``(sourceSystem, detector)``, the snapshot
+    rows win and the evidence-derived approximation is dropped: keeping both would
+    count one detector twice. Where only the evidence row exists — a source that
+    contributed corroborating evidence without any detector declaring it as a
+    ``signal_source`` — it is kept, so no source is lost.
+
+    Rows without a detector key (tier-1 stored field mappings, which carry the
+    AMBIGUOUS/UNMAPPED states the review panel needs) are ALWAYS kept: they are a
+    different kind of row entirely and nothing supersedes them.
+    """
+    superseded = {
+        row[_DETECTOR_KEY] for row in snapshot_rows if row.get(_DETECTOR_KEY)
+    }
+    kept = [
+        row for row in prior_rows
+        if _DETECTOR_KEY not in row or row[_DETECTOR_KEY] not in superseded
+    ]
+    return kept + snapshot_rows
 
 
 # ── Route registration ────────────────────────────────────────────────────────
@@ -223,6 +365,31 @@ def register_normalization_routes(app) -> None:
             # Priority 2: derive from evidence
             rows = _derive_from_evidence(run_id)
             data_source = "derived"
+
+        # Priority 3: the run's persisted signal snapshots — the complete, real
+        # record of what each source contributed. Tiers 1-2 can only speak for a
+        # source once a detector FIRED on it (evidence hangs off an opportunity),
+        # so a run that read and evaluated real data below threshold yielded
+        # nothing at all, and a source whose detectors DID fire was reported at the
+        # coarse one-row-per-detector grain of evidence rather than its real signal
+        # count. _merge_snapshot_rows resolves the overlap.
+        snapshot_rows = _derive_from_signal_snapshots(run_id, _run_org_id(run))
+        if snapshot_rows:
+            rows = _merge_snapshot_rows(list(rows), snapshot_rows)
+            # `source` stays inside its existing "stored" | "derived" vocabulary
+            # (the frontend types it as that union) — snapshot rows are derived
+            # from persisted run data exactly as evidence-derived rows are, so no
+            # contract change is required. "stored" is preserved when stored rows
+            # were used, so the flag keeps meaning what it always meant.
+            if data_source != "stored":
+                data_source = "derived"
+
+        # The detector key is an internal merge marker, never part of the wire
+        # contract — drop it before the response model is built.
+        rows = [
+            {k: v for k, v in row.items() if k != _DETECTOR_KEY}
+            for row in rows
+        ]
 
         # Compute counts
         counts: Dict[str, int] = {"MAPPED": 0, "UNMAPPED": 0, "AMBIGUOUS": 0}

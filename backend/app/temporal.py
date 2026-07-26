@@ -316,10 +316,19 @@ def get_baseline(
         con.close()
 
 
-def get_run_signals(
+def get_run_signal_rows(
     org_id: str,
     run_id: str,
 ) -> List[Dict[str, Any]]:
+    """Return this run's persisted signal snapshots, or ``[]`` when there are none.
+
+    The non-raising sibling of :func:`get_run_signals`. A run that evaluated its
+    detectors without any of them firing still has snapshot rows (``fired`` is
+    False on each), and callers that render "what did we read from each source"
+    need those rows rather than a 404 — an empty list is a legitimate answer, not
+    an error. :func:`get_run_signals` keeps the 404 behaviour its own API
+    contract already promises by delegating here.
+    """
     con = connect()
     try:
         cur = con.cursor()
@@ -331,9 +340,16 @@ def get_run_signals(
             """,
             (org_id, run_id),
         )
-        results = _fetch_dicts(cur)
+        return _fetch_dicts(cur)
     finally:
         con.close()
+
+
+def get_run_signals(
+    org_id: str,
+    run_id: str,
+) -> List[Dict[str, Any]]:
+    results = get_run_signal_rows(org_id, run_id)
 
     if not results:
         raise HTTPException(status_code=404, detail="run not found")
@@ -348,6 +364,7 @@ __all__ = [
     "SignalSnapshot",
     "ensure_signal_snapshots_table",
     "get_baseline",
+    "get_run_signal_rows",
     "get_run_signals",
     "get_signal_history",
     "snapshot_signals",
