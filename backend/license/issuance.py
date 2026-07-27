@@ -34,8 +34,12 @@ bytes.
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import sys
+import urllib.error
+import urllib.request
 from contextlib import closing
 from typing import Any, Dict, List, Optional
 
@@ -61,6 +65,12 @@ from generate_license import (  # noqa: E402
 # secrets store) — NOT the key material itself. Reading key bytes from the
 # environment is deliberately impossible here (AC5).
 SIGNING_KEY_PATH_ENV = "LICENSE_SIGNING_KEY_PATH"
+
+# The AWS signing service (DevOps Lambda behind API Gateway). When set, issuance
+# can sign REMOTELY: POST the payload, get back the signed license_token — the
+# private key stays in AWS Secrets Manager and never reaches this process.
+LICENSE_API_URL_ENV = "LICENSE_API_URL"
+LICENSE_API_KEY_ENV = "LICENSE_API_KEY"  # optional 'x-api-key' for the API Gateway
 
 
 class IssuanceError(RuntimeError):
@@ -371,6 +381,237 @@ def regenerate_license(
             raise
 
     return {"key": key_string, "license_id": license_id, "payload": payload, "audit_id": audit_id}
+
+
+# ---------------------------------------------------------------------------
+# Remote signing via the AWS Lambda (LICENSE_API_URL) + record into the registry.
+#
+# The Lambda is a SIGNING service, not a key-vending one: it holds the private
+# key in AWS Secrets Manager, signs the payload, and returns the license_token.
+# So issuance can sign remotely (private key never leaves AWS) and then record
+# the returned token locally — the "gate -> AWS signs -> record" flow.
+# ---------------------------------------------------------------------------
+def _decode_payload(key_string: str) -> Optional[dict]:
+    try:
+        return json.loads(base64.b64decode(key_string.split(".")[0]))
+    except Exception:
+        return None
+
+
+def sign_via_api(
+    *,
+    customer: str,
+    org_id: str,
+    license_id: str,
+    term_months: int,
+    org_name: Optional[str] = None,
+    max_systems: Optional[int] = None,
+    deployment_type: str = DEFAULT_DEPLOYMENT_TYPE,
+    kid: str = DEFAULT_KID,
+    grace_days: int = 14,
+    report_key: Optional[str] = None,
+    timeout: int = 30,
+) -> tuple:
+    """POST to the AWS signing service and return ``(license_token, payload)``.
+
+    Builds the request body the Lambda requires (customer/org_name/org_id/
+    license_id/term_months + limits.max_systems, with optional deployment_type/
+    kid/grace_days/report_key). Sends the ``x-api-key`` header when
+    ``LICENSE_API_KEY`` is configured. Raises ``IssuanceError`` on any transport
+    or contract failure — nothing is recorded unless a token comes back.
+    """
+    url = os.getenv(LICENSE_API_URL_ENV)
+    if not url:
+        raise IssuanceError(
+            f"{LICENSE_API_URL_ENV} is not set (backend/.env) — cannot sign via the API. "
+            "Set it, or use local signing (--signer local)."
+        )
+    if max_systems is None:
+        raise IssuanceError(
+            "max_systems is required for API signing (the signing service mandates "
+            "limits.max_systems)."
+        )
+    body: Dict[str, Any] = {
+        "customer": customer,
+        "org_name": org_name or customer,
+        "org_id": org_id,
+        "license_id": license_id,
+        "term_months": term_months,
+        "deployment_type": deployment_type,
+        "kid": kid,
+        "grace_days": grace_days,
+        "limits": {"max_systems": max_systems},
+    }
+    if report_key:
+        body["report_key"] = report_key
+
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    api_key = os.getenv(LICENSE_API_KEY_ENV)
+    if api_key:
+        headers["x-api-key"] = api_key
+
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode(), method="POST", headers=headers
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec - operator-configured URL
+            raw = resp.read().decode()
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode(errors="ignore")[:300]
+        except Exception:
+            pass
+        raise IssuanceError(f"signing API returned HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise IssuanceError(f"could not reach the signing API at {LICENSE_API_URL_ENV}: {exc}") from exc
+
+    try:
+        resp_json = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise IssuanceError("signing API did not return JSON.") from exc
+    token = resp_json.get("license_token")
+    if not token:
+        raise IssuanceError(
+            f"signing API response missing 'license_token': {str(resp_json)[:200]}"
+        )
+    return token, resp_json.get("payload") or {}
+
+
+def record_issuance(
+    *,
+    key_string: str,
+    contract_ref: str,
+    issued_by: str,
+    action: str = registry.ACTION_ISSUE,
+    supersedes: Optional[str] = None,
+    notes: Optional[str] = None,
+    verify: bool = True,
+    conn=None,
+) -> Dict[str, Any]:
+    """Record an ALREADY-signed license (e.g. from the AWS signer) into the
+    registry + append-only audit ledger.
+
+    Gate (AC1): refuses unless ``contract_ref``/``issued_by`` are present AND the
+    key is a valid payload-v2 key (org_id + kid). When ``verify`` is True the
+    signature is checked against the trusted key set (``app.licensing``) — a
+    forged/tampered token is refused. Terms are read FROM the signed payload, so a
+    caller cannot record terms different from the key. Writes the row + audit
+    entry in ONE transaction (AC1/AC2).
+    """
+    contract_ref = _require("contract_ref", contract_ref)
+    issued_by = _require("issued_by", issued_by)
+
+    if verify:
+        from app.licensing import verify_license_signature
+
+        payload = verify_license_signature(key_string)
+        if payload is None:
+            raise IssuanceError(
+                "refused: license signature did not verify against the trusted key set "
+                "(forged, tampered, or unknown kid)."
+            )
+    else:
+        payload = _decode_payload(key_string)
+
+    if not isinstance(payload, dict):
+        raise IssuanceError("refused: unparseable license payload.")
+    org_id = payload.get("org_id")
+    kid = payload.get("kid")
+    if not org_id or not kid or payload.get("payload_version") != 2:
+        raise IssuanceError("refused: not a payload-v2 license (missing org_id/kid).")
+
+    license_id = payload["license_id"]
+    limits = payload.get("limits") or {}
+    with closing(db.connect()) as c:
+        try:
+            if registry.get_license(license_id, conn=c) is not None:
+                raise IssuanceError(f"refused: license_id {license_id!r} is already recorded.")
+            registry.insert_registry_row(
+                license_id=license_id,
+                customer=payload.get("customer"),
+                org_id=org_id,
+                contract_ref=contract_ref,
+                deployment_type=payload.get("deployment_type"),
+                expires_at=payload.get("expires_at"),
+                kid=kid,
+                issued_by=issued_by,
+                license_key=key_string,
+                max_systems=limits.get("max_systems"),
+                grace_days=payload.get("grace_days", 14),
+                status=registry.STATUS_ACTIVE,
+                supersedes=supersedes,
+                notes=notes,
+                payload_version=2,
+                conn=c,
+            )
+            audit_id = registry.append_audit(
+                license_id=license_id,
+                action=action,
+                actor=issued_by,
+                customer=payload.get("customer"),
+                org_id=org_id,
+                contract_ref=contract_ref,
+                kid=kid,
+                deployment_type=payload.get("deployment_type"),
+                max_systems=limits.get("max_systems"),
+                expires_at=payload.get("expires_at"),
+                grace_days=payload.get("grace_days", 14),
+                supersedes=supersedes,
+                notes=notes,
+                conn=c,
+            )
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+    return {"key": key_string, "license_id": license_id, "payload": payload, "audit_id": audit_id}
+
+
+def issue_via_api(
+    *,
+    customer: str,
+    license_id: str,
+    org_id: str,
+    contract_ref: str,
+    issued_by: str,
+    term_months: int,
+    kid: str = DEFAULT_KID,
+    deployment_type: str = DEFAULT_DEPLOYMENT_TYPE,
+    grace_days: int = 14,
+    max_systems: Optional[int] = None,
+    org_name: Optional[str] = None,
+    report_key: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Issue via the AWS signer, then record: gate -> POST LICENSE_API_URL -> record.
+
+    Refuses (``IssuanceError``) unless customer/license_id/org_id/contract_ref/
+    issued_by are present (AC1). Signing happens on AWS (private key never leaves
+    Secrets Manager); the returned token is verified and written to the registry
+    + audit ledger. Returns ``{key, license_id, payload, audit_id}``.
+    """
+    customer = _require("customer", customer)
+    license_id = _require("license_id", license_id)
+    org_id = _require("org_id", org_id)
+    contract_ref = _require("contract_ref", contract_ref)
+    issued_by = _require("issued_by", issued_by)
+
+    token, _ = sign_via_api(
+        customer=customer,
+        org_id=org_id,
+        license_id=license_id,
+        term_months=term_months,
+        org_name=org_name,
+        max_systems=max_systems,
+        deployment_type=deployment_type,
+        kid=kid,
+        grace_days=grace_days,
+        report_key=report_key,
+    )
+    return record_issuance(
+        key_string=token, contract_ref=contract_ref, issued_by=issued_by, notes=notes
+    )
 
 
 # ---------------------------------------------------------------------------

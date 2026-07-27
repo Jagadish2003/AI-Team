@@ -12,10 +12,11 @@ context but ``backend/.dockerignore`` excludes ``license/``, so ``COPY . .``
 never copies it into the image.
 
 Key custody (AC10 / threat model): the private key is the single root secret of
-the whole scheme. It lives only on the secured CloudFulcrum signing host /
-secrets manager and is git-ignored here (``*.pem``). Generate it with
-``generate_keypair.py`` (T2). If it leaks, every issued key is forgeable — rotate
-per backend/license/README.md.
+the whole scheme. It lives in AWS Secrets Manager (used by the ``LICENSE_API_URL``
+signing Lambda) and never in the repo or env. If it leaks, every issued key is
+forgeable — rotate per backend/license/README.md. This local-signing CLI is a
+fallback for isolated testing; production issuance signs via ``LICENSE_API_URL``
+(see ``license_ops.py``).
 
 Usage (run from the repo root):
   python backend/license/generate_license.py \

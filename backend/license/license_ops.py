@@ -57,22 +57,50 @@ def _print_row(row: dict) -> None:
     )
 
 
+def _use_api_signer(signer: str) -> bool:
+    """Resolve the signer: 'api'/'local' force it; 'auto' uses the AWS API when
+    LICENSE_API_URL is configured, else local signing."""
+    if signer == "api":
+        return True
+    if signer == "local":
+        return False
+    return bool(os.getenv(issuance.LICENSE_API_URL_ENV))  # auto
+
+
 def _cmd_issue(args) -> int:
-    result = issuance.issue_license(
-        customer=args.customer,
-        license_id=args.license_id,
-        org_id=args.org_id,
-        contract_ref=args.contract_ref,
-        issued_by=args.issued_by,
-        term_months=args.term_months,
-        kid=args.kid,
-        deployment_type=args.deployment_type,
-        grace_days=args.grace_days,
-        max_systems=args.max_systems,
-        notes=args.notes,
-        private_key_path=args.private_key,
-    )
-    print(f"issued {args.license_id} (audit {result['audit_id']})", file=sys.stderr)
+    if _use_api_signer(args.signer):
+        # Sign on AWS (private key stays in Secrets Manager), then record.
+        result = issuance.issue_via_api(
+            customer=args.customer,
+            license_id=args.license_id,
+            org_id=args.org_id,
+            contract_ref=args.contract_ref,
+            issued_by=args.issued_by,
+            term_months=args.term_months,
+            kid=args.kid,
+            deployment_type=args.deployment_type,
+            grace_days=args.grace_days,
+            max_systems=args.max_systems,
+            notes=args.notes,
+        )
+        via = "AWS signer"
+    else:
+        result = issuance.issue_license(
+            customer=args.customer,
+            license_id=args.license_id,
+            org_id=args.org_id,
+            contract_ref=args.contract_ref,
+            issued_by=args.issued_by,
+            term_months=args.term_months,
+            kid=args.kid,
+            deployment_type=args.deployment_type,
+            grace_days=args.grace_days,
+            max_systems=args.max_systems,
+            notes=args.notes,
+            private_key_path=args.private_key,
+        )
+        via = "local key"
+    print(f"issued {args.license_id} via {via} (audit {result['audit_id']})", file=sys.stderr)
     print(result["key"])
     return 0
 
@@ -185,6 +213,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_issue.add_argument("--contract-ref", required=True)
     p_issue.add_argument("--issued-by", required=True)
     p_issue.add_argument("--term-months", type=int, required=True, choices=ALLOWED_TERMS)
+    p_issue.add_argument(
+        "--signer",
+        choices=("auto", "api", "local"),
+        default="auto",
+        help=(
+            "Where signing happens: 'api' = POST to LICENSE_API_URL (AWS signs; "
+            "private key stays in Secrets Manager), 'local' = sign with the local "
+            "private key, 'auto' (default) = api when LICENSE_API_URL is set, else local."
+        ),
+    )
     _add_signing_args(p_issue)
     p_issue.set_defaults(func=_cmd_issue)
 
