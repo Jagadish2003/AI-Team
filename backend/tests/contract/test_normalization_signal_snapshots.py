@@ -125,12 +125,14 @@ def test_sample_values_are_real_not_invented(client, unfired_run):
         }
 
 
-def test_snapshots_supersede_the_evidence_approximation_for_same_detector(client):
-    """No double count: the real per-signal record replaces the coarse evidence row.
+def test_snapshots_only_fill_gaps_and_never_restate_a_covered_source(client):
+    """Tier 3 is a gap-filler: a source tiers 1-2 already describe is left alone.
 
-    An evidence-derived row is one row per (source, detector) no matter how many
-    signals that detector read. Where snapshots describe the SAME (source,
-    detector) they win — otherwise one detector would be counted twice.
+    Snapshots sit at one row per (source, detector, metric) while evidence sits at
+    one row per (source, detector), so letting snapshots take over a covered source
+    replaces a few summary rows with every metric of every detector that source
+    ran. This page reports the summary, so a covered source keeps its evidence rows
+    and only an UNCOVERED source is filled in from snapshots.
     """
     run_id = f"run_sigtest_{uuid.uuid4().hex[:8]}"
     db.run_set(run_id, {
@@ -141,7 +143,8 @@ def test_snapshots_supersede_the_evidence_approximation_for_same_detector(client
         "packId": "cloud_ops",
     })
     db.run_kv_set("evidence", run_id, [
-        # Same detector the snapshots below describe → superseded.
+        # ServiceNow is COVERED by evidence → its snapshot rows must not be added,
+        # even though the snapshots below describe the very same detector.
         {"id": "ev_1", "source": "ServiceNow", "detectorId": "QUEUE_AGEING",
          "title": "Queue ageing", "confidence": "HIGH"},
         # No detector declares Jira as a signal_source → must survive.
@@ -162,13 +165,14 @@ def test_snapshots_supersede_the_evidence_approximation_for_same_detector(client
     jira_rows = [r for r in rows if r["sourceSystem"] == "Jira"]
     azure_rows = [r for r in rows if r["sourceSystem"] == "Azure Events"]
 
-    # ServiceNow: the 2 real signals, NOT the 1 evidence approximation + 2.
-    assert len(servicenow_rows) == 2
-    assert all(r["id"].startswith("norm_sig_") for r in servicenow_rows)
+    # ServiceNow is covered by evidence: it keeps its 1 summary row and gains
+    # NONE of its 2 snapshot rows (no restatement, and no double count either).
+    assert [r["id"] for r in servicenow_rows] == ["norm_ev_1"]
     # Jira contributed evidence but no detector signals — never dropped.
     assert [r["id"] for r in jira_rows] == ["norm_ev_2"]
-    # Azure had no evidence at all — filled in from its snapshot.
+    # Azure had no evidence at all — the gap IS filled from its snapshot.
     assert len(azure_rows) == 1
+    assert azure_rows[0]["id"].startswith("norm_sig_")
 
 
 def test_internal_merge_marker_is_not_serialized(client, unfired_run):
@@ -192,3 +196,81 @@ def test_run_with_no_signals_at_all_still_returns_empty(client):
     data = client.get(f"/api/runs/{run_id}/normalization", headers=_auth()).json()
     assert data["rows"] == []
     assert data["counts"]["MAPPED"] == 0
+
+
+def test_covered_sources_keep_their_summarized_counts(client):
+    """Regression guard for the Source Intelligence summary counts.
+
+    Reproduces the shape of a real Service Cloud run: 3 Salesforce evidence rows,
+    1 ServiceNow, 1 Jira — against snapshots holding many metrics per detector for
+    Salesforce and ServiceNow. The page must still report 3 / 1 / 1. Before the
+    gap-fill rule this returned 29 / 36 / 1, because snapshot rows superseded the
+    covered sources and were then listed at per-metric grain.
+    """
+    run_id = f"run_sigtest_{uuid.uuid4().hex[:8]}"
+    db.run_set(run_id, {
+        "id": run_id, "orgId": ORG_ID, "org_id": ORG_ID,
+        "status": "complete", "packId": "service_cloud",
+    })
+    db.run_kv_set("evidence", run_id, [
+        {"id": "ev_sf1", "source": "Salesforce", "detectorId": "APPROVAL_BOTTLENECK",
+         "title": "Approvals", "confidence": "HIGH"},
+        {"id": "ev_sf2", "source": "Salesforce", "detectorId": "PERMISSION_BOTTLENECK",
+         "title": "Permissions", "confidence": "HIGH"},
+        {"id": "ev_sf3", "source": "Salesforce", "detectorId": "REPETITIVE_AUTOMATION",
+         "title": "Automation", "confidence": "HIGH"},
+        {"id": "ev_sn1", "source": "ServiceNow", "detectorId": "CROSS_SYSTEM_ECHO",
+         "title": "Echo", "confidence": "HIGH"},
+        {"id": "ev_jr1", "source": "Jira", "detectorId": "CROSS_SYSTEM_ECHO",
+         "title": "Echo", "confidence": "MEDIUM"},
+    ])
+    # Many metrics per detector — the expansion that caused the regression.
+    _insert_signal_snapshots([
+        _snapshot(run_id, "salesforce", det, metric, False)
+        for det in ("APPROVAL_BOTTLENECK", "PERMISSION_BOTTLENECK",
+                    "REPETITIVE_AUTOMATION", "HANDOFF_FRICTION")
+        for metric in ("m1", "m2", "m3", "m4", "m5")
+    ] + [
+        _snapshot(run_id, "servicenow", "CROSS_SYSTEM_ECHO", f"m{i}", False)
+        for i in range(9)
+    ])
+
+    rows = client.get(
+        f"/api/runs/{run_id}/normalization", headers=_auth()
+    ).json()["rows"]
+    by_source: dict = {}
+    for row in rows:
+        by_source[row["sourceSystem"]] = by_source.get(row["sourceSystem"], 0) + 1
+
+    assert by_source == {"Salesforce": 3, "ServiceNow": 1, "Jira": 1}
+    # Every surviving row is the evidence summary, not a per-metric restatement.
+    assert all(r["id"].startswith("norm_ev_") for r in rows)
+
+
+def test_gap_fill_is_per_source_not_per_detector(client):
+    """A covered source is covered WHOLE — including detectors evidence never named.
+
+    Salesforce evidence names one detector; snapshots name a second. The second
+    must NOT leak in: mixing one evidence summary row with another detector's
+    per-metric rows would report one source at two different grains at once.
+    """
+    run_id = f"run_sigtest_{uuid.uuid4().hex[:8]}"
+    db.run_set(run_id, {
+        "id": run_id, "orgId": ORG_ID, "org_id": ORG_ID,
+        "status": "complete", "packId": "service_cloud",
+    })
+    db.run_kv_set("evidence", run_id, [
+        {"id": "ev_sf1", "source": "Salesforce", "detectorId": "APPROVAL_BOTTLENECK",
+         "title": "Approvals", "confidence": "HIGH"},
+    ])
+    _insert_signal_snapshots([
+        _snapshot(run_id, "salesforce", "APPROVAL_BOTTLENECK", "m1", False),
+        _snapshot(run_id, "salesforce", "KNOWLEDGE_GAP", "m1", False),   # unnamed by evidence
+    ])
+
+    rows = client.get(
+        f"/api/runs/{run_id}/normalization", headers=_auth()
+    ).json()["rows"]
+    # Only the evidence row. KNOWLEDGE_GAP's snapshot is suppressed too, because
+    # Salesforce as a whole is already covered.
+    assert [r["id"] for r in rows] == ["norm_ev_sf1"]

@@ -282,32 +282,39 @@ def _merge_snapshot_rows(
     prior_rows: List[Dict[str, Any]],
     snapshot_rows: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Combine higher-priority rows with snapshot rows without double-counting.
+    """Add snapshot rows ONLY for sources tiers 1-2 did not already cover.
 
-    A snapshot row is the authoritative record of a signal the run actually read:
-    it names the source, the detector, the metric and its observed value. An
-    evidence-derived row is a coarser APPROXIMATION invented when nothing better
-    existed — one row per (source, detector), regardless of how many signals that
-    detector read.
+    Tier 3 exists to speak for a source that tiers 1-2 CANNOT describe: evidence
+    hangs off an opportunity, so a run that read and evaluated real data below
+    threshold produced no evidence at all and rendered exactly like a run that
+    ingested nothing. Snapshots close that gap.
 
-    So where both describe the same ``(sourceSystem, detector)``, the snapshot
-    rows win and the evidence-derived approximation is dropped: keeping both would
-    count one detector twice. Where only the evidence row exists — a source that
-    contributed corroborating evidence without any detector declaring it as a
-    ``signal_source`` — it is kept, so no source is lost.
+    It is a gap-filler, not a replacement. Tiers 1-2 remain authoritative for any
+    source they already describe, and a source they cover keeps its rows
+    unchanged — the contract stated in this module's docstring.
 
-    Rows without a detector key (tier-1 stored field mappings, which carry the
-    AMBIGUOUS/UNMAPPED states the review panel needs) are ALWAYS kept: they are a
-    different kind of row entirely and nothing supersedes them.
+    This is per SOURCE, not per (source, detector), and that distinction is the
+    whole point. Snapshots are recorded at one row per (source, detector, METRIC)
+    while tiers 1-2 sit at one row per (source, detector): letting snapshots
+    supersede a covered source therefore does not swap like for like, it swaps a
+    handful of summary rows for every metric of every detector that source ran,
+    which is a different — and far noisier — statement than this page makes.
+    Suppressing the whole source keeps the two grains from ever being mixed in
+    one response.
+
+    Every prior row survives unconditionally, including tier-1 stored field
+    mappings carrying the AMBIGUOUS/UNMAPPED states the review panel needs.
     """
-    superseded = {
-        row[_DETECTOR_KEY] for row in snapshot_rows if row.get(_DETECTOR_KEY)
+    covered_sources = {
+        str(row.get("sourceSystem") or "")
+        for row in prior_rows
+        if row.get("sourceSystem")
     }
-    kept = [
-        row for row in prior_rows
-        if _DETECTOR_KEY not in row or row[_DETECTOR_KEY] not in superseded
+    gap_filling = [
+        row for row in snapshot_rows
+        if str(row.get("sourceSystem") or "") not in covered_sources
     ]
-    return kept + snapshot_rows
+    return list(prior_rows) + gap_filling
 
 
 # ── Route registration ────────────────────────────────────────────────────────
