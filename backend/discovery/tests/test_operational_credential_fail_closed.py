@@ -140,6 +140,14 @@ def test_empty_vault_token_fails_closed():
         )
 
 
+def test_whitespace_only_vault_token_fails_closed():
+    with pytest.raises(OperationalCredentialMissing):
+        resolve_target_secret(
+            ORG, app_id="a", credential_ref="java_app",
+            connector_lookup=lambda ref: {"token": "   "},   # blank after strip → miss
+        )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # AC1 — the ingestor fail-closes for the missing target, continues for the rest,
 # and surfaces an actionable connector-health record
@@ -178,9 +186,10 @@ def test_missing_credential_surfaces_actionable_health():
     assert health["system"] == "Java Application"
     assert health["status"] == "error"
     assert health["isLive"] is False
-    # Actionable: names the target and the credential ref.
+    # Actionable: names the org, target, and credential ref.
     assert health["appId"] == "payments-api"
     assert health["credentialRef"] == "java_app"
+    assert ORG in health["message"]
     assert "payments-api" in health["message"]
     assert "java_app" in health["message"]
 

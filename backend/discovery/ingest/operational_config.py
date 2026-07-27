@@ -189,8 +189,9 @@ def resolve_target_secret(
             credential_ref,
             type(exc).__name__,
         )
-    if cred and cred.get("token"):
-        return str(cred["token"]).strip()
+    token = str(cred.get("token") if cred else "").strip()
+    if token:
+        return token
 
     # Vault miss — fail closed. No os.environ read.
     raise OperationalCredentialMissing(
@@ -219,7 +220,7 @@ def credential_missing_health(
         "system": system,
         "status": "error",
         "message": (
-            f"Credential missing for target '{exc.app_id}' "
+            f"Credential missing for org '{exc.org_id}', target '{exc.app_id}' "
             f"(credential_ref='{exc.credential_ref}') — target skipped. "
             "Connect this connector's credential in the Integration Hub to enable it."
         ),

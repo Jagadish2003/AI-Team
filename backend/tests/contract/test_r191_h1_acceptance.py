@@ -164,7 +164,7 @@ class TestAC1_FailClosedVaultMiss:
         assert {h["appId"] for h in ingestor.credential_health} == {"payments-api"}
 
     def test_health_record_is_actionable_and_secret_free(self):
-        """The connector-health record names the target + credential ref, no secret."""
+        """The connector-health record names org + target + credential ref, no secret."""
         ingestor = _fake_ingestor(
             targets=[_Target("payments-api", credential_ref="java_app")],
             vault={},  # miss
@@ -177,6 +177,7 @@ class TestAC1_FailClosedVaultMiss:
         assert h["isLive"] is False
         assert h["appId"] == "payments-api"
         assert h["credentialRef"] == "java_app"        # a vault KEY name, not a secret
+        assert "org-h1-t5" in h["message"]
         assert "payments-api" in h["message"]
         assert "java_app" in h["message"]
 
@@ -251,6 +252,12 @@ class TestAC2_GuardCoversIngestLayer:
                 live.add(guard._allowlist_key(rel, finding))
         stale = [f"{p} / {m}" for p, m in guard._INGEST_ALLOWLIST if (p, m) not in live]
         assert stale == [], f"stale allow-list entries: {stale}"
+
+    def test_salesforce_jira_health_urls_are_not_allowlisted(self):
+        """Health probes must not preserve the old SF_INSTANCE_URL/JIRA_URL path."""
+        guard = _load_guard_module()
+        assert ("connector_health.py", "JIRA_URL") not in guard._INGEST_ALLOWLIST
+        assert ("connector_health.py", "SF_INSTANCE_URL") not in guard._INGEST_ALLOWLIST
 
 
 class TestAC3_UnlistedEnvReadFailsCI:

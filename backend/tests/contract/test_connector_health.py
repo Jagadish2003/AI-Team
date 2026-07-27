@@ -18,6 +18,7 @@ Run:
 """
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 
 import pytest
@@ -61,10 +62,11 @@ def mock_status(code):
 def _with_connector(connector_id, url, url_env, token):
     """Publish a connector credential on the per-run context for the test.
 
-    The URL stays instance config (env); the token comes from the per-run
-    credential context (vault-sourced), never a process-global env credential.
-    Merges with any already-set connector and restores it on exit, so the two
-    helpers can be nested (``with patch_sn_env(), patch_jira_env():``)."""
+    The URL and token are carried on the per-run credential context
+    (vault-sourced). The matching env var is still patched for legacy
+    ServiceNow coverage and to prove Jira ignores it. Merges with any
+    already-set connector and restores it on exit, so the two helpers can be
+    nested (``with patch_sn_env(), patch_jira_env():``)."""
     from discovery.ingest import _live_connectors
 
     prev = _live_connectors.get() or {}
@@ -208,13 +210,34 @@ class TestJiraHealth:
         assert result.system == "Jira"
         assert result.is_live is False
 
-    def test_url_but_no_token_returns_fixture(self):
+    def test_env_url_without_vault_record_returns_fixture(self):
         import os
         env = {k: v for k, v in os.environ.items() if k != "JIRA_TOKEN"}
         env["JIRA_URL"] = "https://test.atlassian.net"
         with patch.dict(os.environ, env, clear=True):
             result = check_jira()
         assert result.status == "fixture"
+        assert "test.atlassian.net" not in result.message
+
+    def test_vault_record_missing_url_returns_named_error(self):
+        marker = "https://env-should-never-be-used.example"
+        set_live_connectors({"jira": {"token": "test-token"}})
+        with patch.dict(os.environ, {"JIRA_URL": marker}, clear=True):
+            result = check_jira()
+        assert result.status == "error"
+        assert "Jira credential record" in result.message
+        assert "base URL" in result.message
+        assert "jira" in result.message
+        assert marker not in result.message
+
+    def test_vault_record_missing_token_returns_named_error(self):
+        set_live_connectors({"jira": {"url": "https://test.atlassian.net"}})
+        with patch.dict(os.environ, {"JIRA_TOKEN": "ENV-TOKEN-MUST-NOT-BE-USED"}, clear=True):
+            result = check_jira()
+        assert result.status == "error"
+        assert "Jira credential record" in result.message
+        assert "token" in result.message.lower()
+        assert "ENV-TOKEN-MUST-NOT-BE-USED" not in result.message
 
     def test_200_response_returns_live(self):
         with patch_jira_env():
