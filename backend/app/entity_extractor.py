@@ -835,7 +835,7 @@ def _extract_jira_entities(
 
 def _cmdb_lifecycle_state(operational_status: Any) -> str:
     """Classify ServiceNow's raw status without discarding the source value."""
-    status = _safe_str(operational_status).casefold().replace("_", " ")
+    status = (_safe_str(operational_status) or "").casefold().replace("_", " ")
     if status in {"6", "retired", "decommissioned", "decommissioned retired"}:
         return "retired"
     if status in {
@@ -893,7 +893,7 @@ def _extract_servicenow_cmdb_entities(
         sys_id = _safe_str(item.get("sys_id"))
         if not sys_id:
             continue
-        ci_class = _safe_str(item.get("ci_class")).casefold()
+        ci_class = (_safe_str(item.get("ci_class")) or "").casefold()
         if not ci_class or ci_class not in class_scope:
             logger.warning(
                 "ServiceNow CMDB CI %s is outside the payload class scope; skipping",
@@ -969,8 +969,13 @@ def prepare_servicenow_ci_resolution(
             source_system="servicenow",
         )
         if not class_scope
-        or _safe_str((entity.metadata or {}).get("ci_class")).casefold()
-        in class_scope
+        # A ``system`` entity sourced from ServiceNow is not necessarily a CMDB
+        # CI — detector extraction also creates one per signal_source, and it
+        # carries no ``ci_class``.  Bounded means bounded (AC1/AC2): an entity
+        # with no class is not in the class scope, so it is excluded here
+        # rather than crashing the whole incident->CI preparation step.
+        or ((_safe_str((entity.metadata or {}).get("ci_class")) or "").casefold()
+            in class_scope)
     ]
     # CMDB changes are incremental, while evidence traversal must include every
     # active observed edge.  Merge the persisted current-org graph with this

@@ -282,3 +282,83 @@ def test_a_real_query_failure_is_still_an_error(monkeypatch):
 
     assert not isinstance(excinfo.value, sn.ServiceNowTableUnavailable)
     assert "Instance unavailable" in str(excinfo.value)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MSP-B3 — a ServiceNow ``system`` entity that is not a CMDB CI
+#
+# Third live-only defect on these rails.  ``list_source_entities(entity_type=
+# "system", source_system="servicenow")`` returns every ServiceNow-sourced
+# system entity, and detector extraction creates one per signal_source with no
+# ``ci_class`` in its metadata.  ``_safe_str`` returns None for a missing key,
+# so calling ``.casefold()`` on it threw ``'NoneType' object has no attribute
+# 'casefold'`` and killed the whole incident->CI preparation step (AC3/AC4) on
+# a non-blocking path — silently, every run, for the entire org.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _StubEntity:
+    def __init__(self, entity_id, metadata):
+        self.entity_id = entity_id
+        self.display_name = entity_id
+        self.metadata = metadata
+
+
+def test_unclassed_servicenow_system_entity_does_not_break_ci_preparation(
+    monkeypatch,
+):
+    """One detector-derived entity must not fail the whole org's CI join."""
+    from app import entity_extractor as ee
+
+    monkeypatch.setattr(ee, "_extract_servicenow_cmdb_entities", lambda **kw: [])
+
+    a_real_ci = _StubEntity("ci-srv-1", {"ci_class": "cmdb_ci_server"})
+    # Exactly what _extract_detector_entities persists: source_system is the
+    # signal_source ("servicenow"), metadata carries connector_id/pack_id only.
+    detector_entity = _StubEntity("servicenow", {"connector_id": "servicenow"})
+
+    import app.entity_resolution as er
+    import app.relationship_mapper as rm
+
+    monkeypatch.setattr(
+        er, "list_source_entities", lambda **kw: [a_real_ci, detector_entity]
+    )
+    monkeypatch.setattr(rm, "list_servicenow_cmdb_relationships", lambda org_id: [])
+
+    captured = {}
+
+    import app.incident_ci_resolution as icr
+    import app.vulnerable_item_ci_resolution as vcr
+
+    def _capture(*, org_id, incident_metrics, cmdb_entities, cmdb_relationships):
+        captured["cmdb_entities"] = cmdb_entities
+
+    monkeypatch.setattr(icr, "resolve_incident_ci_references", _capture)
+    monkeypatch.setattr(
+        vcr, "resolve_vulnerable_item_ci_references", lambda **kw: None
+    )
+
+    result = ee.prepare_servicenow_ci_resolution(
+        org_id="org-unclassed",
+        run_id="run-1",
+        sn_data={"cmdb": {"class_scope": ["cmdb_ci_server"], "relationships": []}},
+    )
+
+    # Bounded means bounded (AC1/AC2): the unclassed entity is not a CI of an
+    # in-scope class, so it is excluded — not a crash, and not admitted either.
+    assert [e.entity_id for e in result] == ["ci-srv-1"]
+    assert [e.entity_id for e in captured["cmdb_entities"]] == ["ci-srv-1"]
+
+
+def test_ci_with_no_operational_status_is_unknown_not_retired():
+    """Conservatism (AC3): absent status must never be read as retirement.
+
+    ``incident_ci_resolution`` refuses to resolve a retired CI, so defaulting a
+    missing status to "retired" would silently suppress valid explicit joins.
+    """
+    from app.entity_extractor import _cmdb_lifecycle_state
+
+    assert _cmdb_lifecycle_state(None) == "unknown"
+    assert _cmdb_lifecycle_state("") == "unknown"
+    assert _cmdb_lifecycle_state("6") == "retired"
+    assert _cmdb_lifecycle_state("1") == "active"
