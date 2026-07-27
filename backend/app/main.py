@@ -31,6 +31,8 @@ from .db import (
     org_connector_set,
 )
 from . import license_limits
+from . import billing_ledger
+from . import connector_roadmap
 from .normalization_enrichment import KV_NORMALIZATION, enrich_ambiguous_mappings
 from .opportunity_display import (
     with_display,
@@ -72,6 +74,8 @@ from .routes_retrieval import register_retrieval_routes
 from .routes_run_health import register_run_health_routes
 from .routes_auth import register_auth_routes
 from .routes_license import register_license_routes
+from .routes_usage_report import register_usage_report_routes
+from .routes_usage_summary import register_usage_summary_routes
 from .routes_ingestion import register_ingestion_routes
 from .routes_runbook_matches import register_runbook_match_routes
 from .routes_secops_evidence import register_secops_evidence_routes
@@ -171,6 +175,22 @@ async def lifespan(app: FastAPI):
     # Dev and test environments run without connector secrets set.
     if os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1":
         validate_all_secrets(CONNECTOR_AUTH_CONFIGS)
+        # R1.9.1-H1 T4 (follow-up): the production DEPLOYMENT PROFILE is selected
+        # ONLY by ENVIRONMENT=production (see app.deployment_profile.is_production).
+        # REQUIRE_CONNECTOR_SECRETS=1 enforces secret presence but does NOT make a
+        # process production — so a deployment that sets only the latter still runs
+        # under the dev profile, which leaves the customer-tenant CUSTOMER_TENANT_API_KEY
+        # env fallback ENABLED (vault revocation could be bypassed). Warn loudly so an
+        # operator who set REQUIRE_CONNECTOR_SECRETS=1 as a production signal also sets
+        # ENVIRONMENT=production, which is now mandatory for the production profile.
+        if not _is_production():
+            logger.warning(
+                "REQUIRE_CONNECTOR_SECRETS=1 is set but ENVIRONMENT is not "
+                "'production'. The production deployment profile is selected ONLY by "
+                "ENVIRONMENT=production; without it this process runs under the dev "
+                "profile and the CUSTOMER_TENANT_API_KEY environment fallback stays "
+                "enabled. Set ENVIRONMENT=production on production deployments."
+            )
     # AUTH-2 review #3/#4/#8: fail fast (prod) / warn (dev) if the org-approval
     # email config is missing, so broken approval links never ship silently.
     _validate_org_approval_config()
@@ -329,6 +349,10 @@ register_run_health_routes(app)
 register_auth_routes(app)
 # LIC-1 / T6 (AT-347): Owner-only license status + update-key admin routes.
 register_license_routes(app)
+# R-1.9.1-L2 / T3 (AT-695): Owner-only signed usage-report generator route.
+register_usage_report_routes(app)
+# R-1.9.1-L2 / T5 (AT-697): Owner-only pre-invoice usage-summary route (AC6).
+register_usage_summary_routes(app)
 # R16-A1 / AT-383 (T7): admin ingestion-checkpoint reset.
 register_ingestion_routes(app)
 # MSP-B5 T4: analyst accept/dismiss/defer lifecycle for proposed runbook matches.
@@ -450,20 +474,45 @@ def list_connectors() -> List[Dict[str, Any]]:
 )
 def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
     org_id = get_current_org_id()
+    status = body.get("status", "connected")
+    # R191-R1 T5 (AT-726 / AC2): a roadmap connector (SAP/D365 and any tile whose
+    # ingestion does not ship yet) is NOT connectable — refuse a connect attempt
+    # with an actionable, named reason so it can never become a connected system
+    # a run could select. This guard runs BEFORE the catalog lookup below so a
+    # roadmap tile is refused with 409 regardless of whether it is pre-seeded in
+    # the org's connector catalog — a roadmap tile absent from the catalog must
+    # not fall through to the 404 and silently bypass the block. Applies only to
+    # the connect transition; a disconnect on an unconnected roadmap tile is a
+    # harmless no-op.
+    if status == license_limits.CONNECTED_STATUS and connector_roadmap.is_roadmap(
+        connector_id
+    ):
+        raise HTTPException(
+            409,
+            connector_roadmap.roadmap_block_message(connector_id),
+        )
     c = org_connector_get(org_id, connector_id)
     if not c:
         raise HTTPException(404, "connector not found")
-    status = body.get("status", "connected")
     # R17-D4 Addendum A / T9: enforce limits.max_systems at connection time.
     # Only a transition TO "connected" adds a system; forward-only, so reconnects
     # of an already-connected connector and any non-connect status change (e.g.
     # disconnect) are never blocked. Raises HTTP 402 when at the licensed limit.
     if status == license_limits.CONNECTED_STATUS:
         license_limits.enforce_can_connect(org_id, connector_id)
+    # R-1.9.1-L2 / T2 (AC2): capture the connection state BEFORE the write so the
+    # billing ledger records only a genuine transition on this bidirectional toggle.
+    was_connected = c.get("status") == license_limits.CONNECTED_STATUS
     c["status"] = status
     c["lastSynced"] = c.get("lastSynced", "—")
     # Write to THIS org's namespaced row — never the shared catalog.
     org_connector_set(org_id, connector_id, c)
+    billing_ledger.record_connection_change(
+        org_id,
+        connector_id,
+        was_connected=was_connected,
+        now_connected=status == license_limits.CONNECTED_STATUS,
+    )
     return c
 
 

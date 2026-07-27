@@ -332,6 +332,18 @@ export default function IntegrationHubPage() {
   function handlePrimary(id: string) {
     const c = allConnectors.find(x => x.id === id);
     if (!c) return;
+    // R191-R1 T5 (AT-726): a roadmap connector (SAP/D365 and other unshipped
+    // tiles) is not connectable. The tile's action is already disabled; this
+    // guards the handler and surfaces the honest reason if it is ever reached.
+    if (c.roadmap) {
+      const target = c.roadmapTarget && /\d/.test(c.roadmapTarget) ? c.roadmapTarget : null;
+      push(
+        target
+          ? `${c.name} is on the roadmap — coming in ${target}.`
+          : `${c.name} is on the roadmap and is not yet connectable.`,
+      );
+      return;
+    }
     // Forward-only license gate (AC10): block only a NEW connection at the limit.
     // Connecting an already-connected system (Configure/View/Reconnect) is never
     // blocked. The tile's Connect button is already disabled in this state; this

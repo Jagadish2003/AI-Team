@@ -255,6 +255,10 @@ def ingest_with_checkpoint(
     result = IngestionResult(connector_id=connector_id, org_id=org_id)
 
     try:
+        reset_health = getattr(ingestor, "reset_credential_health", None)
+        if callable(reset_health):
+            reset_health()
+
         # 1. read checkpoint before the run — opaque; may be None on first run.
         since = read_checkpoint(org_id, connector_id)
         result.started_from = since

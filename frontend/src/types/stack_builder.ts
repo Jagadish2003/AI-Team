@@ -98,6 +98,14 @@ export interface IndustryListItem {
   label: string;
   pack_hints: string[];
   recommended_systems: string[];
+  roadmap_systems?: RoadmapSystemItem[];
+}
+
+export interface RoadmapSystemItem {
+  system_id: string;
+  label: string;
+  target_release: string;
+  reason: string;
 }
 
 export interface SystemDefaultItem {

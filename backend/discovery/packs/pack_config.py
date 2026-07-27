@@ -134,7 +134,11 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
 
     "github_engineering": {
         "packId":        "github_engineering",
-        "packVersion":   "1.0.0",
+        # R191-R1: bumped 1.0.0 → 1.0.1 alongside the industry_registry.py change
+        # that activates this pack as a default for the technology industry, so
+        # pack governance can tell technology-industry runs before/after the
+        # activation apart by version stamp.
+        "packVersion":   "1.0.1",
         "packName":      "GitHub Engineering Signals",
         "domain":        "github_engineering",
         "pack_domain":   "github_engineering",

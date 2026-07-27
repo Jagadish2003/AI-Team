@@ -34,6 +34,7 @@ from app.retrieval.ingest import (
 from discovery.ingest import change_runner
 from discovery.ingest.base import Checkpoint
 from discovery.ingest.confluence import ConfluenceIngestor
+from discovery.ingest.content_router import ContentRoute, classify_confluence_content
 from discovery.ingest.confluence_content import (
     RETRIEVAL_SOURCE_SYSTEM,
     build_content_artifact,
@@ -118,6 +119,14 @@ def test_render_preserves_heading_structure():
         {"level": 1, "text": "Payments API Runbook", "position": 0},
         {"level": 2, "text": "Rollback Steps", "position": 2},
     ]
+
+
+def test_render_list_item_with_paragraph_keeps_bullet_text_together():
+    html = "<ul><li><p>Disable canary.</p></li><li><p>Revert traffic.</p></li></ul>"
+    text, _ = render_page_text(html)
+    assert "- Disable canary." in text
+    assert "- Revert traffic." in text
+    assert "\n\n-\n\nDisable canary." not in text
 
 
 def test_render_tables_join_cells():
@@ -218,10 +227,16 @@ def test_non_page_blogpost_records_are_skipped():
     assert content_artifacts(ing, ORG, [comment_record]) == []
 
 
-def test_missing_ids_are_skipped_not_raised():
+def test_missing_ids_are_skipped_not_raised(caplog):
+    import logging
+
     ing = ConfluenceIngestor()
     bad = {"artifact_id": "x", "content_type": "page"}  # no space_key/content_id
-    assert build_content_artifact(ing, ORG, bad) is None
+    with caplog.at_level(logging.WARNING):
+        assert build_content_artifact(ing, ORG, bad) is None
+    assert "missing identity" in caplog.text
+    assert "space_key" in caplog.text
+    assert "content_id" in caplog.text
 
 
 def test_a_page_with_no_body_fixture_hands_off_truthful_empty_content():
@@ -308,6 +323,19 @@ def test_ingest_confluence_content_ignores_non_page_records():
     assert substrate.calls == []
 
 
+def test_ingest_confluence_content_counts_missing_identity_separately():
+    ing = ConfluenceIngestor()
+    substrate = FakeSubstrate()
+    records = [
+        {"artifact_id": "ENG:missing", "content_type": "page", "space_key": "ENG"},
+    ]
+    result = ingest_confluence_content(ORG, records, ingestor=ing, ingest_fn=substrate)
+    assert result.pages_seen == 0
+    assert result.pages_identity_missing == 1
+    assert result.pages_render_failed == 0
+    assert substrate.calls == []
+
+
 def test_ingest_confluence_content_never_raises_on_substrate_failure(caplog):
     ing = ConfluenceIngestor()
     records = _all_records(ing)
@@ -317,7 +345,11 @@ def test_ingest_confluence_content_never_raises_on_substrate_failure(caplog):
 
     result = ingest_confluence_content(ORG, records, ingestor=ing, ingest_fn=_boom)
     assert result.artifacts_handed_off == 0  # nothing recorded — hand-off never completed
-    assert result.pages_seen == len(records)
+    expected_pages = [
+        r for r in records
+        if classify_confluence_content(r.get("content_type")) == ContentRoute.PAGE_CONTENT
+    ]
+    assert result.pages_seen == len(expected_pages)
 
 
 def test_ingest_confluence_content_isolates_a_bad_page(monkeypatch):

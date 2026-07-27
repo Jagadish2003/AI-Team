@@ -343,11 +343,9 @@ def _is_credential_shaped(name: str) -> bool:
     """True when a literal env-var name looks like a per-org connector credential."""
     if name in _GLOBAL_ALLOWED_NAMES:
         return False
-    # OAuth *application* client secrets are per-deployment, not per-client, and
-    # follow the documented {CONNECTOR_NAME}_CLIENT_SECRET convention
-    # (app/auth/README.md) — resolved generically via secrets.py, never per-org.
-    if name.endswith("_CLIENT_SECRET"):
-        return False
+    # R191-H1 names client_secret explicitly. Under discovery/ingest/ the guard
+    # treats *_CLIENT_SECRET as credential-shaped so a future connector cannot
+    # bypass the vault path by reading an OAuth/client secret from env.
     return name in _CREDENTIAL_EXACT_NAMES or name.endswith(_CREDENTIAL_SUFFIXES)
 
 
@@ -363,25 +361,16 @@ def _is_credential_shaped(name: str) -> bool:
 # corresponds to anything in the tree.
 # ---------------------------------------------------------------------------
 _INGEST_ALLOWLIST: Dict[Tuple[str, str], str] = {
-    # --- Connection-URL fallbacks: not secrets, and out of R1.9.1-H1 T2's
-    # scope per CLAUDE.md ("... out of T2's scope and unchanged") — T2 closed
-    # the SF_INSTANCE_URL / JIRA_URL fallback only inside salesforce.py's and
-    # jira.py's _get_client(); these are separate health-probe / standalone
-    # code paths that read a URL only (the credential itself is vault-only).
+    # --- Connection-URL fallbacks: these remain only where a separate
+    # standalone/legacy path still has an explicit one-line justification.
+    # Salesforce/Jira health probes are intentionally NOT listed here: they use
+    # the credential record URL only (R191-H1 literal AC4 posture).
     ("confluence.py", "CONFLUENCE_URL"): (
         "Standalone base-URL fallback for the depth-content body fetch "
         "(_raw_page_body); connection URL only, not the OAuth _get_client() "
         "path T2 fixed."
     ),
     ("connector_health.py", "SERVICENOW_URL"): (
-        "Health-probe base-URL fallback; connection URL only, credential "
-        "resolves via the vault regardless."
-    ),
-    ("connector_health.py", "JIRA_URL"): (
-        "Health-probe base-URL fallback; connection URL only, credential "
-        "resolves via the vault regardless."
-    ),
-    ("connector_health.py", "SF_INSTANCE_URL"): (
         "Health-probe base-URL fallback; connection URL only, credential "
         "resolves via the vault regardless."
     ),
@@ -697,6 +686,25 @@ def test_ac3_new_module_with_unlisted_token_read_fails_without_test_edit(tmp_pat
     offenders = _unjustified_ingest_violations(root=tmp_path)
     assert offenders, (
         "a new module reading an unlisted *_TOKEN env var must fail the guard"
+    )
+
+
+def test_ingest_client_secret_read_is_credential_shaped(tmp_path):
+    """R191-H1 names client_secret explicitly; ingest reads must be caught."""
+    (tmp_path / "future_oauth_ingestor.py").write_text(
+        textwrap.dedent(
+            """\
+            import os
+
+            def get_secret():
+                return os.getenv("FUTURE_CONNECTOR_CLIENT_SECRET")
+            """
+        ),
+        encoding="utf-8",
+    )
+    offenders = _unjustified_ingest_violations(root=tmp_path)
+    assert any("FUTURE_CONNECTOR_CLIENT_SECRET" in o for o in offenders), (
+        "an ingest module reading *_CLIENT_SECRET from env must fail the guard"
     )
 
 
