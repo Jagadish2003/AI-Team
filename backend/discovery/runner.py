@@ -1399,15 +1399,45 @@ def run(
                         secops_data.setdefault("streams", {})[
                             "evidence_record_store"
                         ] = {"error": str(evidence_exc)}
-                secops_errors = [
-                    stream.get("error")
+                secops_streams = [
+                    stream
                     for streams in (
                         secops_data.get("streams") or {},
                         vr_data.get("streams") or {},
                     )
                     for stream in streams.values()
+                    if isinstance(stream, dict)
+                ]
+                secops_errors = [
+                    stream.get("error")
+                    for stream in secops_streams
                     if stream.get("error")
                 ]
+                # A table this instance does not expose (an unactivated
+                # ServiceNow module such as Security Incident Response, or one
+                # the integration role cannot read) is REPORTED, never counted
+                # as a failure: no re-run fixes it, so failing the stage every
+                # run would bury the conditions that do need attention.
+                sn_unavailable = [
+                    f"{stream.get('table') or stream.get('connector_id')}: "
+                    f"{stream.get('unavailable_reason')}"
+                    for stream in (
+                        *(
+                            s
+                            for s in (cmdb_data.get("streams") or {}).values()
+                            if isinstance(s, dict)
+                        ),
+                        *secops_streams,
+                    )
+                    if stream.get("status") == "unavailable"
+                ]
+                if sn_unavailable:
+                    sn_data["servicenow_unavailable_tables"] = sn_unavailable
+                    logger.info(
+                        "ServiceNow: %d table(s) not available on this instance — %s",
+                        len(sn_unavailable),
+                        "; ".join(sn_unavailable),
+                    )
                 if secops_errors:
                     sn_ok = False
                     sn_err = "; ".join(

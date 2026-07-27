@@ -323,6 +323,25 @@ class ServiceNowIngestError(Exception):
     """Raised when live ServiceNow ingestion fails."""
 
 
+class ServiceNowTableUnavailable(ServiceNowIngestError):
+    """A ServiceNow table is not present or not readable on this instance.
+
+    This is a DEPLOYMENT FACT, not an ingestion fault: the Security Operations
+    tables (``sn_si_incident``, ``sn_vul_*``) only exist once the Security
+    Incident Response / Vulnerability Response plugins are activated, and they
+    are readable only by a role the integration user may not hold.  Neither is
+    something a re-run fixes, so a stream that hits it degrades to
+    ``status='unavailable'`` with a named reason instead of failing the
+    ServiceNow stage every run (MSP-B11 — the module is an expansion, so an
+    instance without it must stay a clean no-op).
+    """
+
+    def __init__(self, table: str, reason: str) -> None:
+        super().__init__(f"ServiceNow table/{table} is unavailable: {reason}")
+        self.table = table
+        self.reason = reason
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Offline loader
 # ─────────────────────────────────────────────────────────────────────────────
@@ -361,11 +380,27 @@ class ServiceNowClient:
       ServiceNow's Table API supports Basic auth natively.
     """
 
+    # HTTP statuses that mean "this table is not part of THIS instance's
+    # surface" rather than "this request was wrong". ServiceNow answers a
+    # request for a table that does not exist (an unactivated plugin) with
+    # 400 + "Invalid table"; an existing table the caller has no role for
+    # answers 401/403.
+    _TABLE_MISSING_STATUSES = frozenset({400, 404})
+    _TABLE_FORBIDDEN_STATUSES = frozenset({401, 403})
+    _TABLE_MISSING_MARKERS = (
+        "invalid table",
+        "no such table",
+        "table does not exist",
+        "not a valid table",
+    )
+
     def __init__(self, instance_url: str, token: str = "", username: str = ""):
         self.instance_url = instance_url.rstrip("/")
         self.token = token
         self.username = username
         self._session = None
+        # Per-client memo so one run probes a given table at most once.
+        self._table_availability: Dict[str, Tuple[bool, str]] = {}
 
     def _get_session(self):
         try:
@@ -394,6 +429,109 @@ class ServiceNowClient:
                 )
         return self._session
 
+    @staticmethod
+    def _response_message(response: Any) -> str:
+        """Extract ServiceNow's own error text from a failed response.
+
+        ServiceNow answers a failed Table API call with
+        ``{"error": {"message": ..., "detail": ...}, "status": "failure"}``.
+        Only that short message is kept: the request URL is deliberately NOT
+        carried into the exception, because it embeds the full encoded query and
+        field projection and ends up rendered verbatim in run health.
+        """
+        try:
+            body = response.json()
+        except Exception:  # noqa: BLE001 — a non-JSON error body is still an error
+            body = None
+        if isinstance(body, dict):
+            error = body.get("error")
+            if isinstance(error, dict):
+                message = str(error.get("message") or "").strip()
+                detail = str(error.get("detail") or "").strip()
+                text = message or detail
+                if text:
+                    return text[:200]
+            if isinstance(error, str) and error.strip():
+                return error.strip()[:200]
+        reason = str(getattr(response, "reason", "") or "").strip()
+        return reason or "no error detail returned"
+
+    def _translate_http_error(self, table: str, exc: Exception) -> ServiceNowIngestError:
+        """Turn a transport failure into a compact, classified ingest error."""
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        if response is None or status is None:
+            # Timeout, DNS, connection reset — no response to read.
+            return ServiceNowIngestError(
+                f"ServiceNow table/{table} query failed: {type(exc).__name__}: {exc}"
+            )
+        message = self._response_message(response)
+        lowered = message.casefold()
+        if status in self._TABLE_MISSING_STATUSES and any(
+            marker in lowered for marker in self._TABLE_MISSING_MARKERS
+        ):
+            return ServiceNowTableUnavailable(
+                table,
+                f"the table does not exist on this instance (HTTP {status}: "
+                f"{message}). The plugin that provides it is not activated.",
+            )
+        if status in self._TABLE_FORBIDDEN_STATUSES:
+            return ServiceNowTableUnavailable(
+                table,
+                f"the integration user cannot read this table (HTTP {status}: "
+                f"{message}). Grant the role that covers it.",
+            )
+        return ServiceNowIngestError(
+            f"ServiceNow table/{table} query failed: HTTP {status}: {message}"
+        )
+
+    def table_available(self, table: str) -> Tuple[bool, str]:
+        """Probe once whether ``table`` is readable on this instance.
+
+        Returns ``(available, reason)``; ``reason`` is empty when available.
+        The probe is a single-row, ``sys_id``-only read — the cheapest request
+        that still exercises table existence AND read access — and its outcome
+        is memoized per client, so a run pays it at most once per table.
+
+        Only a genuine unavailability answer is cached. A transient failure
+        (timeout, 5xx) is re-raised so the caller treats it as the retryable
+        error it is, rather than silently recording the table as missing.
+        """
+        cached = self._table_availability.get(table)
+        if cached is not None:
+            return cached
+        try:
+            self._request_page(
+                table,
+                {
+                    "sysparm_fields": "sys_id",
+                    "sysparm_limit": 1,
+                    "sysparm_offset": 0,
+                    "sysparm_display_value": "false",
+                    "sysparm_exclude_reference_link": "true",
+                },
+            )
+        except ServiceNowTableUnavailable as exc:
+            outcome = (False, exc.reason)
+            self._table_availability[table] = outcome
+            return outcome
+        outcome = (True, "")
+        self._table_availability[table] = outcome
+        return outcome
+
+    def _request_page(self, table: str, query_params: Dict[str, Any]) -> List[Dict]:
+        """Fetch one Table API page, translating transport failures compactly."""
+        session = self._get_session()
+        base_url = f"{self.instance_url}/api/now/table/{table}"
+        try:
+            resp = session.get(base_url, params=query_params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:  # noqa: BLE001 — every transport failure is translated
+            raise self._translate_http_error(table, exc) from exc
+        records = data.get("result", [])
+        return records if isinstance(records, list) else []
+
     def table_query(
         self,
         table: str,
@@ -407,38 +545,26 @@ class ServiceNowClient:
         ServiceNow uses offset-based pagination (not cursor), so we step
         through sysparm_offset in sysparm_limit increments.
         """
-        session = self._get_session()
         limit = min(params.get("sysparm_limit", 1000), 1000)  # SN max page = 1000
         offset = 0
         all_records: List[Dict] = []
 
-        base_url = f"{self.instance_url}/api/now/table/{table}"
         query_params = {**params, "sysparm_limit": limit}
 
         while True:
             query_params["sysparm_offset"] = offset
-            try:
-                resp = session.get(base_url, params=query_params, timeout=30)
-                resp.raise_for_status()
-                data = resp.json()
-                records = data.get("result", [])
-                if not records:
-                    break
-                all_records.extend(records)
-                if max_records is not None and len(all_records) >= max_records:
-                    raise ServiceNowIngestError(
-                        f"ServiceNow table/{table} result exceeded {max_records} records. "
-                        f"Narrow the query window."
-                    )
-                if len(records) < limit:
-                    break  # last page
-                offset += limit
-            except ServiceNowIngestError:
-                raise
-            except Exception as e:
+            records = self._request_page(table, query_params)
+            if not records:
+                break
+            all_records.extend(records)
+            if max_records is not None and len(all_records) >= max_records:
                 raise ServiceNowIngestError(
-                    f"ServiceNow table/{table} query failed: {e}"
+                    f"ServiceNow table/{table} result exceeded {max_records} records. "
+                    f"Narrow the query window."
                 )
+            if len(records) < limit:
+                break  # last page
+            offset += limit
 
         return all_records
 
@@ -465,9 +591,7 @@ class ServiceNowClient:
         except ServiceNowIngestError:
             raise
         except Exception as e:
-            raise ServiceNowIngestError(
-                f"ServiceNow aggregate count on {table} failed: {e}"
-            )
+            raise self._translate_http_error(table, e) from e
 
 
 def _get_client() -> ServiceNowClient:
@@ -581,6 +705,40 @@ def _optional_sn_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def _sn_raw_scalar(value: Any) -> Any:
+    """Return the RAW value from a ServiceNow ``display_value=all`` field.
+
+    The mirror of :func:`_sn_scalar`.  Under ``sysparm_display_value=all`` every
+    field arrives as ``{"value": <raw>, "display_value": <human>}``, and the two
+    are NOT interchangeable:
+
+    * ``sys_class_name`` — raw ``cmdb_ci_netgear`` vs display ``Network Gear``.
+      The bounded class scope, the encoded server-side filter, and the graph all
+      speak the raw identifier, so a display label must never be compared
+      against them.
+    * datetime fields (``sys_updated_on``, ``opened_at``, …) — the raw value is
+      always ServiceNow's canonical ``YYYY-MM-DD HH:MM:SS`` UTC, while the
+      display value is rendered in the *instance's* configured date format and
+      the *user's* timezone. Checkpoint cursors, delta windows, and every
+      time-to-resolve calculation depend on the canonical form.
+
+    A plain scalar (offline fixtures, ``display_value=false`` reads) passes
+    through unchanged.
+    """
+    if isinstance(value, dict):
+        return value.get("value", value.get("display_value"))
+    return value
+
+
+def _optional_sn_raw_text(value: Any) -> Optional[str]:
+    """``_optional_sn_text`` for fields whose RAW value is the meaningful one."""
+    scalar = _sn_raw_scalar(value)
+    if scalar is None:
+        return None
+    text = str(scalar).strip()
+    return text or None
+
+
 def _safe_servicenow_instance_url(value: Any) -> Optional[str]:
     """Return a credential-free ServiceNow instance origin for deep links."""
     if not value:
@@ -685,7 +843,12 @@ def _configuration_item_from_record(
     instance_url: Optional[str] = None,
 ) -> Optional[ServiceNowConfigurationItem]:
     sys_id = _optional_sn_text(record.get("sys_id"))
-    ci_class = (_optional_sn_text(record.get("sys_class_name")) or "").lower()
+    # RAW value only: the bounded scope and the server-side ``sys_class_nameIN``
+    # filter both speak canonical ``cmdb_ci_*`` identifiers, but under
+    # ``display_value=all`` this field also carries a human label
+    # ("Network Gear" for ``cmdb_ci_netgear``). Comparing the label against the
+    # scope makes every in-scope CI look out of scope and fails the whole stream.
+    ci_class = (_optional_sn_raw_text(record.get("sys_class_name")) or "").lower()
     if not sys_id or not ci_class:
         logger.warning("ServiceNow CMDB record missing sys_id or class; skipping")
         return None
@@ -704,7 +867,7 @@ def _configuration_item_from_record(
         assignment_group=_optional_sn_text(record.get("assignment_group")),
         owned_by=_optional_sn_text(record.get("owned_by")),
         environment=_optional_sn_text(record.get("environment")),
-        updated_at=_optional_sn_text(record.get("sys_updated_on")),
+        updated_at=_optional_sn_raw_text(record.get("sys_updated_on")),
         source_url=_servicenow_record_url(instance_url, "cmdb_ci", sys_id),
     )
 
@@ -742,7 +905,7 @@ def _record_in_cursor_window(
 ) -> bool:
     if not isinstance(record, dict):
         return False
-    timestamp = _optional_sn_text(record.get("sys_updated_on"))
+    timestamp = _optional_sn_raw_text(record.get("sys_updated_on"))
     if not timestamp:
         return updated_after is None
     try:
@@ -867,7 +1030,7 @@ def _relationship_from_record(
         servicenow_child_id=child_id,
         source_relationship_name=raw_name,
         source_type=CMDB_RELATIONSHIP_SOURCE_TYPE,
-        source_timestamp=_optional_sn_text(record.get("sys_updated_on")),
+        source_timestamp=_optional_sn_raw_text(record.get("sys_updated_on")),
         source_url=_servicenow_record_url(instance_url, "cmdb_rel_ci", sys_id),
     )
 
@@ -1129,7 +1292,7 @@ class ServiceNowCMDBRelationshipChangeIngestor(ChangeBasedIngestor):
                 changed[relationship_id] = tombstone(
                     relationship_id, sys_id=relationship_id,
                     source_type=CMDB_RELATIONSHIP_SOURCE_TYPE,
-                    source_timestamp=_optional_sn_text(record.get("sys_updated_on")),
+                    source_timestamp=_optional_sn_raw_text(record.get("sys_updated_on")),
                     source_url=_servicenow_record_url(instance_url, "cmdb_rel_ci", relationship_id),
                 )
                 continue
@@ -1146,7 +1309,7 @@ class ServiceNowCMDBRelationshipChangeIngestor(ChangeBasedIngestor):
                 changed[relationship_id] = tombstone(
                     relationship_id, sys_id=relationship_id,
                     source_type=CMDB_RELATIONSHIP_SOURCE_TYPE,
-                    source_timestamp=_optional_sn_text(deletion.get("sys_updated_on")),
+                    source_timestamp=_optional_sn_raw_text(deletion.get("sys_updated_on")),
                 )
         yield DeltaBatch(
             records=[changed[key] for key in sorted(changed)],
@@ -1425,7 +1588,7 @@ def _read_workflow_field_history(
                 field=field_name,
                 from_value=_optional_sn_text(record.get("oldvalue")),
                 to_value=_optional_sn_text(record.get("newvalue")),
-                changed_at=_optional_sn_text(record.get("sys_created_on")),
+                changed_at=_optional_sn_raw_text(record.get("sys_created_on")),
             )
         )
 
@@ -1478,16 +1641,16 @@ def _security_incident_from_record(
         priority=_optional_sn_text(record.get("priority")),
         assigned_to=_optional_sn_text(record.get("assigned_to")),
         assignment_group=_optional_sn_text(record.get("assignment_group")),
-        opened_at=_optional_sn_text(record.get("opened_at")),
-        created_at=_optional_sn_text(record.get("sys_created_on")),
-        resolved_at=_optional_sn_text(record.get("resolved_at")),
-        closed_at=_optional_sn_text(record.get("closed_at")),
+        opened_at=_optional_sn_raw_text(record.get("opened_at")),
+        created_at=_optional_sn_raw_text(record.get("sys_created_on")),
+        resolved_at=_optional_sn_raw_text(record.get("resolved_at")),
+        closed_at=_optional_sn_raw_text(record.get("closed_at")),
         close_code=_optional_sn_text(record.get("close_code")),
         resolution_code=_optional_sn_text(record.get("resolution_code")),
         state_history=tuple(history.get("state", [])),
         assignment_history=tuple(history.get("assignment_group", [])),
         org_id=org_id,
-        source_timestamp=_optional_sn_text(record.get("sys_updated_on")),
+        source_timestamp=_optional_sn_raw_text(record.get("sys_updated_on")),
         source_url=_servicenow_record_url(instance_url, SIR_TABLE, sys_id),
     )
 
@@ -2055,12 +2218,12 @@ def _vulnerable_item_from_record(
         vulnerability_group=_sn_reference_id(record.get("vulnerability_group")),
         assigned_to=_optional_sn_text(record.get("assigned_to")),
         assignment_group=_optional_sn_text(record.get("assignment_group")),
-        first_found=_optional_sn_text(record.get("first_found")),
-        last_found=_optional_sn_text(record.get("last_found")),
-        opened_at=_optional_sn_text(record.get("opened_at")),
-        created_at=_optional_sn_text(record.get("sys_created_on")),
-        resolved_at=_optional_sn_text(record.get("resolved_at")),
-        closed_at=_optional_sn_text(record.get("closed_at")),
+        first_found=_optional_sn_raw_text(record.get("first_found")),
+        last_found=_optional_sn_raw_text(record.get("last_found")),
+        opened_at=_optional_sn_raw_text(record.get("opened_at")),
+        created_at=_optional_sn_raw_text(record.get("sys_created_on")),
+        resolved_at=_optional_sn_raw_text(record.get("resolved_at")),
+        closed_at=_optional_sn_raw_text(record.get("closed_at")),
         close_code=_optional_sn_text(record.get("close_code")),
         resolution_status=_optional_sn_text(record.get("resolution_status")),
         deferral_category=_optional_sn_text(record.get("deferral_category")),
@@ -2069,7 +2232,7 @@ def _vulnerable_item_from_record(
         state_history=tuple(history.get("state", [])),
         assignment_history=tuple(history.get("assignment_group", [])),
         org_id=org_id,
-        source_timestamp=_optional_sn_text(record.get("sys_updated_on")),
+        source_timestamp=_optional_sn_raw_text(record.get("sys_updated_on")),
         source_url=_servicenow_record_url(instance_url, VR_VULN_ITEM_TABLE, sys_id),
     )
 
@@ -2093,15 +2256,15 @@ def _vulnerability_group_from_record(
         severity=_optional_sn_text(record.get("severity")),
         assigned_to=_optional_sn_text(record.get("assigned_to")),
         assignment_group=_optional_sn_text(record.get("assignment_group")),
-        opened_at=_optional_sn_text(record.get("opened_at")),
-        created_at=_optional_sn_text(record.get("sys_created_on")),
-        resolved_at=_optional_sn_text(record.get("resolved_at")),
-        closed_at=_optional_sn_text(record.get("closed_at")),
+        opened_at=_optional_sn_raw_text(record.get("opened_at")),
+        created_at=_optional_sn_raw_text(record.get("sys_created_on")),
+        resolved_at=_optional_sn_raw_text(record.get("resolved_at")),
+        closed_at=_optional_sn_raw_text(record.get("closed_at")),
         remediation_status=_optional_sn_text(record.get("remediation_status")),
         state_history=tuple(history.get("state", [])),
         assignment_history=tuple(history.get("assignment_group", [])),
         org_id=org_id,
-        source_timestamp=_optional_sn_text(record.get("sys_updated_on")),
+        source_timestamp=_optional_sn_raw_text(record.get("sys_updated_on")),
         source_url=_servicenow_record_url(instance_url, VR_GROUP_TABLE, sys_id),
     )
 
@@ -2123,16 +2286,16 @@ def _remediation_task_from_record(
         assigned_to=_optional_sn_text(record.get("assigned_to")),
         assignment_group=_optional_sn_text(record.get("assignment_group")),
         vulnerability_group=_sn_reference_id(record.get("vulnerability_group")),
-        opened_at=_optional_sn_text(record.get("opened_at")),
-        created_at=_optional_sn_text(record.get("sys_created_on")),
-        due_date=_optional_sn_text(record.get("due_date")),
-        resolved_at=_optional_sn_text(record.get("resolved_at")),
-        closed_at=_optional_sn_text(record.get("closed_at")),
+        opened_at=_optional_sn_raw_text(record.get("opened_at")),
+        created_at=_optional_sn_raw_text(record.get("sys_created_on")),
+        due_date=_optional_sn_raw_text(record.get("due_date")),
+        resolved_at=_optional_sn_raw_text(record.get("resolved_at")),
+        closed_at=_optional_sn_raw_text(record.get("closed_at")),
         close_code=_optional_sn_text(record.get("close_code")),
         state_history=tuple(history.get("state", [])),
         assignment_history=tuple(history.get("assignment_group", [])),
         org_id=org_id,
-        source_timestamp=_optional_sn_text(record.get("sys_updated_on")),
+        source_timestamp=_optional_sn_raw_text(record.get("sys_updated_on")),
         source_url=_servicenow_record_url(instance_url, VR_REMEDIATION_TASK_TABLE, sys_id),
     )
 
@@ -2410,14 +2573,69 @@ def summarize_vulnerability_workload(
 
 
 def _ingestion_result_payload(result: Any) -> Dict[str, Any]:
+    """Shape one stream's outcome, separating UNAVAILABLE from FAILED.
+
+    A :class:`ServiceNowTableUnavailable` is a deployment fact (plugin not
+    activated / role not granted), not an ingestion failure, so it is reported
+    as ``status='unavailable'`` with a named reason and NO ``error``. The
+    checkpoint still does not advance, so the stream picks up cleanly from its
+    last known-good position the moment the table becomes readable.
+    """
+    error = result.error
+    if isinstance(error, ServiceNowTableUnavailable):
+        return {
+            "connector_id": result.connector_id,
+            "records": result.records,
+            "complete": result.complete,
+            "checkpoint_advanced": result.checkpoint_advanced,
+            "checkpoint": result.new_checkpoint.value if result.new_checkpoint else None,
+            "error": None,
+            "status": "unavailable",
+            "table": error.table,
+            "unavailable_reason": error.reason,
+        }
     return {
         "connector_id": result.connector_id,
         "records": result.records,
         "complete": result.complete,
         "checkpoint_advanced": result.checkpoint_advanced,
         "checkpoint": result.new_checkpoint.value if result.new_checkpoint else None,
-        "error": str(result.error) if result.error else None,
+        "error": str(error) if error else None,
+        "status": "error" if error else "ok",
     }
+
+
+def _unavailable_stream_payload(
+    connector_id: str, table: str, reason: str
+) -> Dict[str, Any]:
+    """Payload for a stream that was never driven because its table is absent."""
+    return {
+        "connector_id": connector_id,
+        "records": 0,
+        "complete": False,
+        "checkpoint_advanced": False,
+        "checkpoint": None,
+        "error": None,
+        "status": "unavailable",
+        "table": table,
+        "unavailable_reason": reason,
+    }
+
+
+def _secops_table_available(
+    client: Optional[ServiceNowClient], table: str
+) -> Tuple[bool, str]:
+    """Pre-flight one SecOps table so an absent module is a clean no-op.
+
+    Offline runs always read the fixture, so availability is never in question
+    there. Live runs probe once per table per client (memoized): an instance
+    without the Security Operations plugins would otherwise fail all four
+    streams on every run, flooding run health with a transport error for
+    something no re-run can fix.
+    """
+    if not is_live() or client is None:
+        return True, ""
+    return client.table_available(table)
 
 
 def ingest_cmdb_changes(
@@ -2575,6 +2793,24 @@ def ingest_sir_changes(
         volume_stream=volume_stream,
     )
 
+    available, unavailable_reason = _secops_table_available(client, SIR_TABLE)
+    if not available:
+        logger.info(
+            "ServiceNow SIR: %s not ingested — %s", SIR_TABLE, unavailable_reason
+        )
+        return {
+            "org_id": org_id,
+            "run_id": run_id,
+            "security_incidents": [],
+            "security_note_handoff": note_handoff,
+            "volume": ingestor.volume_stream.measurements(org_id).to_dict(),
+            "streams": {
+                SIR_TABLE: _unavailable_stream_payload(
+                    SIR_CHECKPOINT_ID, SIR_TABLE, unavailable_reason
+                )
+            },
+        }
+
     def process(batch: DeltaBatch) -> None:
         normalized = [
             {
@@ -2678,6 +2914,16 @@ def ingest_vr_changes(
     )
     for stream_key, collection_key, ingestor_cls in plan:
         bucket = collected[collection_key]
+
+        available, unavailable_reason = _secops_table_available(client, stream_key)
+        if not available:
+            logger.info(
+                "ServiceNow VR: %s not ingested — %s", stream_key, unavailable_reason
+            )
+            streams[stream_key] = _unavailable_stream_payload(
+                ingestor_cls.connector_id, stream_key, unavailable_reason
+            )
+            continue
 
         def process(batch: DeltaBatch, _bucket=bucket) -> None:
             for record in batch.records:
@@ -3050,7 +3296,7 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
             # Preserve the raw explicit reference.  Resolution deliberately uses
             # only its stable value/sys_id, never the display name.
             "cmdb_ci": record.get("cmdb_ci"),
-            "source_timestamp": _optional_sn_text(record.get("sys_updated_on")),
+            "source_timestamp": _optional_sn_raw_text(record.get("sys_updated_on")),
             "source_url": (
                 _servicenow_record_url(
                     getattr(client, "instance_url", None),
@@ -3218,7 +3464,7 @@ def get_assignment_group_history(
                     "history_sys_id": history_sys_id,
                     "old_group": _assignment_group_name(record.get("oldvalue")),
                     "new_group": _assignment_group_name(record.get("newvalue")),
-                    "changed_at": _optional_sn_text(record.get("sys_created_on")),
+                    "changed_at": _optional_sn_raw_text(record.get("sys_created_on")),
                 }
             )
 
