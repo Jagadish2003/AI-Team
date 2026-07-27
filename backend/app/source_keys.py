@@ -46,6 +46,7 @@ SOURCE_KEY_MAP: Dict[str, str] = {
     "ncino": "nCino",
     "sap": "SAP",
     "azure_events": "Azure Events",
+    "aws_events": "AWS Events",
 }
 
 # Mirrors CONNECTOR_ID_ALIASES in the TypeScript registry.

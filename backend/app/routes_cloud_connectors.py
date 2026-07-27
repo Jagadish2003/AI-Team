@@ -202,7 +202,11 @@ def probe_aws_hub_credentials(
             session_token=session_token or None,
             source="hub",
         )
-        sts = Boto3ClientFactory().client("sts", region=probe_region, credentials=creds)
+        # Pass the CONFIGURED partition so a GovCloud connection is probed against
+        # the GovCloud regional STS endpoint, never the commercial global one.
+        sts = Boto3ClientFactory().client(
+            "sts", region=probe_region, credentials=creds, partition=partition
+        )
         resp = sts.get_caller_identity() or {}
     except CloudProbeError:
         raise
@@ -523,7 +527,7 @@ def register_cloud_connector_routes(app: FastAPI) -> None:
         response_model=CloudConnectionStatus,
         dependencies=[Depends(require_auth), Depends(require_role("owner"))],
     )
-    def create_cloud_connection(
+    async def create_cloud_connection(
         connector_id: str,
         body: Dict[str, Any],
         token: str = Depends(require_auth),
@@ -535,6 +539,15 @@ def register_cloud_connector_routes(app: FastAPI) -> None:
         partition (AWS) / environment + mode (Azure) selection is stored on the
         connector record and drives the endpoint map (AC8). The org is taken from
         the tenancy context, never the body.
+
+        **Validate before save (AC3).** The submitted credentials are proven against
+        the provider (``sts:GetCallerIdentity`` for AWS, the Azure AD
+        client-credentials exchange for Azure) BEFORE anything is vaulted and before
+        the record is marked connected. A rejected credential returns 400 with the
+        provider-specific reason and leaves the record untouched — previously the
+        route trusted the body and wrote ``status='connected'`` unconditionally, so
+        a wrong access key (or a role ARN that could never be assumed) still showed
+        as *Connected* in the Integration Hub until the first discovery run failed.
         """
         provider = _require_cloud_connector(connector_id)
         body = body or {}
@@ -542,14 +555,19 @@ def register_cloud_connector_routes(app: FastAPI) -> None:
 
         record = _load_record(org_id, connector_id)
         if connector_id == AWS_EVENTS:
-            _store_aws_connection(org_id, body, record)
+            identity = _store_aws_connection(org_id, body, record)
         else:
-            _store_azure_connection(org_id, body, record)
+            identity = await _store_azure_connection(org_id, body, record)
 
         record["provider"] = provider
         record["configured"] = True
         record["status"] = "connected"
         record["connection_updated_at"] = _now_iso()
+        # Non-secret proof of WHICH identity validated (AWS account id / Azure
+        # tenant), so "connected" is auditable rather than merely asserted.
+        record["verified_at"] = _now_iso()
+        if identity:
+            record["verified_identity"] = identity
         record.setdefault("scopes", [])
         _save_record(org_id, connector_id, record)
 
@@ -854,10 +872,27 @@ def _missing_fields(pairs: List[tuple]) -> List[str]:
     return [label for label, value in pairs if not (value or "").strip()]
 
 
+def _probe_failure(exc: CloudProbeError) -> HTTPException:
+    """Turn a failed validation probe into the route's 400 (never a secret).
+
+    The connection is NOT persisted and the record is NOT marked connected — the
+    caller sees the provider-specific reason and the Integration Hub keeps showing
+    the connector as unconfigured, which is the truth.
+    """
+    return HTTPException(
+        status_code=400, detail={"reason": exc.reason, "message": exc.message}
+    )
+
+
 def _store_aws_connection(
     org_id: str, body: Dict[str, Any], record: Dict[str, Any]
-) -> None:
-    """Vault the AWS hub credential + record the (non-secret) partition (AC2/AC8)."""
+) -> str:
+    """Validate, then vault, the AWS hub credential (AC2/AC3/AC8).
+
+    Order matters: partition/field validation → **live auth probe** → vault write.
+    A credential AWS rejects never reaches the vault and never marks the connector
+    connected. Returns the non-secret verified identity (the hub account id).
+    """
     from discovery.ingest.aws_auth import HUB_CONNECTOR_ID
     from discovery.ingest.aws_partitions import PARTITION_AWS, PartitionError, partition_for
 
@@ -878,6 +913,26 @@ def _store_aws_connection(
             detail=f"Missing required field(s): {', '.join(missing)}.",
         )
 
+    # Validate-before-save (AC3): prove the keys against AWS with the same probe
+    # the Test-connection button runs. A wrong key id/secret, an expired session
+    # token, a partition/region contradiction, or an unreachable endpoint all fail
+    # here — BEFORE the vault write and before the record says "connected".
+    region = str(body.get("region") or "").strip() or None
+    try:
+        result = probe_aws_hub_credentials(
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key,
+            session_token=str(body.get("session_token") or ""),
+            partition=partition,
+            region=region,
+        )
+    except CloudProbeError as exc:
+        logger.warning(
+            "aws_events: connection rejected for org %s — %s (credential not stored)",
+            org_id, exc.reason,
+        )
+        raise _probe_failure(exc) from exc
+
     _vault_store_static(
         org_id,
         HUB_CONNECTOR_ID,
@@ -886,18 +941,27 @@ def _store_aws_connection(
         base_url=partition,
     )
     record["partition"] = partition
+    if region:
+        record["region"] = region
+    return str(result.get("identity") or "")
 
 
-def _store_azure_connection(
+async def _store_azure_connection(
     org_id: str, body: Dict[str, Any], record: Dict[str, Any]
-) -> None:
-    """Vault the Azure service principal + record environment/mode (AC2/AC8)."""
+) -> str:
+    """Validate, then vault, the Azure service principal (AC2/AC3/AC8).
+
+    Same order as the AWS path: config validation → **live token exchange** →
+    vault write. A service principal Azure AD rejects never reaches the vault and
+    never marks the connector connected. Returns the verified tenant id.
+    """
     from discovery.ingest.azure_events_config import (
         CONNECTOR_ID,
         DEFAULT_MODE,
         _VALID_MODES,
-        resolve_environment,
+        AzureEventConfig,
         AzureEventConfigError,
+        resolve_environment,
     )
 
     environment = str(body.get("environment") or "").strip()
@@ -925,6 +989,27 @@ def _store_azure_connection(
             detail=f"Missing required field(s): {', '.join(missing)}.",
         )
 
+    # Validate-before-save (AC3): mint an ARM-scoped token with the submitted SP,
+    # exactly as the connector will at run time. A rejected secret / wrong tenant /
+    # unreachable authority fails here — before the vault write and before the
+    # record says "connected".
+    from discovery.ingest.azure_events import AzureServicePrincipal
+
+    sp = AzureServicePrincipal(
+        client_id=client_id, client_secret=client_secret, tenant_id=tenant_id
+    )
+    probe_config = AzureEventConfig(environment=env, mode=mode, subscriptions=[])
+    try:
+        result = await probe_azure_service_principal(
+            org_id, service_principal=sp, config=probe_config
+        )
+    except CloudProbeError as exc:
+        logger.warning(
+            "azure_events: connection rejected for org %s — %s (credential not stored)",
+            org_id, exc.reason,
+        )
+        raise _probe_failure(exc) from exc
+
     # Reuse the connector's own store helper (username=client_id, secret=client_secret,
     # base_url=tenant_id) so the vault field mapping lives in ONE place.
     try:
@@ -941,6 +1026,7 @@ def _store_azure_connection(
         raise _vault_not_configured(CONNECTOR_ID)
     record["environment"] = env.name
     record["mode"] = mode
+    return str(result.get("identity") or "")
 
 
 def _vault_store_static(
@@ -1096,6 +1182,16 @@ def _pin_aws_scope(org_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         "status": SCOPE_STATUS_PENDING,
         "pinned_at": _now_iso(),
         "role_arn": role_arn,
+        # The STS ExternalId is CONFIGURATION, not a credential: AWS documents it
+        # as the confused-deputy identifier a customer shares with their MSP, and
+        # an AssumeRole call FAILS without it when the role's trust policy requires
+        # one. Before this it was captured, used for the probe, and then thrown
+        # away — so every subsequent run's assume-role attempt omitted it and the
+        # account silently never polled. It is persisted here alongside the role
+        # ARN and read back by ``aws_events_config.config_from_connector_record``.
+        # It is still never echoed by an API response: ``ScopeView`` exposes only
+        # the ``external_id_set`` boolean (AC2 — write-only secrets in responses).
+        "external_id": external_id,
         "external_id_set": bool(external_id),
         "regions": list(regions),
         "partition": account_config.partition,

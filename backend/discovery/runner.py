@@ -482,6 +482,241 @@ def _ingest_ops_event_bridge(org_id: str, run_id: str) -> Dict[str, Any]:
     return {"records": collected, "health": health}
 
 
+def _ingest_aws_events(org_id: str, run_id: str) -> Dict[str, Any]:
+    """Drive the native MSP-B1 AWS Event Connector on the shared checkpoint path.
+
+    The AWS half of the MSP-B1/B2 matched pair, and the live counterpart of the
+    MSP-B8 Event-History Bridge for AWS: it polls CloudWatch alarm history, the
+    bounded EventBridge rule set, and CloudTrail management events for the pinned
+    managed accounts, normalises each through its MSP-B0 mapper, and emits the SAME
+    OperationalEvent record shape the bridge emits (AC4 transport equivalence).
+    Records are validated inside ``process_batch`` (a malformed or cross-org record
+    raises before the ``(org, "aws_events")`` checkpoint can advance), and the
+    collected records are merged into the cloud-ops assembly alongside the bridge
+    and Azure records — where the OpsEventStream folds duplicate signatures, so a
+    native event and its bridged twin never double-count.
+
+    Mirrors :func:`_ingest_azure_events` exactly (same change-runner path, same
+    non-blocking posture, same health-block shape), plus the AWS connector's
+    per-account health report (AT-646 / AC8), which is also merged into the run's
+    ``connector_health`` so a revoked role on one account is visible in run health
+    rather than only inside the connector object. Returns ``{"records", "health"}``.
+    """
+    try:
+        from .cloud_ops_runtime import operational_event_from_bridge_record
+        from .ingest import change_runner
+        from .ingest.aws_event_connector import build_ingestor as build_aws_ingestor
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "AWS event connector import failed (non-blocking): [%s]",
+            type(exc).__name__,
+        )
+        return {
+            "records": [],
+            "health": {"status": "unavailable", "reason": type(exc).__name__, "records": 0},
+        }
+
+    try:
+        ingestor = build_aws_ingestor(org_id)
+    except Exception as exc:  # noqa: BLE001 — a present-but-invalid config must not crash the run
+        logger.warning(
+            "AWS event connector config invalid (non-blocking) org=%s: [%s]",
+            org_id,
+            type(exc).__name__,
+        )
+        return {
+            "records": [],
+            "health": {"status": "unavailable", "reason": type(exc).__name__, "records": 0},
+        }
+
+    if ingestor is None:
+        # Not configured for this org (no pinned accounts / no config) — the
+        # connector simply contributes nothing, exactly like an unconfigured source.
+        return {"records": [], "health": {"status": "not_configured", "records": 0}}
+
+    collected: List[Dict[str, Any]] = []
+
+    def _process_batch(batch: Any) -> None:
+        for record in batch.records:
+            if not isinstance(record, dict):
+                raise TypeError("aws event connector emitted a non-mapping record")
+            # Validate (and org-scope) each event exactly as the bridge does, so a
+            # bad record cannot advance the checkpoint.
+            operational_event_from_bridge_record(record, org_id=org_id)
+            collected.append(dict(record))
+
+    try:
+        result = change_runner.ingest_with_checkpoint(
+            ingestor,
+            org_id,
+            process_batch=_process_batch,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "AWS event connector failed (non-blocking) org=%s run=%s: [%s]",
+            org_id,
+            run_id,
+            type(exc).__name__,
+        )
+        return {
+            "records": collected,
+            "health": {
+                "status": "unavailable",
+                "reason": type(exc).__name__,
+                "records": len(collected),
+                "accounts": _aws_account_health(ingestor),
+            },
+        }
+
+    status = "degraded" if result.error is not None else "ok"
+    accounts = _aws_account_health(ingestor)
+    # AC8: a per-account auth/throttle failure is LOUD. Even when the run itself
+    # succeeded, an account that failed degrades the connector's reported status —
+    # a partial ingest must never read as a clean one.
+    if accounts and not accounts.get("all_healthy", True):
+        status = "degraded"
+    health: Dict[str, Any] = {
+        "status": status,
+        "records": len(collected),
+        "reported_records": int(result.records),
+        "batches": int(result.batches),
+        "complete": bool(result.complete),
+        "first_run": bool(result.first_run),
+        "checkpoint_advanced": bool(result.checkpoint_advanced),
+        "accounts": accounts,
+    }
+    if result.error is not None:
+        health["reason"] = type(result.error).__name__
+        logger.warning(
+            "AWS event connector degraded org=%s run=%s: [%s]",
+            org_id,
+            run_id,
+            type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "AWS event connector: %d event(s), %d batch(es), checkpoint_advanced=%s",
+            len(collected),
+            result.batches,
+            result.checkpoint_advanced,
+        )
+    _surface_cloud_account_health(org_id, run_id, "aws_events", accounts)
+    return {"records": collected, "health": health}
+
+
+def _aws_account_health(ingestor: Any) -> Dict[str, Any]:
+    """The AWS connector's per-account health report, or ``{}`` when unavailable.
+
+    Offline/static poll sources report no health; a live source reports one entry
+    per managed account (AT-646). Never raises — health surfacing must not be able
+    to fail an otherwise-good run.
+    """
+    try:
+        report = getattr(ingestor, "health_report", None)
+        return dict(report()) if callable(report) else {}
+    except Exception:  # noqa: BLE001 — health is advisory, never fatal
+        logger.debug("Could not read AWS connector health (non-blocking)", exc_info=True)
+        return {}
+
+
+def _surface_cloud_account_health(
+    org_id: str, run_id: str, connector_id: str, report: Dict[str, Any]
+) -> None:
+    """Merge a cloud connector's per-account health into the run's connector_health.
+
+    Closes the AC8 loop: the connector already records a revoked role / throttled
+    account loudly, but that report lived only on the connector object and never
+    reached run health, so the R18-C2 connector panel could not show it. Each
+    account is surfaced under its own key ("AWS Events (111122223333)") so a
+    partial multi-account ingest is visible per account, and the pinned scope on
+    the Integration Hub record is updated to the same vocabulary so the card and
+    run health read the same word (MSP-B13 AC7).
+
+    Entirely non-blocking: any failure is logged and swallowed.
+    """
+    accounts = (report or {}).get("accounts") or []
+    if not accounts:
+        return
+    try:
+        from app.db import run_kv_get, run_kv_set
+        from app.source_keys import source_key_for
+    except ModuleNotFoundError:  # project-root execution uses backend as package
+        from backend.app.db import run_kv_get, run_kv_set  # type: ignore
+        from backend.app.source_keys import source_key_for  # type: ignore
+
+    system = source_key_for(connector_id)
+    try:
+        existing = run_kv_get("connector_health", run_id, None) or {}
+        if not isinstance(existing, dict):
+            existing = {}
+        for account in accounts:
+            account_id = str(account.get("account_id") or "").strip()
+            key = f"{system} ({account_id})" if account_id else system
+            existing[key] = {
+                "system": system,
+                "connectorId": connector_id,
+                "scopeId": account_id,
+                "status": account.get("status"),
+                "message": account.get("message") or "",
+                "surfacesOk": list(account.get("surfaces_ok") or []),
+                "surfacesFailed": dict(account.get("surfaces_failed") or {}),
+                "throttleEvents": int(account.get("throttle_events") or 0),
+            }
+        run_kv_set("connector_health", run_id, existing)
+    except Exception as exc:  # noqa: BLE001 — health surfacing is non-blocking.
+        logger.warning(
+            "Could not surface %s per-account health (non-blocking) run=%s: [%s]",
+            connector_id, run_id, type(exc).__name__,
+        )
+
+    _update_pinned_scope_health(org_id, connector_id, accounts)
+
+
+def _update_pinned_scope_health(
+    org_id: str, connector_id: str, accounts: List[Dict[str, Any]]
+) -> None:
+    """Write each account's outcome back onto its pinned Integration Hub scope.
+
+    So the connector card stops showing a freshly-pinned account as ``pending``
+    forever, and shows ``auth_failed`` the moment a role is revoked — the same
+    vocabulary run health uses (MSP-B13 AC7). Scopes that were not polled are left
+    untouched. Non-blocking.
+    """
+    try:
+        from app import db
+
+        record = db.org_connector_get(org_id, connector_id)
+        if not isinstance(record, dict):
+            return
+        scopes = record.get("scopes")
+        if not isinstance(scopes, list) or not scopes:
+            return
+        by_account = {
+            str(a.get("account_id") or ""): a for a in accounts if a.get("account_id")
+        }
+        changed = False
+        for scope in scopes:
+            if not isinstance(scope, dict):
+                continue
+            account = by_account.get(str(scope.get("scope_id") or ""))
+            if account is None:
+                continue
+            scope["status"] = account.get("status") or scope.get("status")
+            scope["health_message"] = account.get("message") or ""
+            scope["surfaces_ok"] = list(account.get("surfaces_ok") or [])
+            scope["surfaces_failed"] = dict(account.get("surfaces_failed") or {})
+            scope["last_checkpoint_at"] = datetime.now(timezone.utc).isoformat()
+            changed = True
+        if changed:
+            record["scopes"] = scopes
+            db.org_connector_set(org_id, connector_id, record)
+    except Exception as exc:  # noqa: BLE001 — card refresh is advisory
+        logger.warning(
+            "Could not refresh %s pinned-scope health (non-blocking) org=%s: [%s]",
+            connector_id, org_id, type(exc).__name__,
+        )
+
+
 def _ingest_azure_events(org_id: str, run_id: str) -> Dict[str, Any]:
     """Drive the native MSP-B2 Azure Event Connector on the shared checkpoint path.
 
@@ -1280,6 +1515,11 @@ def run(
         "records": [],
         "health": {"status": "not_selected", "records": 0},
     }
+    # MSP-B1: native AWS Event Connector output (same record shape as the bridge).
+    aws_events_data: Dict[str, Any] = {
+        "records": [],
+        "health": {"status": "not_selected", "records": 0},
+    }
     cloud_ops_runtime_health: Dict[str, Any] = {"status": "not_selected"}
     logger.info(f"Systems: {sorted(list(_systems))}")
 
@@ -1491,6 +1731,16 @@ def run(
     if _any_cloud_ops and "azure_events" in _systems:
         azure_events_data = _ingest_azure_events(org_id, run_id)
 
+    # MSP-B1: the NATIVE AWS Event Connector — the AWS half of the B1/B2 pair, and
+    # the live counterpart of the B8 bridge for AWS. Identical gating and posture
+    # to Azure above: it runs only when the AWS connector is connected+selected AND
+    # a cloud_ops pack is selected (so its events are actually consumed), its own
+    # (org, "aws_events") checkpoint, and its records feed the SAME cloud-ops
+    # assembly seam — where the OpsEventStream folds duplicate signatures, so a
+    # native event and its bridged twin never double-count. Non-blocking.
+    if _any_cloud_ops and "aws_events" in _systems:
+        aws_events_data = _ingest_aws_events(org_id, run_id)
+
     # Single-ingest: materialization now hands the runner ALL connected systems
     # (not just the ones a probe pre-pass confirmed had data), so guard against
     # aborting a run that still has usable data. Abort only when NO system of
@@ -1503,6 +1753,7 @@ def run(
         and not jira_data
         and not ops_event_bridge_data.get("records")
         and not azure_events_data.get("records")
+        and not aws_events_data.get("records")
     ):
         logger.error("No system-of-record data available — cannot run detectors. Aborting.")
         try:
@@ -1533,6 +1784,7 @@ def run(
         empty["cloudOpsRuntime"] = {
             "eventBridge": dict(ops_event_bridge_data.get("health") or {}),
             "azureEvents": dict(azure_events_data.get("health") or {}),
+            "awsEvents": dict(aws_events_data.get("health") or {}),
             "assembly": cloud_ops_runtime_health,
         }
         return empty
@@ -1809,8 +2061,10 @@ def run(
             # call. The runtime's OpsEventStream folds identical event_signatures, so
             # a native event and its bridged twin collapse to one signal rather than
             # double-counting (MSP §15 transport equivalence).
-            _cloud_event_records = list(ops_event_bridge_data.get("records") or ()) + list(
-                azure_events_data.get("records") or ()
+            _cloud_event_records = (
+                list(ops_event_bridge_data.get("records") or ())
+                + list(azure_events_data.get("records") or ())
+                + list(aws_events_data.get("records") or ())
             )
             runtime = build_cloud_ops_runtime(
                 org_id,
@@ -2538,6 +2792,7 @@ def run(
         "cloudOpsRuntime": {
             "eventBridge": dict(ops_event_bridge_data.get("health") or {}),
             "azureEvents": dict(azure_events_data.get("health") or {}),
+            "awsEvents": dict(aws_events_data.get("health") or {}),
             "assembly": cloud_ops_runtime_health,
         },
     }

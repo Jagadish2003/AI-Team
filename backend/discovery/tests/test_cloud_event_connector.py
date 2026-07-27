@@ -325,17 +325,46 @@ def test_ac5_budget_defers_loudly_never_silently():
 
 
 def test_offline_aws_source_demonstrates_dedup():
-    # The shipped offline fixture seeds a re-firing HighCPU alarm — a run with no
-    # AWS account still shows admission folding it.
+    # The shipped offline fixture seeds a re-firing HighCPU alarm in EACH of two
+    # managed accounts — a run with no AWS account still shows admission folding
+    # the re-fires into one active signal per account, with a count (AC5), and the
+    # two-account "each account a scope" model (AC1).
     store = InMemoryRawEventStore()
     connector = AWSEventConnector(build_offline_aws_source(), raw_store=store)
     records, _ = _drain(connector)
+
+    assert {r["account_scope"] for r in records} == {"111122223333", "444455556666"}
     signals = connector.active_signals(_ORG)
     high_cpu = [s for s in signals if s.resource_id.endswith("alarm:HighCPU")]
-    assert len(high_cpu) == 1
-    assert high_cpu[0].occurrence_count == 3
-    # EventBridge (1) + CloudTrail (2) events are distinct signals, not folded.
-    assert len(signals) == 4
+    assert len(high_cpu) == 2                                   # one per account
+    assert all(s.occurrence_count == 6 for s in high_cpu)       # re-fires folded with a count
+    # Per account: HighCPU + EC2 state-change + AssumeRole = 3 signals, plus the
+    # denied TerminateInstances, whose signature is shared across both accounts.
+    assert len(signals) == 7
+
+
+def test_offline_aws_fixture_survives_the_b7_noise_floors():
+    """The offline estate must actually reach the detectors, not be floored away.
+
+    The B7 noise floors suppress fewer than 5 occurrences of the
+    audit/state_change/access classes, so a fixture seeding one or two firings
+    produces an offline run in which almost every event is discarded as noise and
+    the Cloud Operations detectors see nothing. The shipped fixture therefore seeds
+    each recurring signature above the calibrated floor; this test pins that, so a
+    future fixture trim cannot silently empty the offline demo again.
+    """
+    from discovery.signals.noise_floor import apply_noise_floors
+
+    connector = AWSEventConnector(build_offline_aws_source())
+    _drain(connector)
+    signals = connector.active_signals(_ORG)
+    visible, suppression = apply_noise_floors(signals)
+
+    assert signals, "offline fixture produced no signals at all"
+    assert len(visible) == len(signals), (
+        "offline fixture events were suppressed by the B7 noise floors: "
+        f"{suppression.to_dict()}"
+    )
 
 
 def test_aws_scopes_builds_all_surfaces_per_account():

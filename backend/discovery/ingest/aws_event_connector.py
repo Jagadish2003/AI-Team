@@ -13,34 +13,37 @@ surfaces wired to their MSP-B0 mappers. MSP-B2's Azure connector is the SAME
 skeleton with ``provider='azure'`` — if either needs to fork the poll loop, that
 is a design defect (AT-641).
 
-Offline vs live (AT-641 scope)
-------------------------------
-AT-641 (T1) delivers the skeleton and its OFFLINE proof: the poll source is
-injectable, and :func:`build_offline_aws_source` reads a deterministic fixture so
-a run works with no AWS account (the codebase's offline-first convention). The
-LIVE poll source — a boto3-backed client polling CloudWatch/EventBridge/CloudTrail
-with credentials resolved from the vault (per-run context, never process-global
-env) — is a follow-up MSP-B1 subtask that depends on the SME-provided AWS
-credentials; it drops in behind the same :class:`CloudPollSource` interface with
-no change to this connector or the skeleton. No credential env var or placeholder
-is introduced here (per the connector conventions, credentials live in the vault,
-never in ``.env`` templates).
+Offline vs live
+---------------
+The poll source is injectable. :func:`build_offline_aws_source` reads a
+deterministic fixture so a run works with no AWS account (the codebase's
+offline-first convention); :mod:`discovery.ingest.aws_poll_source` supplies the
+LIVE boto3-backed source (AT-642) with credentials resolved from the per-org
+vault. :func:`build_ingestor` is the single entry point the discovery runner
+calls: it picks the right source for the mode and resolves the org's pinned
+managed-account estate through :mod:`discovery.ingest.aws_events_config`. No
+credential env var or placeholder is introduced here (per the connector
+conventions, credentials live in the vault, never in ``.env`` templates).
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .cloud_event_connector import (
     CloudEventConnector,
+    CloudPollSource,
     CloudScope,
     StaticCloudPollSource,
 )
 
+logger = logging.getLogger(__name__)
+
 PROVIDER_AWS = "aws"
 
-#: AWS operational surfaces this connector polls (MSP-B1 scope).
+#: AWS operational surfaces this connector knows about (MSP-B1 scope).
 SURFACE_CLOUDWATCH = "cloudwatch"
 SURFACE_EVENTBRIDGE = "eventbridge"
 SURFACE_CLOUDTRAIL = "cloudtrail"
@@ -53,8 +56,24 @@ AWS_SURFACE_MAPPERS: Dict[str, str] = {
     SURFACE_CLOUDTRAIL: "map_cloudtrail",
 }
 
-#: All AWS surfaces, in a stable order.
+#: Every AWS surface vocabulary entry, in a stable order. This is the set of
+#: surfaces the connector CAN map — not the set it polls live by default (see
+#: :data:`DEFAULT_POLL_SURFACES`).
 AWS_SURFACES = (SURFACE_CLOUDWATCH, SURFACE_EVENTBRIDGE, SURFACE_CLOUDTRAIL)
+
+#: The surfaces the LIVE poll source reads by default — ALL THREE.
+#:
+#: This deliberately matches :data:`AWS_SURFACES`. MSP-B1's SCOPE DEFENCE names
+#: three V1 event classes and AC1 requires all three to be ingested from every
+#: managed account, so the bounded EventBridge surface is IN scope by default and
+#: must not be quietly dropped. What that surface can honestly observe under the
+#: story's minimal grant (``events:Describe*/List*``) is the bounded RULE SET —
+#: the bus exposes no past-event read API — so the connector reports rule-state
+#: observations and rule CHANGES, which is what "archive/replay-adjacent reads on
+#: the bounded rule set" (Section 1) describes. The boundary is documented at
+#: :data:`discovery.ingest.aws_poll_source.EVENTBRIDGE_SURFACE_NOTE` rather than
+#: hidden; widening to a true event stream is a new story, not a default change.
+DEFAULT_POLL_SURFACES: Tuple[str, ...] = AWS_SURFACES
 
 _OFFLINE_FIXTURE = os.path.join(
     os.path.dirname(__file__), "fixtures", "aws_native_events_sample.json"
@@ -152,3 +171,84 @@ def build_offline_aws_source(
         )
         scope_events.append((scope, entry.get("events", [])))
     return StaticCloudPollSource(scope_events, page_size=page_size)
+
+
+def build_ingestor(
+    org_id: str,
+    *,
+    env: Optional[Dict[str, str]] = None,
+    poll_source: Optional[CloudPollSource] = None,
+    raw_store: Optional[Any] = None,
+    budget: Optional[int] = None,
+    surfaces: Optional[Tuple[str, ...]] = None,
+) -> Optional["AWSEventConnector"]:
+    """Build the AWS Event Connector for ``org_id``, or None when unconfigured.
+
+    The SINGLE entry point the discovery runner calls (mirroring
+    ``azure_events.build_ingestor``), so "is AWS configured for this org?" is
+    answered in exactly one place:
+
+    * **Offline** (``INGEST_MODE`` is not ``live``) — always returns a connector
+      over the deterministic event fixture, so an offline demo/run ingests real
+      AWS-shaped events with no AWS account and no config (gap G9: offline mode
+      previously had no production path at all).
+    * **Live** — resolves the org's estate through
+      :func:`discovery.ingest.aws_events_config.resolve_aws_event_config`
+      (operator ``AWS_EVENT_ACCOUNTS`` override first, else the Owner-pinned
+      accounts on the Integration Hub connector record) and polls exactly those
+      accounts. Returns None when nothing is configured — a not-configured
+      connector contributes nothing, which is not an error.
+
+    Raises :class:`~discovery.ingest.aws_events_config.AWSEventConfigError` on a
+    present-but-INVALID config, so a typo surfaces loudly instead of silently
+    ingesting nothing. ``poll_source`` is injectable for tests.
+    """
+    from .aws_events_config import CONNECTOR_ID, resolve_aws_event_config
+
+    try:
+        from . import is_live
+    except Exception:  # pragma: no cover - import shim
+        from discovery.ingest import is_live  # type: ignore
+
+    if budget is None:
+        try:
+            from discovery.signals.ops_calibration import CALIBRATED_RUN_EVENT_BUDGET
+
+            budget = CALIBRATED_RUN_EVENT_BUDGET
+        except Exception:  # pragma: no cover - calibration is advisory here
+            budget = None
+
+    if poll_source is None:
+        if not is_live():
+            logger.info(
+                "aws_events: offline mode — polling the deterministic event fixture "
+                "for org %s (no AWS account required)", org_id,
+            )
+            poll_source = build_offline_aws_source()
+        else:
+            config = resolve_aws_event_config(org_id, env=env)
+            if config is None:
+                logger.info(
+                    "aws_events: not configured for org %s — no pinned accounts; "
+                    "connect it in the Integration Hub.", org_id,
+                )
+                return None
+            from .aws_auth import AWSAuthenticator
+            from .aws_poll_source import AWSLivePollSource
+
+            poll_source = AWSLivePollSource(
+                config.accounts,
+                AWSAuthenticator(),
+                surfaces=tuple(surfaces) if surfaces else DEFAULT_POLL_SURFACES,
+            )
+            logger.info(
+                "aws_events: live mode — %d pinned account(s) in partition %s for org %s",
+                len(config.accounts), config.partition, org_id,
+            )
+
+    return AWSEventConnector(
+        poll_source,
+        connector_id=CONNECTOR_ID,
+        raw_store=raw_store,
+        budget=budget,
+    )

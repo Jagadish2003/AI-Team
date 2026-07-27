@@ -475,7 +475,7 @@
   {
     "id": "aws_events",
     "name": "AWS Events",
-    "category": "Cloud Operations · Multi-account",
+    "category": "Cloud Operations - Multi-account",
     "tier": "standard",
     "status": "not_configured",
     "configured": false,
@@ -493,7 +493,7 @@
   {
     "id": "azure_events",
     "name": "Azure Events",
-    "category": "Cloud Operations · Multi-subscription",
+    "category": "Cloud Operations - Multi-subscription",
     "tier": "standard",
     "status": "not_configured",
     "configured": false,

@@ -459,6 +459,14 @@ _INGEST_ALLOWLIST: Dict[Tuple[str, str], str] = {
         "(_vault_static_credential) has been checked first. Documented in "
         "CLAUDE.md as a non-production, never-in-.env fallback."
     ),
+    ("aws_events_config.py", "<dynamic:_raw_config_entry>"): (
+        "Reads AWS_EVENT_ACCOUNTS (a non-secret JSON config of pinned managed "
+        "accounts / role ARNs / regions / partition, MSP-B1 — the AWS mirror of "
+        "AZURE_EVENT_CONFIG below); configuration discovery, not a credential — "
+        "the hub access key and per-account direct keys resolve via the vault "
+        "only, and inline AWS keys in the config are rejected by "
+        "aws_auth.parse_account_config."
+    ),
     ("azure_events_config.py", "<dynamic:_raw_config_entry>"): (
         "Reads AZURE_EVENT_CONFIG (a non-secret JSON config of pinned "
         "subscriptions / environment / access mode, MSP-B2); configuration "

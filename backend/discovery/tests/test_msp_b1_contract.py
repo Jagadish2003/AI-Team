@@ -52,6 +52,7 @@ from discovery.ingest.aws_event_connector import (
 )
 from discovery.ingest.aws_partitions import PARTITION_GOVCLOUD, endpoint_map
 from discovery.ingest.aws_poll_source import AWSLivePollSource
+from discovery.ingest.aws_watermark import watermark_of
 from discovery.ingest.base import Checkpoint
 from discovery.ingest.cloud_event_connector import (
     CloudScope,
@@ -130,7 +131,7 @@ class _FakeFactory(AWSClientFactory):
         self.throttle_by_account = throttle_by_account or {}
         self.services_seen: set = set()
 
-    def client(self, service, *, region, credentials):
+    def client(self, service, *, region, credentials, partition=None):
         self.services_seen.add(service)
         if service == "sts":
             return self.sts
@@ -277,8 +278,12 @@ def test_ac3_incremental_no_re_reads_per_account():
 
     assert [r["provider_event_id"] for r in records2] == ["ct-a2"]     # only the new one
     pos = _decode_positions(ckpt)
-    assert pos[f"aws:{a}:{_REGION}:{SURFACE_CLOUDTRAIL}"] == "2026-07-14T03:00:00Z"
-    assert pos[f"aws:{b}:{_REGION}:{SURFACE_CLOUDTRAIL}"] == "2026-07-14T03:30:00Z"
+    # The position is an OPAQUE value (R16-A1 AC5 — the runner never interprets
+    # it); read the watermark through the accessor rather than asserting on its
+    # internal spelling, which now also carries the boundary ids that stop a
+    # same-instant straggler being dropped.
+    assert watermark_of(pos[f"aws:{a}:{_REGION}:{SURFACE_CLOUDTRAIL}"]) == "2026-07-14T03:00:00Z"
+    assert watermark_of(pos[f"aws:{b}:{_REGION}:{SURFACE_CLOUDTRAIL}"]) == "2026-07-14T03:30:00Z"
 
 
 # ═════════════════════════════════════════════════════════════════════════════

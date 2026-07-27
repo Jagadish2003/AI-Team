@@ -170,21 +170,44 @@ def resolve_endpoint(partition_id: str, service: str, region: Optional[str]) -> 
     return f"https://{prefix}.{region}.{partition.dns_suffix}"
 
 
-def resolve_service_endpoint_or_none(service: str, region: Optional[str]) -> Optional[str]:
+def resolve_service_endpoint_or_none(
+    service: str, region: Optional[str], partition_id: Optional[str] = None
+) -> Optional[str]:
     """Best-effort endpoint for the client factory — ``None`` to let boto3 default.
 
-    Derives the partition from the region. Returns ``None`` when the service is not
-    one this connector configures, or when no endpoint can be resolved (e.g. no
-    region for a non-STS service) — in which case boto3's own endpoint resolution
-    is used unchanged.
+    ``partition_id`` is the CONFIGURED partition of the connection (the account's
+    ``AWSAccountConfig.partition``). It is authoritative: deriving the partition
+    from the region alone is wrong whenever no region is set, because a GovCloud
+    connection with no explicit region would silently resolve the COMMERCIAL global
+    STS endpoint (``sts.amazonaws.com``) — a cross-partition call that can only
+    fail, and one that reads like an auth problem rather than a config one. Passing
+    the configured partition makes ``aws-us-gov`` resolve GovCloud endpoints (or
+    raise for the impossible ones) regardless of whether a region was supplied.
+
+    When ``partition_id`` is omitted the partition is derived from the region, the
+    original behaviour, so existing callers are unchanged.
+
+    Returns ``None`` when the service is not one this connector configures, or when
+    no endpoint can be resolved (e.g. no region for a non-STS service) — in which
+    case boto3's own endpoint resolution is used unchanged.
     """
     if service not in SERVICE_ENDPOINT_PREFIXES:
         return None
-    partition_id = resolve_partition_for_region(region)
+    resolved_partition = partition_id or resolve_partition_for_region(region)
     try:
-        return resolve_endpoint(partition_id, service, region)
+        return resolve_endpoint(resolved_partition, service, region)
     except PartitionError:
         return None
+
+
+def default_region_for_partition(partition_id: str) -> Optional[str]:
+    """A usable default region for a partition, or ``None`` for commercial.
+
+    GovCloud has no global STS endpoint and no implicit default region, so a
+    GovCloud connection that states no region still needs one to build any client.
+    Commercial returns ``None`` — boto3's own default-region resolution stands.
+    """
+    return "us-gov-west-1" if partition_id == PARTITION_GOVCLOUD else None
 
 
 def endpoint_map(partition_id: str, region: str) -> Dict[str, str]:

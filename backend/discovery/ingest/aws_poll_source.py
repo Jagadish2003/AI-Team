@@ -48,6 +48,15 @@ from .aws_event_connector import (
 )
 from .aws_health import AWSConnectorHealth, is_throttle_error
 from .aws_partitions import arn_partition_for_region
+from .aws_watermark import (
+    TimePosition,
+    advance_ascending,
+    advance_descending,
+    decode_position,
+    encode_position,
+    parse_timestamp,
+    watermark_of,
+)
 from .cloud_event_connector import CloudPollSource, CloudScope, PollPage
 
 logger = logging.getLogger(__name__)
@@ -72,6 +81,33 @@ _SERVICE_FOR_SURFACE: Dict[str, str] = {
     SURFACE_EVENTBRIDGE: "events",
     SURFACE_CLOUDTRAIL: "cloudtrail",
 }
+
+#: What the EventBridge surface can and cannot observe — stated plainly so the
+#: boundary is documented rather than implied (MSP-B1 SCOPE DEFENCE).
+#:
+#: MSP-B1 lists EventBridge as one of the three V1 event classes and describes it
+#: as "archive/replay-adjacent reads on the bounded rule set" (Section 1). The
+#: minimal read-only grant the partner IAM policy asks for is
+#: ``events:Describe*/List*``, which reads RULE CONFIGURATION. The EventBridge bus
+#: itself exposes no read API for past events, so what this surface honestly
+#: contributes is the bounded rule set as observed operational state plus every
+#: subsequent rule CHANGE (a rule appearing, being modified, or being disabled IS
+#: an operational event, and is what the checkpoint's rule-signature map detects).
+#:
+#: LIVE DATA / EXTRA GRANT NEEDED to go further: a true EventBridge *event stream*
+#: requires the customer to route the bounded rules to a durable target the
+#: connector can then read (a CloudWatch Logs log group, S3, or Firehose), or to
+#: create an EventBridge Archive and replay it. Both are customer-side estate
+#: changes beyond the read-only policy in ``deployment/aws_readonly_iam_policy.json``
+#: and are deliberately out of V1 scope — widening is a new story, per the story's
+#: own scope-defence note.
+EVENTBRIDGE_SURFACE_NOTE = (
+    "EventBridge V1 reads the bounded RULE SET via events:ListRules/DescribeRule "
+    "(the bus exposes no past-event read API under the minimal read-only grant). "
+    "The rule set is emitted once as observed state, then only on change. A true "
+    "event stream needs a durable rule target (CloudWatch Logs / S3 / Firehose) or "
+    "an EventBridge Archive replay — a customer-side estate change, out of V1 scope."
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,23 +139,14 @@ def _iso(value: Any) -> str:
 
 
 def _watermark_to_datetime(watermark: str) -> Optional[datetime]:
-    """Parse a watermark ISO string to an aware datetime for the API ``StartDate``.
+    """Parse a stored position's watermark to an aware datetime (back-compat shim).
 
-    ``DescribeAlarmHistory`` takes a ``datetime`` for ``StartDate``; the checkpoint
-    is stored as an ISO string, so convert it here. A trailing ``Z`` and naive
-    values are tolerated (assumed UTC); an empty/unparseable watermark yields
-    ``None`` (omit ``StartDate`` — the client-side filter still enforces "only new").
+    Superseded by :func:`discovery.ingest.aws_watermark.parse_timestamp`, which the
+    readers now use directly. Retained because it accepts a whole *position* string
+    (plain ISO or the richer JSON form) rather than a bare timestamp, and callers
+    outside the readers may still hold one.
     """
-    if not watermark:
-        return None
-    s = watermark.strip()
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    try:
-        dt = datetime.fromisoformat(s)
-    except ValueError:
-        return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return parse_timestamp(watermark_of(watermark))
 
 
 def _alarm_history_to_state_change(
@@ -182,24 +209,39 @@ def _parse_alarm_history_states(history_data: Any) -> Tuple[str, str]:
 
 def read_cloudwatch(
     client: Any, *, region: Optional[str], account_id: str, watermark: str, page_size: int
-) -> Tuple[List[Dict[str, Any]], str]:
+) -> Tuple[List[Dict[str, Any]], str, bool]:
     """Read new CloudWatch alarm-history state changes since ``watermark`` (AT-643).
 
     V1 scope: CloudWatch **alarm state changes only** — ``DescribeAlarmHistory``
     filtered to ``HistoryItemType='StateUpdate'`` — NOT CloudWatch metrics or
     CloudWatch Logs. ``StartDate`` narrows the server-side window to the account's
-    checkpoint, and a client-side ``ts > watermark`` filter is the authoritative
-    incremental guard so a second run re-reads nothing (AC3). Follows ``NextToken``
-    internally (bounded by :data:`MAX_PAGES_PER_POLL`). Returns
-    ``(events, new_watermark)`` — events in the ``map_cloudwatch`` input shape, and
-    the newest item time as the account's next checkpoint position.
+    checkpoint, and the client-side position filter is the authoritative
+    incremental guard so a second run re-reads nothing (AC3).
+
+    Read **oldest-first** (``ScanBy='TimestampAscending'``). That ordering is what
+    makes hitting :data:`MAX_PAGES_PER_POLL` safe: the events read are a complete
+    prefix of the backlog, so the watermark can advance to the newest one read and
+    the unread remainder — which is strictly newer — is simply picked up by the
+    next poll. Reading newest-first and then advancing the watermark past
+    everything (the original behaviour) discarded the older remainder for good.
+
+    Returns ``(events, next_position, truncated)``; ``truncated`` tells the caller
+    a backlog remains so it can keep paging in the same run.
     """
+    position = decode_position(watermark)
     events: List[Dict[str, Any]] = []
-    newest = watermark
-    start_date = _watermark_to_datetime(watermark)
+    seen: List[Tuple[str, str]] = []            # (timestamp, provider event id)
+    start_date = parse_timestamp(position.watermark)
     token: Optional[str] = None
-    for _ in range(MAX_PAGES_PER_POLL):
-        params: Dict[str, Any] = {"HistoryItemType": "StateUpdate", "MaxRecords": page_size}
+    truncated = False
+    for page_number in range(MAX_PAGES_PER_POLL):
+        params: Dict[str, Any] = {
+            "HistoryItemType": "StateUpdate",
+            "MaxRecords": page_size,
+            # Oldest-first: see the docstring — this is the anti-truncation-loss
+            # property, not a cosmetic choice.
+            "ScanBy": "TimestampAscending",
+        }
         if start_date is not None:
             params["StartDate"] = start_date
         if token:
@@ -212,48 +254,73 @@ def read_cloudwatch(
             if item.get("HistoryItemType") != "StateUpdate":
                 continue
             ts = _iso(item.get("Timestamp"))
-            # Authoritative incremental guard: only events strictly newer than the
-            # account's checkpoint — never a re-read, regardless of what the server
-            # returned for the window (AC3).
-            if watermark and ts <= watermark:
-                continue
             event = _alarm_history_to_state_change(
                 item, account_id=account_id, region=region, timestamp_iso=ts
             )
             if event is None:
                 continue
+            # Authoritative incremental guard, on parsed instants and aware of the
+            # ids already recorded at the boundary instant (AC3: no re-reads; and
+            # no same-instant straggler dropped either).
+            if not position.accepts(ts, str(event.get("id") or "")):
+                continue
             events.append(event)
-            if ts > newest:
-                newest = ts
+            seen.append((ts, str(event.get("id") or "")))
         token = resp.get("NextToken")
         if not token:
             break
-    else:
-        logger.warning("aws_poll_source: cloudwatch hit MAX_PAGES_PER_POLL for account %s", account_id)
-    return events, newest
+        if page_number == MAX_PAGES_PER_POLL - 1:
+            truncated = True
+            logger.warning(
+                "aws_poll_source: cloudwatch hit MAX_PAGES_PER_POLL for account %s — "
+                "resuming from the advanced watermark (no events dropped)",
+                account_id,
+            )
+    advanced = advance_ascending(position, seen, truncated=truncated)
+    next_position = encode_position(advanced)
+    # Only report "keep paging" when the position actually moved, so a source that
+    # reports a backlog it cannot advance past can never spin.
+    return events, next_position, truncated and next_position != watermark
 
 
 def read_cloudtrail(
     client: Any, *, region: Optional[str], account_id: str, watermark: str, page_size: int
-) -> Tuple[List[Dict[str, Any]], str]:
+) -> Tuple[List[Dict[str, Any]], str, bool]:
     """Read new CloudTrail **management** events since ``watermark`` (AT-644).
 
     V1 scope: management (audit) events only — ``cloudtrail:LookupEvents`` returns
     management events by design (data events are never returned), and
     :func:`_is_management_event` drops any explicit data/Insight record that slips
     through (AC2). ``StartTime`` narrows the server window to the account's
-    checkpoint; a client-side ``ts > watermark`` filter is the authoritative
-    no-re-read incremental guard (AC3). Follows ``NextToken`` internally. Each
-    event's ``CloudTrailEvent`` JSON is the record shape map_cloudtrail consumes.
+    checkpoint; the client-side position filter is the authoritative no-re-read
+    incremental guard (AC3).
+
+    ``LookupEvents`` is **newest-first** and offers no sort-order parameter, so a
+    backlog larger than :data:`MAX_PAGES_PER_POLL` cannot simply advance the
+    watermark — that would strand every older unread event permanently. Instead the
+    poll walks the backlog **backwards**: while truncated the watermark stays
+    pinned and the position's ceiling drops to the oldest instant just read, so the
+    next poll continues into the older remainder. The newest instant is held in the
+    position and promoted to the watermark only once the window drains. See
+    :mod:`discovery.ingest.aws_watermark`.
+
+    Returns ``(events, next_position, truncated)``.
     """
+    position = decode_position(watermark)
     events: List[Dict[str, Any]] = []
-    newest = watermark
-    start_time = _watermark_to_datetime(watermark)
+    seen: List[Tuple[str, str]] = []            # (timestamp, provider event id)
+    start_time = parse_timestamp(position.watermark)
+    # An in-progress backfill bounds the server window from above too, so each
+    # continuation asks for the next-older slice rather than re-fetching the newest.
+    end_time = parse_timestamp(position.ceiling) if position.backfilling else None
     token: Optional[str] = None
-    for _ in range(MAX_PAGES_PER_POLL):
+    truncated = False
+    for page_number in range(MAX_PAGES_PER_POLL):
         params: Dict[str, Any] = {"MaxResults": page_size}
         if start_time is not None:
             params["StartTime"] = start_time
+        if end_time is not None:
+            params["EndTime"] = end_time
         if token:
             params["NextToken"] = token
         resp = client.lookup_events(**params) or {}
@@ -264,17 +331,24 @@ def read_cloudtrail(
             if not _is_management_event(record):
                 continue  # V1 scope: never data / Insight events (AC2)
             ts = _iso(record.get("eventTime"))
-            if watermark and ts <= watermark:
+            event_id = str(record.get("eventID") or "")
+            if not position.accepts(ts, event_id):
                 continue
             events.append(record)
-            if ts > newest:
-                newest = ts
+            seen.append((ts, event_id))
         token = resp.get("NextToken")
         if not token:
             break
-    else:
-        logger.warning("aws_poll_source: cloudtrail hit MAX_PAGES_PER_POLL for account %s", account_id)
-    return events, newest
+        if page_number == MAX_PAGES_PER_POLL - 1:
+            truncated = True
+            logger.warning(
+                "aws_poll_source: cloudtrail hit MAX_PAGES_PER_POLL for account %s — "
+                "walking the remaining backlog backwards (no events dropped)",
+                account_id,
+            )
+    advanced = advance_descending(position, seen, truncated=truncated)
+    next_position = encode_position(advanced)
+    return events, next_position, truncated and next_position != watermark
 
 
 def _is_management_event(record: Dict[str, Any]) -> bool:
@@ -310,19 +384,25 @@ def _parse_cloudtrail_event(ev: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def read_eventbridge(
     client: Any, *, region: Optional[str], account_id: str, watermark: str, page_size: int
-) -> Tuple[List[Dict[str, Any]], str]:
+) -> Tuple[List[Dict[str, Any]], str, bool]:
     """Read the bounded EventBridge rule set as operational events (AT-644).
 
     Uses ``events:ListRules`` + ``events:DescribeRule`` on the scoped rules — the
-    bounded surface reachable through the granted ``events:Describe*/List*`` (the
-    bus exposes no past-event read API). Each rule becomes an EventBridge event
-    envelope map_eventbridge consumes.
+    bounded surface reachable through the granted ``events:Describe*/List*``. See
+    :data:`EVENTBRIDGE_SURFACE_NOTE` for the exact boundary of what this surface
+    can observe and what a fuller event stream would require; the short version is
+    that the bus exposes no past-event read API, so the bounded rule set (and every
+    subsequent change to it) IS the observable operational signal here.
 
     Incremental (AC3): the rule set is configuration, not a time series, so the
     per-scope checkpoint is a compact ``{rule_key: signature}`` map instead of a
     timestamp. A rule is emitted only when it is NEW or its signature CHANGED; an
     unchanged rule set on a second run yields no events (no re-reads). The updated
     signature map is returned as the scope's next position.
+
+    Returns ``(events, next_position, truncated)`` for signature-compatibility with
+    the time-series readers; ``truncated`` is always ``False`` because the rule set
+    is bounded by construction.
     """
     seen = _decode_rule_state(watermark)
     new_state: Dict[str, str] = {}
@@ -348,7 +428,7 @@ def read_eventbridge(
             break
     else:
         logger.warning("aws_poll_source: eventbridge hit MAX_PAGES_PER_POLL for account %s", account_id)
-    return events, json.dumps(new_state, sort_keys=True, separators=(",", ":"))
+    return events, json.dumps(new_state, sort_keys=True, separators=(",", ":")), False
 
 
 def _decode_rule_state(watermark: str) -> Dict[str, str]:
@@ -492,10 +572,17 @@ class AWSLivePollSource(CloudPollSource):
         attempt = 0
         while True:
             try:
+                # Pass the account's CONFIGURED partition (AT-645): a GovCloud
+                # connection must resolve aws-us-gov endpoints even when the scope
+                # carries no explicit region, instead of silently falling back to
+                # commercial endpoints derived from an absent region.
                 client = self.authenticator.client_factory.client(
-                    service, region=scope.region, credentials=credentials
+                    service,
+                    region=scope.region,
+                    credentials=credentials,
+                    partition=account.partition,
                 )
-                events, new_watermark = reader(
+                events, new_position, has_more = reader(
                     client,
                     region=scope.region,
                     account_id=scope.account,
@@ -503,9 +590,15 @@ class AWSLivePollSource(CloudPollSource):
                     page_size=self.page_size,
                 )
                 self.health.mark_scope_ok(scope.account, scope.surface)
-                # All within-run pagination is handled inside the reader, so one
-                # page per scope; across-run resume rides the returned watermark.
-                return PollPage(events=events, next_position=new_watermark, has_more=False)
+                # Pagination up to MAX_PAGES_PER_POLL happens inside the reader.
+                # Beyond that the reader reports has_more so the skeleton polls this
+                # scope again from the advanced position — a large backlog is drained
+                # across several polls instead of being silently truncated. Total
+                # volume stays bounded by the B7 admission budget, which defers
+                # loudly rather than dropping.
+                return PollPage(
+                    events=events, next_position=new_position, has_more=has_more
+                )
             except Exception as exc:  # noqa: BLE001 — loud per-scope failure, not silent
                 if is_throttle_error(exc) and attempt < self.max_throttle_retries:
                     attempt += 1

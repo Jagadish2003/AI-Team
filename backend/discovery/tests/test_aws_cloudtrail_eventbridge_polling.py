@@ -35,6 +35,7 @@ from discovery.ingest.aws_event_connector import (
     AWSEventConnector,
 )
 from discovery.ingest.aws_poll_source import AWSLivePollSource
+from discovery.ingest.aws_watermark import watermark_of
 from discovery.ingest.base import Checkpoint
 from discovery.ingest.cloud_event_connector import _decode_positions
 
@@ -106,7 +107,7 @@ class _AWSFakeFactory(AWSClientFactory):
         self.calls: list = []
         self.services_seen: set = set()
 
-    def client(self, service, *, region, credentials):
+    def client(self, service, *, region, credentials, partition=None):
         self.services_seen.add(service)
         account_id = credentials.access_key_id[4:]  # 'AKIA<account>'
         data = self.data_by_account.get(account_id, {})
@@ -273,8 +274,8 @@ def test_ac3_cloudtrail_incremental_per_account():
 
     assert [r["provider_event_id"] for r in records2] == ["ct-A3"]  # only the new one
     pos2 = _decode_positions(ckpt2)
-    assert pos2[_scope_key("111111111111", SURFACE_CLOUDTRAIL)] == "2026-07-14T05:00:00Z"
-    assert pos2[_scope_key("222222222222", SURFACE_CLOUDTRAIL)] == "2026-07-14T03:30:00Z"  # unchanged
+    assert watermark_of(pos2[_scope_key("111111111111", SURFACE_CLOUDTRAIL)]) == "2026-07-14T05:00:00Z"
+    assert watermark_of(pos2[_scope_key("222222222222", SURFACE_CLOUDTRAIL)]) == "2026-07-14T03:30:00Z"  # unchanged
 
 
 def test_ac3_eventbridge_unchanged_ruleset_is_not_re_read():

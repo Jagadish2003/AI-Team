@@ -108,7 +108,7 @@ class FakeAWSClientFactory(AWSClientFactory):
         self.accounts_data = accounts_data
         self.sts = _FakeSTS(fail_accounts=fail_accounts)
 
-    def client(self, service, *, region, credentials):
+    def client(self, service, *, region, credentials, partition=None):
         if service == "sts":
             return self.sts
         account = _account_from_key(credentials.access_key_id)

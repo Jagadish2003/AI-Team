@@ -44,6 +44,10 @@ export const SOURCE_KEY_MAP: Record<string, string> = {
   // operational-event source key so Source Intelligence counts Azure signals when
   // the run produces Azure-attributed evidence.
   azure_events: "Azure Events",
+  // MSP-B1: native AWS Event Connector — the AWS half of the B1/B2 pair. Same
+  // rationale as Azure above: without this entry the connector's rows (including
+  // its per-account run-health entries) join on the raw id and read as "no signals".
+  aws_events: "AWS Events",
 };
 
 const CONNECTOR_ID_ALIASES: Record<string, keyof typeof SOURCE_KEY_MAP> = {

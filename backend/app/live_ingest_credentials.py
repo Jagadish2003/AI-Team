@@ -614,9 +614,92 @@ def resolve_live_systems(org_id: str) -> List[str]:
     # discovery runner still gates the actual poll on a cloud_ops pack being selected.
     _resolve_azure_events(org_id, live)
 
+    # Native AWS Event Connector (MSP-B1) — the AWS half of the B1/B2 pair. Same
+    # URL-less, vault-resolving shape as Azure: the connector resolves its OWN
+    # per-account credentials inside AWSAuthenticator (hub key from the vault →
+    # STS AssumeRole, or vaulted per-account direct keys), so nothing is published
+    # to the per-run context; it only needs the run promoted to live +
+    # aws_events in the systems set. The discovery runner still gates the actual
+    # poll on a cloud_ops pack being selected.
+    _resolve_aws_events(org_id, live)
+
     # Publish to the per-run context (empty dict clears any prior credentials).
     set_live_connectors(connectors)
     return live
+
+
+def _resolve_aws_events(org_id: str, live: List[str]) -> None:
+    """Add the native AWS Event Connector (MSP-B1) to the live set when connected.
+
+    Promoted to live only when BOTH a non-secret AWS event config (the pinned
+    managed-account set, from ``AWS_EVENT_ACCOUNTS`` or the Owner-pinned accounts on
+    the Integration Hub record) AND resolvable credentials for at least one of those
+    accounts exist — i.e. the connector is genuinely connected, not merely
+    configured. Including ``'aws_events'`` here is what puts it into the runner's
+    ``_systems`` for a live run.
+
+    Mutates ``live`` in place; never raises — any failure simply leaves AWS out
+    (degrade, don't crash), matching the other resolvers.
+    """
+    try:
+        from discovery.ingest.aws_auth import AWSAuthenticator
+        from discovery.ingest.aws_events_config import resolve_aws_event_config
+    except Exception:  # pragma: no cover - import guard
+        logger.exception(
+            "AWS event connector modules unavailable; skipping live ingest (org=%s)",
+            org_id,
+        )
+        return
+
+    try:
+        config = resolve_aws_event_config(org_id)
+    except Exception:
+        # A present-but-invalid config must not break live resolution for the run.
+        logger.exception(
+            "AWS event config invalid for org %s; skipping live ingest", org_id
+        )
+        return
+
+    if config is None:
+        logger.info(
+            "Connector aws_events not configured for org %s — skipping live ingest; "
+            "connect it in the Integration Hub and pin at least one account.",
+            org_id,
+        )
+        return
+
+    # Prove at least one account is reachable before claiming the connector is
+    # live. A pinned account whose role was revoked (or whose hub key is missing)
+    # must not make the whole connector look connected — but equally, ONE broken
+    # account must not hide the others, so any success is enough here and the
+    # per-account detail is reported loudly in run health during the poll (AC8).
+    authenticator = AWSAuthenticator()
+    reachable = []
+    for account in config.accounts:
+        try:
+            authenticator.credentials_for(org_id, account)
+        except Exception:
+            logger.info(
+                "Connector aws_events: no usable credentials for account %s (org=%s) — "
+                "it will be reported as failed in run health.",
+                account.account_id, org_id,
+            )
+            continue
+        reachable.append(account.account_id)
+
+    if not reachable:
+        logger.info(
+            "Connector aws_events has no reachable account for org %s — skipping live "
+            "ingest; check the vaulted hub credential and each account's read-only role.",
+            org_id,
+        )
+        return
+
+    live.append("aws_events")
+    logger.info(
+        "Live ingest enabled for connector aws_events (org=%s, %d/%d account(s) reachable)",
+        org_id, len(reachable), len(config.accounts),
+    )
 
 
 def _resolve_azure_events(org_id: str, live: List[str]) -> None:

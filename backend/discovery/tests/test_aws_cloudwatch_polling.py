@@ -32,6 +32,7 @@ from discovery.ingest.aws_poll_source import (
     _iso,
 )
 from discovery.ingest.base import Checkpoint
+from discovery.ingest.aws_watermark import watermark_of
 from discovery.ingest.cloud_event_connector import _decode_positions
 
 _ORG = "acme"
@@ -66,7 +67,7 @@ class _CWFactory(AWSClientFactory):
         self.items_by_account = items_by_account
         self.calls = calls
 
-    def client(self, service, *, region, credentials):
+    def client(self, service, *, region, credentials, partition=None):
         assert service == "cloudwatch"
         account_id = credentials.access_key_id[4:]  # 'AKIA<account>'
         return _FakeCloudWatch(self.items_by_account[account_id], self.calls, account_id)
@@ -166,8 +167,8 @@ def test_ac3_incremental_processes_only_new_events_per_account():
     records1, ckpt1 = _run(source)
     assert len(records1) == 3
     pos1 = _decode_positions(ckpt1)
-    assert pos1[_cw_scope_key("111111111111")] == "2026-07-14T02:00:00Z"  # A newest
-    assert pos1[_cw_scope_key("222222222222")] == "2026-07-14T01:30:00Z"  # B newest
+    assert watermark_of(pos1[_cw_scope_key("111111111111")]) == "2026-07-14T02:00:00Z"  # A newest
+    assert watermark_of(pos1[_cw_scope_key("222222222222")]) == "2026-07-14T01:30:00Z"  # B newest
 
     # New event lands in account A only; account B is unchanged.
     items["111111111111"].append(_alarm_item("2026-07-14T03:00:00Z"))
@@ -184,8 +185,8 @@ def test_ac3_incremental_processes_only_new_events_per_account():
 
     # Checkpoints advanced INDEPENDENTLY: A moved to T3, B stayed at its T1:30.
     pos2 = _decode_positions(ckpt2)
-    assert pos2[_cw_scope_key("111111111111")] == "2026-07-14T03:00:00Z"
-    assert pos2[_cw_scope_key("222222222222")] == "2026-07-14T01:30:00Z"
+    assert watermark_of(pos2[_cw_scope_key("111111111111")]) == "2026-07-14T03:00:00Z"
+    assert watermark_of(pos2[_cw_scope_key("222222222222")]) == "2026-07-14T01:30:00Z"
 
     # The incremental run narrowed the server window with StartDate (a datetime).
     from datetime import datetime

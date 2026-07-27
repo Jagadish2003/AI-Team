@@ -195,6 +195,115 @@ def test_create_aws_connection_vaults_and_returns_metadata_only(client):
     assert rec.secret == _AWS_SECRET
 
 
+def test_create_aws_rejects_credentials_aws_refuses_and_stays_unconnected(client, monkeypatch):
+    """A connection is only "connected" once the provider has ACCEPTED the credentials.
+
+    The create route used to trust the request body: it vaulted whatever was
+    submitted and wrote status='connected' unconditionally, so a wrong access key
+    (or a role ARN that could never be assumed) still rendered as *Connected* in
+    the Integration Hub. The failure only surfaced later, as an empty discovery
+    run. Validation now happens BEFORE the vault write (B13 AC3).
+    """
+    def _rejected(**kwargs):
+        raise rcc.CloudProbeError(
+            "authentication_failed",
+            "AWS rejected the credentials (invalid access key id or secret).",
+        )
+
+    monkeypatch.setattr(rcc, "probe_aws_hub_credentials", _rejected)
+
+    r = client.post(
+        "/api/connectors/aws_events",
+        headers=OWNER,
+        json={"partition": "aws", "access_key_id": _AWS_KEY,
+              "secret_access_key": _AWS_SECRET},
+    )
+    assert r.status_code == 400, r.text
+    detail = r.json()["detail"]
+    assert detail["reason"] == "authentication_failed"
+    assert "access key" in detail["message"].lower()
+
+    # Nothing was persisted: no vaulted credential, and the connector still reads
+    # as not configured rather than connected.
+    assert get_static_credential("default", "aws_events") is None
+    status = client.get("/api/connectors/aws_events/scopes", headers=OWNER)
+    assert status.status_code == 200
+    assert status.json()["scopes"] == []
+
+
+def test_create_azure_rejects_credentials_azure_refuses_and_stays_unconnected(
+    client, monkeypatch
+):
+    """Same validate-before-save rule on the Azure half of the pair."""
+    async def _rejected(org_id, *, service_principal, config):
+        raise rcc.CloudProbeError(
+            "authentication_failed",
+            "Azure AD rejected the service principal.",
+        )
+
+    monkeypatch.setattr(rcc, "probe_azure_service_principal", _rejected)
+
+    r = client.post(
+        "/api/connectors/azure_events",
+        headers=OWNER,
+        json={"environment": "AzureCloud", "mode": "direct", "tenant_id": _AZ_TENANT,
+              "client_id": _AZ_CLIENT, "client_secret": _AZ_SECRET},
+    )
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["reason"] == "authentication_failed"
+
+
+def test_create_aws_records_the_verified_identity(client):
+    """A successful connect records WHICH identity validated — auditable, non-secret."""
+    r = client.post(
+        "/api/connectors/aws_events",
+        headers=OWNER,
+        json={"partition": "aws", "access_key_id": _AWS_KEY,
+              "secret_access_key": _AWS_SECRET},
+    )
+    assert r.status_code == 200, r.text
+    record = db.org_connector_get("default", "aws_events") or {}
+    assert record.get("verified_identity") == "123456789012"
+    assert record.get("verified_at")
+    # Still never the secret.
+    assert _AWS_SECRET not in str(record)
+
+
+def test_pin_aws_account_persists_external_id_but_never_returns_it(client):
+    """The STS ExternalId must reach run time, yet stay out of every response.
+
+    It was captured at pin time, used for the assume-role probe, and then dropped,
+    so every later AssumeRole omitted it — against a trust policy that requires an
+    ExternalId, that account could never be polled.
+    """
+    client.post(
+        "/api/connectors/aws_events",
+        headers=OWNER,
+        json={"partition": "aws", "access_key_id": _AWS_KEY,
+              "secret_access_key": _AWS_SECRET},
+    )
+    r = client.post(
+        "/api/connectors/aws_events/scopes",
+        headers=OWNER,
+        json={"account_id": "123456789012", "role_arn": _ROLE_ARN,
+              "external_id": "ext-secret-nonce", "regions": ["us-east-1"]},
+    )
+    assert r.status_code == 200, r.text
+    # Never echoed by the API — only its presence is reported.
+    assert "ext-secret-nonce" not in r.text
+    scope = r.json()["scopes"][0]
+    assert scope["external_id_set"] is True
+    assert "external_id" not in scope
+
+    # ...but it IS persisted, and the ingestion config bridge reads it back.
+    from discovery.ingest.aws_events_config import config_from_connector_record
+
+    record = db.org_connector_get("default", "aws_events")
+    config = config_from_connector_record(record)
+    assert config is not None
+    assert config.accounts[0].external_id == "ext-secret-nonce"
+
+
 def test_create_azure_connection_vaults_and_records_environment(client):
     r = client.post(
         "/api/connectors/azure_events",

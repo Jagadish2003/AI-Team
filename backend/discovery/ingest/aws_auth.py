@@ -41,6 +41,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .aws_partitions import (
     PARTITION_AWS,
+    default_region_for_partition,
     resolve_partition_for_region,
     resolve_service_endpoint_or_none,
     validate_region,
@@ -192,10 +193,21 @@ class AWSClientFactory(ABC):
 
     @abstractmethod
     def client(
-        self, service: str, *, region: Optional[str], credentials: Optional[AWSCredentials]
+        self,
+        service: str,
+        *,
+        region: Optional[str],
+        credentials: Optional[AWSCredentials],
+        partition: Optional[str] = None,
     ) -> Any:
         """Return a service client (``'sts'`` / ``'cloudwatch'`` / ``'events'`` /
-        ``'cloudtrail'``) bound to ``credentials`` in ``region``."""
+        ``'cloudtrail'``) bound to ``credentials`` in ``region``.
+
+        ``partition`` is the connection's CONFIGURED partition
+        (:attr:`AWSAccountConfig.partition`). It is authoritative for endpoint
+        resolution; omitting it falls back to deriving the partition from the
+        region, which is only correct when a region is actually set.
+        """
         raise NotImplementedError
 
 
@@ -207,7 +219,12 @@ class Boto3ClientFactory(AWSClientFactory):
     """
 
     def client(
-        self, service: str, *, region: Optional[str], credentials: Optional[AWSCredentials]
+        self,
+        service: str,
+        *,
+        region: Optional[str],
+        credentials: Optional[AWSCredentials],
+        partition: Optional[str] = None,
     ) -> Any:
         try:
             import boto3  # lazy — only needed for live ingestion
@@ -215,12 +232,18 @@ class Boto3ClientFactory(AWSClientFactory):
             raise AWSAuthError(
                 "boto3 is required for live AWS ingestion but is not installed"
             ) from exc
+        # Partition-aware endpoint (AT-645, corrected): the CONFIGURED partition
+        # wins over anything derived from the region. Without this a GovCloud
+        # connection that states no explicit region resolved the COMMERCIAL global
+        # STS endpoint and could only ever fail. GovCloud also has no implicit
+        # default region, so supply one when the config did not.
+        effective_region = region or default_region_for_partition(
+            partition or PARTITION_AWS
+        )
         kwargs: Dict[str, Any] = {}
-        if region:
-            kwargs["region_name"] = region
-        # Partition-aware endpoint (AT-645): a GovCloud region resolves the
-        # aws-us-gov endpoint; None lets boto3's own resolution stand.
-        endpoint = resolve_service_endpoint_or_none(service, region)
+        if effective_region:
+            kwargs["region_name"] = effective_region
+        endpoint = resolve_service_endpoint_or_none(service, effective_region, partition)
         if endpoint:
             kwargs["endpoint_url"] = endpoint
         if credentials is not None:
@@ -259,11 +282,48 @@ def _vault_static_credential(org_id: str, connector_id: str) -> Optional[Tuple[s
     return rec.username, rec.secret
 
 
+def _production_env_fallback_blocked() -> bool:
+    """True when this process is production, so the env hub-key fallback is off.
+
+    Mirrors the R1.9.1-H1 T4 (F4) fix for the customer-tenant model credential:
+    ``app.deployment_profile.is_production()`` is the SINGLE source of truth for
+    "is this process production" (``ENVIRONMENT=production`` OR
+    ``REQUIRE_CONNECTOR_SECRETS=1``). In production the hub key lives ONLY in the
+    vault, so reading it from the environment is a bypass of the credential story
+    — it is refused here rather than merely discouraged in a docstring. A failure
+    to resolve the deployment profile is treated as production (fail closed).
+    """
+    try:
+        from app.deployment_profile import is_production
+    except Exception:  # pragma: no cover - import guard: fail closed
+        return True
+    try:
+        return bool(is_production())
+    except Exception:  # pragma: no cover - defensive: fail closed
+        return True
+
+
 def default_hub_resolver(org_id: str) -> Optional[AWSCredentials]:
-    """Resolve the hub credential — vault first, env fallback (CLI/standalone)."""
+    """Resolve the hub credential — vault first, env fallback (CLI/standalone only).
+
+    The env fallback (``AWS_EVENTS_HUB_*``) exists for CLI/standalone runs and is
+    GATED OFF in production (see :func:`_production_env_fallback_blocked`), so a
+    production deployment can only ever use the vaulted hub key.
+    """
     found = _vault_static_credential(org_id, HUB_CONNECTOR_ID)
     if found and found[0] and found[1]:
         return AWSCredentials(found[0], found[1], source="hub")
+
+    if _production_env_fallback_blocked():
+        # Name the variables, never their values — pure operator visibility.
+        if os.environ.get(_ENV_HUB_ACCESS_KEY):
+            logger.warning(
+                "aws_auth: %s is set but ignored in production — the hub credential "
+                "must come from the vault (connect AWS in the Integration Hub)",
+                _ENV_HUB_ACCESS_KEY,
+            )
+        return None
+
     akid = os.environ.get(_ENV_HUB_ACCESS_KEY)
     secret = os.environ.get(_ENV_HUB_SECRET_KEY)
     if akid and secret:
@@ -376,7 +436,12 @@ class AWSAuthenticator:
 
         region = account.regions[0] if account.regions else None
         try:
-            sts = self.client_factory.client("sts", region=region, credentials=hub)
+            # Pass the account's CONFIGURED partition so a GovCloud connection
+            # assumes through the GovCloud regional STS endpoint, never the
+            # commercial global one (AT-645).
+            sts = self.client_factory.client(
+                "sts", region=region, credentials=hub, partition=account.partition
+            )
             params: Dict[str, Any] = {
                 "RoleArn": account.role_arn,
                 "RoleSessionName": self.role_session_name,

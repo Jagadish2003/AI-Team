@@ -84,7 +84,7 @@ class _Factory(AWSClientFactory):
         self.sts = _FakeSTS(fail_accounts, [])
         self.throttle_by_account = throttle_by_account or {}
 
-    def client(self, service, *, region, credentials):
+    def client(self, service, *, region, credentials, partition=None):
         if service == "sts":
             return self.sts
         account_id = credentials.access_key_id[4:]  # 'ASIA<acct>' / 'AKIA<acct>'
