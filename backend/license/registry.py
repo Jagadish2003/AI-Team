@@ -33,9 +33,25 @@ from typing import Any, Dict, List, Optional
 # Make ``backend/`` importable so ``app.db`` resolves when this runs as a script
 # (mirrors verify_license.py). When imported inside the app/test process the path
 # is already present and this is a no-op.
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+_BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, _BACKEND_DIR)
 
 from app import db  # noqa: E402
+
+
+def load_ops_env() -> None:
+    """Load backend/.env so the ops CLIs pick up DATABASE_URL (and any LICENSE_*
+    vars) from the standard config file without the operator exporting them —
+    mirroring database/provision/provision_schema.py.
+
+    Called from the CLI entry points ONLY (not at import), so importing this
+    module inside the app / contract-test process never mutates a hermetically
+    controlled environment. ``override=False`` so an already-exported value always
+    wins.
+    """
+    from dotenv import load_dotenv
+
+    load_dotenv(os.path.join(_BACKEND_DIR, ".env"), override=False)
 from database.models.license_registry import (  # noqa: E402
     ALL_LICENSE_REGISTRY_DDL,
     AUDIT_ACTIONS,

@@ -231,6 +231,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    registry.load_ops_env()  # pick up DATABASE_URL (+ LICENSE_* vars) from backend/.env
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

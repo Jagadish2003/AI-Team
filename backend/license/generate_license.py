@@ -42,8 +42,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 ALLOWED_TERMS = (3, 6, 12)
+# Default signing key path (relative to this file). The uploaded CloudFulcrum key
+# lives alongside this module and is git-ignored (*.pem). Override with
+# --private-key or LICENSE_SIGNING_KEY_PATH (the managed secrets store).
 DEFAULT_PRIVATE_KEY = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "cloudfulcrum_private.pem"
+    os.path.dirname(os.path.abspath(__file__)), "agentiq_lic_private_key.pem"
 )
 
 # R-1.9.1-L1 / T1 (AT-687): payload schema version. v2 adds org binding
@@ -303,7 +306,10 @@ def main(argv=None) -> int:
     # (contract_ref/org_id/issued_by) and every issue writes the registry +
     # append-only audit ledger (R-1.9.1-L3). Imported lazily to avoid a module
     # import cycle (issuance imports the signer helpers from this module).
+    import registry  # noqa: E402
     import issuance  # noqa: E402  (path set up on import)
+
+    registry.load_ops_env()  # pick up DATABASE_URL (+ LICENSE_* vars) from backend/.env
 
     try:
         result = issuance.issue_license(
