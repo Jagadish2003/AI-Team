@@ -166,6 +166,10 @@ CMDB_GRAPH_RELATIONSHIP_TYPES = frozenset(
     {"depends_on", "used_by", "runs_on", "connects_to"}
 )
 _CMDB_CLASS_RE = re.compile(r"^cmdb_ci_[a-z0-9_]+$")
+# A ServiceNow table identifier: stock (``sn_si_incident``) or scoped-application
+# (``x_1212781_github_0_security_incident``).  Anchored and character-restricted,
+# so a configured override cannot carry an encoded-query control character.
+_VALID_TABLE_NAME = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 
 
 @dataclass(frozen=True)
@@ -1607,7 +1611,7 @@ def _read_security_incident_history(
     if not is_live():
         audit_records = _load_secops_fixture().get("sn_si_incident_audit", [])
     return _read_workflow_field_history(
-        SIR_TABLE,
+        secops_physical_table(SIR_TABLE),
         admitted_ids,
         SIR_HISTORY_FIELDS,
         client=client,
@@ -1651,7 +1655,7 @@ def _security_incident_from_record(
         assignment_history=tuple(history.get("assignment_group", [])),
         org_id=org_id,
         source_timestamp=_optional_sn_raw_text(record.get("sys_updated_on")),
-        source_url=_servicenow_record_url(instance_url, SIR_TABLE, sys_id),
+        source_url=_servicenow_record_url(instance_url, secops_physical_table(SIR_TABLE), sys_id),
     )
 
 
@@ -1679,7 +1683,7 @@ def _read_security_incidents(
             query_parts.append(f"sys_updated_on<={updated_through}")
         prefix = ("^".join(query_parts) + "^") if query_parts else ""
         records = client.table_query(
-            SIR_TABLE,
+            secops_physical_table(SIR_TABLE),
             {
                 "sysparm_query": prefix + "ORDERBYsys_updated_on^ORDERBYsys_id",
                 "sysparm_fields": ",".join(SIR_FIELDS),
@@ -1767,7 +1771,7 @@ def _read_security_incident_notes(
             batch = ordered_ids[offset : offset + 100]
             rows.extend(
                 client.table_query(
-                    SIR_TABLE,
+                    secops_physical_table(SIR_TABLE),
                     {
                         "sysparm_query": (
                             f"sys_idIN{','.join(batch)}^ORDERBYsys_updated_on^ORDERBYsys_id"
@@ -1814,7 +1818,7 @@ def _read_security_incident_notes(
                     or workflow.get("source_timestamp")
                 ),
                 "source_url": workflow.get("source_url")
-                or _servicenow_record_url(instance_url, SIR_TABLE, sys_id),
+                or _servicenow_record_url(instance_url, secops_physical_table(SIR_TABLE), sys_id),
             }
         )
         notes.append(note_record)
@@ -1963,6 +1967,124 @@ VR_REMEDIATION_TASK_TABLE = "sn_vul_remediation_task"
 VR_VULN_ITEM_CHECKPOINT_ID = "servicenow:sn_vul_vulnerable_item"
 VR_GROUP_CHECKPOINT_ID = "servicenow:sn_vul_vulnerability_group"
 VR_REMEDIATION_TASK_CHECKPOINT_ID = "servicenow:sn_vul_remediation_task"
+
+# ── MSP-B11: physical table names ────────────────────────────────────────────
+# The four SecOps streams are ADDRESSED by the canonical ServiceNow names above,
+# but an instance may expose the same workflow surface under different PHYSICAL
+# names: a scoped application republishes them under its own
+# ``x_<vendor>_<scope>_*`` prefix, and the stock ``sn_si_*`` / ``sn_vul_*``
+# tables then do not exist at all.
+#
+# The canonical name stays the connector's INTERNAL identity — checkpoint ids,
+# stream keys, offline fixture keys and the signature ``table_family`` all keep
+# it — so overriding a name never orphans a checkpoint, renames a stream in run
+# health, or changes signature grouping.  Only the two places that actually
+# speak to the instance use the physical name: the transport read (including
+# the availability pre-flight) and the record deep link.
+#
+# Configured per org on the ServiceNow connector record, exactly like
+# ``cmdb_class_scope``; unset means the canonical names, so every existing
+# deployment and all offline runs are unaffected.
+SECOPS_TABLE_MAP_CONFIG_KEY = "secops_table_map"
+
+_SECOPS_TABLE_MAP_CACHE: Dict[str, Dict[str, str]] = {}
+
+
+def default_secops_table_map() -> Dict[str, str]:
+    """Canonical name -> physical name, with no overrides applied."""
+    return {
+        SIR_TABLE: SIR_TABLE,
+        VR_VULN_ITEM_TABLE: VR_VULN_ITEM_TABLE,
+        VR_GROUP_TABLE: VR_GROUP_TABLE,
+        VR_REMEDIATION_TASK_TABLE: VR_REMEDIATION_TASK_TABLE,
+    }
+
+
+def normalize_secops_table_map(value: Any) -> Dict[str, str]:
+    """Validate a configured override and merge it over the canonical names.
+
+    ``None`` means the product default.  Only the four canonical SecOps tables
+    are addressable, and a physical name must be a plain ServiceNow table
+    identifier -- so an override can never smuggle an encoded-query control
+    character or redirect a stream at an unrelated table.
+    """
+    resolved = default_secops_table_map()
+    if value is None:
+        return resolved
+    if not isinstance(value, dict):
+        raise ValueError("secops_table_map must be an object of canonical -> physical table names")
+    for canonical, physical in value.items():
+        canonical_name = str(canonical or "").strip()
+        if canonical_name not in resolved:
+            raise ValueError(
+                f"secops_table_map key {canonical!r} is not a SecOps table; "
+                f"expected one of {sorted(resolved)}"
+            )
+        physical_name = str(physical or "").strip()
+        if not _VALID_TABLE_NAME.match(physical_name):
+            raise ValueError(
+                f"secops_table_map value for {canonical_name!r} is not a valid "
+                "ServiceNow table name"
+            )
+        resolved[canonical_name] = physical_name
+    return resolved
+
+
+def _load_org_secops_table_config(org_id: str) -> Optional[Any]:
+    """Read only this org's ServiceNow override, never a shared catalog row."""
+    try:
+        from app import db
+
+        connector = db.org_connector_get(org_id, "servicenow") or {}
+    except Exception as exc:
+        # Deliberately NOT the fail-closed posture of ``_load_org_cmdb_config``.
+        # There, falling back to the default class scope would WIDEN data access
+        # for an org that had narrowed it -- a boundary violation.  Here the
+        # fallback is the canonical stock table names, which on an instance that
+        # publishes a scoped application simply do not exist: the availability
+        # pre-flight then reports the stream ``unavailable`` with a named reason.
+        # So the worst case is an honest no-op, never reading data an org did not
+        # intend.  Raising instead would fail every SecOps stream on a transient
+        # config-store blip, which is strictly worse.
+        logger.warning(
+            "ServiceNow SecOps table configuration unreadable for org %r (%s); "
+            "using the canonical table names",
+            org_id,
+            exc,
+        )
+        return None
+    if connector.get("org_id") != org_id:
+        return None
+    return connector.get(SECOPS_TABLE_MAP_CONFIG_KEY)
+
+
+def resolve_secops_table_map(org_id: Optional[str] = None) -> Dict[str, str]:
+    """Resolve the effective canonical->physical map for one org (memoized)."""
+    from . import get_ingest_org
+
+    # Offline runs read the deterministic fixtures, which are keyed by the
+    # canonical names.  There is no per-org physical-table override to apply and
+    # no database to read one from, so never reach for org config here.
+    if not is_live():
+        return default_secops_table_map()
+    effective_org = org_id or get_ingest_org()
+    if not effective_org:
+        return default_secops_table_map()
+    cached = _SECOPS_TABLE_MAP_CACHE.get(effective_org)
+    if cached is None:
+        cached = normalize_secops_table_map(_load_org_secops_table_config(effective_org))
+        _SECOPS_TABLE_MAP_CACHE[effective_org] = cached
+    return dict(cached)
+
+
+def secops_physical_table(canonical: str, org_id: Optional[str] = None) -> str:
+    """Physical table name to read for one canonical SecOps table."""
+    return resolve_secops_table_map(org_id).get(canonical, canonical)
+
+
+def reset_secops_table_map_cache() -> None:
+    """Drop the per-org memo (config changes between runs; tests reconfigure)."""
+    _SECOPS_TABLE_MAP_CACHE.clear()
 
 VR_VULN_ITEM_SOURCE_TYPE = "servicenow_vulnerable_item"
 VR_GROUP_SOURCE_TYPE = "servicenow_vulnerability_group"
@@ -2233,7 +2355,7 @@ def _vulnerable_item_from_record(
         assignment_history=tuple(history.get("assignment_group", [])),
         org_id=org_id,
         source_timestamp=_optional_sn_raw_text(record.get("sys_updated_on")),
-        source_url=_servicenow_record_url(instance_url, VR_VULN_ITEM_TABLE, sys_id),
+        source_url=_servicenow_record_url(instance_url, secops_physical_table(VR_VULN_ITEM_TABLE), sys_id),
     )
 
 
@@ -2265,7 +2387,7 @@ def _vulnerability_group_from_record(
         assignment_history=tuple(history.get("assignment_group", [])),
         org_id=org_id,
         source_timestamp=_optional_sn_raw_text(record.get("sys_updated_on")),
-        source_url=_servicenow_record_url(instance_url, VR_GROUP_TABLE, sys_id),
+        source_url=_servicenow_record_url(instance_url, secops_physical_table(VR_GROUP_TABLE), sys_id),
     )
 
 
@@ -2296,7 +2418,7 @@ def _remediation_task_from_record(
         assignment_history=tuple(history.get("assignment_group", [])),
         org_id=org_id,
         source_timestamp=_optional_sn_raw_text(record.get("sys_updated_on")),
-        source_url=_servicenow_record_url(instance_url, VR_REMEDIATION_TASK_TABLE, sys_id),
+        source_url=_servicenow_record_url(instance_url, secops_physical_table(VR_REMEDIATION_TASK_TABLE), sys_id),
     )
 
 
@@ -2390,7 +2512,7 @@ def _read_vulnerable_items(
     updated_through: Optional[str] = None,
 ) -> List[ServiceNowVulnerableItem]:
     return _read_vr_stream(
-        table=VR_VULN_ITEM_TABLE,
+        table=secops_physical_table(VR_VULN_ITEM_TABLE),
         fields=VR_VULN_ITEM_FIELDS,
         fixture_key="sn_vul_vulnerable_item",
         audit_key="sn_vul_vulnerable_item_audit",
@@ -2410,7 +2532,7 @@ def _read_vulnerability_groups(
     updated_through: Optional[str] = None,
 ) -> List[ServiceNowVulnerabilityGroup]:
     return _read_vr_stream(
-        table=VR_GROUP_TABLE,
+        table=secops_physical_table(VR_GROUP_TABLE),
         fields=VR_GROUP_FIELDS,
         fixture_key="sn_vul_vulnerability_group",
         audit_key="sn_vul_vulnerability_group_audit",
@@ -2430,7 +2552,7 @@ def _read_remediation_tasks(
     updated_through: Optional[str] = None,
 ) -> List[ServiceNowRemediationTask]:
     return _read_vr_stream(
-        table=VR_REMEDIATION_TASK_TABLE,
+        table=secops_physical_table(VR_REMEDIATION_TASK_TABLE),
         fields=VR_REMEDIATION_TASK_FIELDS,
         fixture_key="sn_vul_remediation_task",
         audit_key="sn_vul_remediation_task_audit",
@@ -2635,7 +2757,10 @@ def _secops_table_available(
     """
     if not is_live() or client is None:
         return True, ""
-    return client.table_available(table)
+    # Probe the PHYSICAL table: "does this instance expose the stream?" is a
+    # question about the real table, which a scoped application may publish
+    # under its own name.  Callers pass the canonical name.
+    return client.table_available(secops_physical_table(table))
 
 
 def ingest_cmdb_changes(

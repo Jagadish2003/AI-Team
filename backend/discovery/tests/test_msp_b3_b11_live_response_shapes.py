@@ -362,3 +362,82 @@ def test_ci_with_no_operational_status_is_unknown_not_retired():
     assert _cmdb_lifecycle_state("") == "unknown"
     assert _cmdb_lifecycle_state("6") == "retired"
     assert _cmdb_lifecycle_state("1") == "active"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MSP-B11 — scoped-application physical table names
+#
+# An instance may publish the SecOps workflow surface from a scoped application
+# (``x_<vendor>_<scope>_*``) instead of the stock ``sn_si_*`` / ``sn_vul_*``
+# tables.  The canonical names stay the connector's internal identity; only the
+# transport read and the record deep link follow the configured physical name.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+SCOPED_MAP = {
+    "sn_si_incident": "x_1212781_github_0_security_incident",
+    "sn_vul_vulnerable_item": "x_1212781_github_0_vulnerable_item",
+    "sn_vul_vulnerability_group": "x_1212781_github_0_vulnerability_group",
+    "sn_vul_remediation_task": "x_1212781_github_0_remediation_task",
+}
+
+
+def test_configured_scoped_tables_are_what_the_instance_is_asked_for(monkeypatch):
+    """The override must reach the transport, not just sit in config."""
+    monkeypatch.setattr(sn, "is_live", lambda: True)
+    monkeypatch.setattr(sn, "_load_org_secops_table_config", lambda org_id: SCOPED_MAP)
+    sn.reset_secops_table_map_cache()
+
+    probed = []
+
+    class Client:
+        instance_url = "https://acme.service-now.com"
+
+        def table_available(self, table):
+            probed.append(table)
+            return True, ""
+
+    for canonical, physical in SCOPED_MAP.items():
+        assert sn.secops_physical_table(canonical, org_id="org-scoped") == physical
+        sn._secops_table_available(Client(), canonical)
+
+    assert probed == list(SCOPED_MAP.values())
+    sn.reset_secops_table_map_cache()
+
+
+def test_canonical_names_remain_the_internal_identity(monkeypatch):
+    """Overriding a physical name must not move a checkpoint or rename a stream."""
+    monkeypatch.setattr(sn, "is_live", lambda: True)
+    monkeypatch.setattr(sn, "_load_org_secops_table_config", lambda org_id: SCOPED_MAP)
+    sn.reset_secops_table_map_cache()
+
+    # Checkpoint ids are what preserve incremental history across the switch.
+    assert sn.SIR_CHECKPOINT_ID == "servicenow:sn_si_incident"
+    assert sn.VR_VULN_ITEM_CHECKPOINT_ID == "servicenow:sn_vul_vulnerable_item"
+    # And the module constants themselves are untouched, so stream keys,
+    # fixture keys and signature table_family all stay canonical.
+    assert sn.SIR_TABLE == "sn_si_incident"
+    assert sn.VR_GROUP_TABLE == "sn_vul_vulnerability_group"
+    sn.reset_secops_table_map_cache()
+
+
+def test_unset_config_keeps_the_stock_tables():
+    """Every existing deployment is unaffected: no override means no change."""
+    assert sn.normalize_secops_table_map(None) == sn.default_secops_table_map()
+    assert sn.default_secops_table_map()["sn_si_incident"] == "sn_si_incident"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"sn_si_incident": "incident^ORDERBYsys_id"},  # encoded-query injection
+        {"sn_si_incident": "Bad-Table-Name"},
+        {"not_a_secops_table": "x_1212781_github_0_security_incident"},
+        {"sn_si_incident": ""},
+        "not-a-mapping",
+    ],
+)
+def test_invalid_table_override_is_rejected(bad):
+    """An override cannot redirect a stream at an arbitrary or crafted table."""
+    with pytest.raises(ValueError):
+        sn.normalize_secops_table_map(bad)
