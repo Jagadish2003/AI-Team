@@ -1,7 +1,52 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.11
-Date: 2026-07-21
+Version: v1.14
+Date: 2026-07-23
 
+> v1.14 — R-1.9.1-L2 / T5 (AT-697): added the Owner-only pre-invoice usage-summary
+> endpoint `GET /api/usage/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`, returning the
+> Owner-facing usage summary for the caller's org over the inclusive period:
+> `{summary_version, org_id, period {from,to}, generated_at, runs {total,
+> by_ai_mode, billable}, systems {connected, disconnected, net_change, ledger[],
+> over_time[]}, event_count}`. `runs.by_ai_mode`/`total`, `systems.ledger`, the
+> per-run `over_time` counts, and `event_count` are a PROJECTION of the same
+> aggregation that backs `GET /api/usage/report` (AC6) — they equal the report's
+> numbers for the same period by construction. `runs.billable` is the hosted-mode
+> run count (the billable subset); `systems.over_time` is the connected-system
+> count per run in completed-at order. Unlike the signed report the summary needs
+> NO `report_key` and no installed license (an unsigned read-only preview), so an
+> Owner can see usage before a report key is provisioned. Owner-only (Analyst/
+> Viewer → 403); a malformed period → 400. Built LOCALLY from billing telemetry —
+> no outbound contact (no-phone-home posture). Additive — no previously documented
+> field changed.
+>
+> v1.13 — R-1.9.1-L2 / T4 (AT-696): extended the usage-report body
+> (`GET /api/usage/report`) with a `tamper_evidence` block for deletion detection
+> (AC4): `{algorithm, event_count, sequenced_count, unsequenced_count, seq_min,
+> seq_max, expected_count, chain[{seq, entry_hash, chain_hash}], chain_root,
+> consistent}`. Each billing event is stamped at emission with a per-org monotonic
+> `seq`; the report covers a contiguous seq block, so an event deleted before
+> generation leaves a gap — `sequenced_count`/`expected_count` mismatch — and the
+> hash chain re-folds independently (`verify_tamper_evidence`), so a report over a
+> period with locally deleted events is detectably inconsistent. `per_run` entries
+> and ledger entries now also carry their `seq`. The whole block is inside the
+> T3-signed report body, so it cannot be altered after generation. Additive — no
+> previously documented field changed.
+>
+> v1.12 — R-1.9.1-L2 / T3 (AT-695): added the Owner-only signed usage-report
+> endpoint `GET /api/usage/report?from=YYYY-MM-DD&to=YYYY-MM-DD`, returning the
+> signed envelope `{report, signature, algorithm}`. The `report` body carries,
+> for the inclusive period: `report_version`, `org_id`, the license `kid` and
+> `license_org_id`, `period {from,to}`, `generated_at`, `runs {total, by_ai_mode,
+> per_run[]}` (per-run system counts), `system_ledger[]` (connect/disconnect), and
+> `event_count`. `signature` is the HMAC-SHA256 of the canonical (sorted-key)
+> report bytes keyed by the per-installation `report_key` from the license payload
+> (L1); `algorithm` is `"HMAC-SHA256"`. CloudFulcrum verifies with the same
+> `report_key`, and any altered byte fails verification. The report is generated
+> LOCALLY and never triggers outbound contact (no-phone-home posture). Owner-only
+> (Analyst/Viewer → 403); a malformed period or a license without a `report_key`
+> → 400. Also available offline as a CLI (`backend/scripts/generate_usage_report.py`).
+> Additive — no previously documented shape changed.
+>
 > v1.11 — R-1.9.1-L1 / T1 + T2 (Licensing Completion & Hardening): extended the
 > Owner-only `LicenseStatusResponse` (`GET /api/license`, also returned by
 > `POST /api/license/update-key`) with two additive, optional-null fields:

@@ -957,6 +957,83 @@ def _build_ingest_summary(
     return per_system, succeeded, errors
 
 
+def _resolve_ai_mode_and_provider() -> tuple[str, str]:
+    """The active generation AI mode + provider name for billing (R-1.9.1-L2/T1).
+
+    ``ai_mode`` is the configured generation-provider mode (``hosted`` |
+    ``in_boundary`` | ``customer_tenant``); ``provider`` is that provider's
+    concrete name, which coincides with the mode today but is emitted as its own
+    field so the L2 usage report can evolve. Fully defensive: on any resolution
+    failure it falls back to the ``MODEL_GENERATION_PROVIDER`` env (default
+    ``hosted``) so a metering emit can never break a run.
+    """
+    try:
+        from app.model_gateway import get_generation_provider
+
+        name = get_generation_provider().name
+    except Exception:
+        name = os.getenv("MODEL_GENERATION_PROVIDER", "hosted") or "hosted"
+    return name, name
+
+
+def _emit_billing_run_completed(
+    *,
+    org_id: str,
+    run_id: str,
+    pack_id: Optional[str],
+    deployment_type: Optional[str],
+    started_at: str,
+) -> None:
+    """R-1.9.1-L2 / T1 (AC1): emit ``billing.run_completed`` into the immutable
+    telemetry store for EVERY run, in every AI mode.
+
+    Billability is DERIVED BY THE L2 USAGE REPORT, never decided here — this event
+    is a neutral, complete record of what ran. ``connected_system_count`` is the
+    org's connected Integration-Hub entities (the pricing definition), resolved via
+    the same ``license_limits`` helper the connect gate uses; ``pack_ids`` is a list
+    (forward-compatible with multi-pack runs). Fully fire-and-forget: any failure
+    is logged and swallowed so metering never breaks or fails a discovery run.
+    """
+    try:
+        ai_mode, provider = _resolve_ai_mode_and_provider()
+        try:
+            from app.license_limits import count_connected_systems
+
+            connected_system_count: Optional[int] = count_connected_systems(org_id)
+        except Exception:
+            connected_system_count = None
+        # R-1.9.1-L2 / T4 (AC4): stamp a per-org monotonic sequence number so a
+        # billing event deleted from the store before report generation shows up
+        # as a gap in the usage report's hash chain. Defensive — a counter hiccup
+        # yields seq=None (the event is still emitted, just unsequenced).
+        try:
+            from app import billing_chain
+
+            _seq: Optional[int] = billing_chain.next_seq(org_id)
+        except Exception:
+            _seq = None
+        record_event(
+            "billing.run_completed",
+            {
+                "run_id": run_id,
+                "org_id": org_id,
+                "ai_mode": ai_mode,
+                "provider": provider,
+                "connected_system_count": connected_system_count,
+                "pack_ids": [pack_id] if pack_id else [],
+                "deployment_type": deployment_type,
+                "started_at": started_at,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "seq": _seq,
+                "source": "run_pipeline",
+            },
+        )
+    except Exception:  # pragma: no cover — metering must never break a run
+        logger.warning(
+            "billing.run_completed emit failed for run %s", run_id, exc_info=True
+        )
+
+
 def run(
     mode: Optional[str] = None,
     run_id: Optional[str] = None,
@@ -1109,6 +1186,15 @@ def run(
             "system_count": len(_systems),
             "deployment_type": _deployment_type,
         })
+        # R-1.9.1-L2 / T1 (AC1): the billing record is emitted for EVERY run,
+        # including this aborted-early (no source data) one.
+        _emit_billing_run_completed(
+            org_id=org_id,
+            run_id=run_id,
+            pack_id=pack_id,
+            deployment_type=_deployment_type,
+            started_at=started_at,
+        )
         empty = _empty_run(run_id, org_id, mode, started_at)
         _ps, _succ, _errs = _build_ingest_summary(
             _systems,
@@ -1851,6 +1937,14 @@ def run(
         "system_count": len(_systems),
         "deployment_type": _deployment_type,
     })
+    # R-1.9.1-L2 / T1 (AC1): billing record for the completed run (every AI mode).
+    _emit_billing_run_completed(
+        org_id=org_id,
+        run_id=run_id,
+        pack_id=pack_id,
+        deployment_type=_deployment_type,
+        started_at=started_at,
+    )
 
     update_run_step(run_id, "complete")
 

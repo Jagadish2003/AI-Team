@@ -31,6 +31,7 @@ from .db import (
     org_connector_set,
 )
 from . import license_limits
+from . import billing_ledger
 from . import connector_roadmap
 from .normalization_enrichment import KV_NORMALIZATION, enrich_ambiguous_mappings
 from .opportunity_display import (
@@ -72,6 +73,8 @@ from .routes_retrieval import register_retrieval_routes
 from .routes_run_health import register_run_health_routes
 from .routes_auth import register_auth_routes
 from .routes_license import register_license_routes
+from .routes_usage_report import register_usage_report_routes
+from .routes_usage_summary import register_usage_summary_routes
 from .routes_ingestion import register_ingestion_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
@@ -342,6 +345,10 @@ register_run_health_routes(app)
 register_auth_routes(app)
 # LIC-1 / T6 (AT-347): Owner-only license status + update-key admin routes.
 register_license_routes(app)
+# R-1.9.1-L2 / T3 (AT-695): Owner-only signed usage-report generator route.
+register_usage_report_routes(app)
+# R-1.9.1-L2 / T5 (AT-697): Owner-only pre-invoice usage-summary route (AC6).
+register_usage_summary_routes(app)
 # R16-A1 / AT-383 (T7): admin ingestion-checkpoint reset.
 register_ingestion_routes(app)
 
@@ -485,10 +492,19 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
     # disconnect) are never blocked. Raises HTTP 402 when at the licensed limit.
     if status == license_limits.CONNECTED_STATUS:
         license_limits.enforce_can_connect(org_id, connector_id)
+    # R-1.9.1-L2 / T2 (AC2): capture the connection state BEFORE the write so the
+    # billing ledger records only a genuine transition on this bidirectional toggle.
+    was_connected = c.get("status") == license_limits.CONNECTED_STATUS
     c["status"] = status
     c["lastSynced"] = c.get("lastSynced", "—")
     # Write to THIS org's namespaced row — never the shared catalog.
     org_connector_set(org_id, connector_id, c)
+    billing_ledger.record_connection_change(
+        org_id,
+        connector_id,
+        was_connected=was_connected,
+        now_connected=status == license_limits.CONNECTED_STATUS,
+    )
     return c
 
 

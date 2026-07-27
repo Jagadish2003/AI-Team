@@ -54,6 +54,7 @@ from app.auth import (
     store_token,
 )
 from app import license_limits
+from app import billing_ledger
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.auth.oauth_state import decode_state, encode_state
 from app.auth.secrets import MissingSecretError
@@ -461,6 +462,9 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         # (CS-2 AC8), so the success path must set it here. Display-state only — token
         # storage above is the source of truth, so a failure here must not fail the
         # flow (the token is already saved).
+        # R-1.9.1-L2 / T2 (AC2): capture the connection state BEFORE this connect so
+        # the billing ledger can tell a genuine addition from a re-authorisation.
+        was_connected = billing_ledger.is_connected(org_id, connector_id)
         try:
             record = db.org_connector_get(org_id, connector_id) or {}
             record["status"] = "connected"
@@ -505,6 +509,11 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             connector_id=connector_id,
             user_id=_get_user_id_from_token(token) if token else None,
             scopes_granted=config.scopes,
+        )
+        # R-1.9.1-L2 / T2 (AC2): ledger the system addition (only if this was a real
+        # transition to connected — a re-auth of a live connector emits nothing).
+        billing_ledger.emit_system_connected(
+            org_id, connector_id, was_connected=was_connected
         )
         # AC2/AC4: redirect target is a hardcoded constant; connector_id comes
         # from the server-side nonce store, not from state or query params.
@@ -604,6 +613,11 @@ def register_connector_auth_routes(app: FastAPI) -> None:
     async def delete_token(connector_id: str, token: str = Depends(require_auth)) -> Response:
         """Revoke and delete the stored token for the given connector (AC11/AC12/AC13)."""
         org_id = get_current_org_id()
+        # R-1.9.1-L2 / T2 (AC2): capture the connection state + concrete instance
+        # BEFORE the revoke, so the billing ledger records a genuine removal (not a
+        # no-op) with the correct system identity even after the credential is gone.
+        was_connected = billing_ledger.is_connected(org_id, connector_id)
+        system_identity = billing_ledger.resolve_system_identity(org_id, connector_id)
         await revoke_token(org_id, connector_id)
         # Mirror the connect path: clear this org's connection state so the tile
         # returns to disconnected after revoke.
@@ -618,6 +632,9 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             "connector_disconnected",
             connector_id=connector_id,
             user_id=_get_user_id_from_token(token),
+        )
+        billing_ledger.emit_system_disconnected(
+            org_id, connector_id, was_connected=was_connected, system_identity=system_identity
         )
         return Response(status_code=204)
 
@@ -652,6 +669,12 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         """
         org_id = get_current_org_id()
 
+        # R-1.9.1-L2 / T2 (AC2): capture the connection state + concrete instance
+        # BEFORE either revoke, so the billing ledger records a genuine removal with
+        # the correct system identity even after the credential/base_url is cleared.
+        was_connected = billing_ledger.is_connected(org_id, connector_id)
+        system_identity = billing_ledger.resolve_system_identity(org_id, connector_id)
+
         await revoke_token(org_id, connector_id)
         revoke_static_credential(org_id, connector_id)
 
@@ -676,6 +699,9 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             "connector_disconnected",
             connector_id=connector_id,
             user_id=_get_user_id_from_token(token),
+        )
+        billing_ledger.emit_system_disconnected(
+            org_id, connector_id, was_connected=was_connected, system_identity=system_identity
         )
         return Response(status_code=204)
 
@@ -825,6 +851,11 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 status_code=500, detail="Credential vault is not configured."
             )
 
+        # R-1.9.1-L2 / T2 (AC2): capture the connection state BEFORE this connect so
+        # the billing ledger can tell a genuine addition from re-entering credentials
+        # for an already-connected system.
+        was_connected = billing_ledger.is_connected(org_id, connector_id)
+
         # Mirror the OAuth success path: reflect the connection in this org's
         # connector state so the Integration Hub tile shows the source connected.
         # Display-state only — the vault write above is the source of truth, so a
@@ -845,6 +876,10 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             "connector_credentials_set",
             connector_id=connector_id,
             user_id=_get_user_id_from_token(token),
+        )
+        # Ledger the system addition (the just-stored base_url resolves as identity).
+        billing_ledger.emit_system_connected(
+            org_id, connector_id, was_connected=was_connected
         )
         return StaticCredentialStatus(
             connector_id=connector_id,
@@ -900,6 +935,10 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 status_code=400, detail="Connector does not use static credentials."
             )
         org_id = get_current_org_id()
+        # R-1.9.1-L2 / T2 (AC2): capture state + instance BEFORE the revoke clears
+        # the static credential's base_url, so the removal ledgers the right identity.
+        was_connected = billing_ledger.is_connected(org_id, connector_id)
+        system_identity = billing_ledger.resolve_system_identity(org_id, connector_id)
         revoke_static_credential(org_id, connector_id)
         # Mirror delete_token: clear this org's connection state after revoke.
         try:
@@ -916,6 +955,9 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             "connector_credentials_revoked",
             connector_id=connector_id,
             user_id=_get_user_id_from_token(token),
+        )
+        billing_ledger.emit_system_disconnected(
+            org_id, connector_id, was_connected=was_connected, system_identity=system_identity
         )
         return Response(status_code=204)
 
@@ -1022,6 +1064,9 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             logger.exception(
                 "Failed to record jwt_bearer auth mode for connector %s", connector_id
             )
+        # R-1.9.1-L2 / T2 (AC2): capture the connection state BEFORE marking connected
+        # so the ledger distinguishes a genuine addition from re-entering JWT material.
+        was_connected = billing_ledger.is_connected(org_id, connector_id)
         try:
             rec = db.org_connector_get(org_id, connector_id) or {}
             rec["status"] = "connected"
@@ -1037,6 +1082,9 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             "connector_credentials_set",
             connector_id=connector_id,
             user_id=_get_user_id_from_token(token),
+        )
+        billing_ledger.emit_system_connected(
+            org_id, connector_id, was_connected=was_connected
         )
         return StaticCredentialStatus(
             connector_id=connector_id,
@@ -1092,6 +1140,9 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 detail="Connector does not support the JWT bearer auth mode.",
             )
         org_id = get_current_org_id()
+        # R-1.9.1-L2 / T2 (AC2): capture state + instance BEFORE the revoke.
+        was_connected = billing_ledger.is_connected(org_id, connector_id)
+        system_identity = billing_ledger.resolve_system_identity(org_id, connector_id)
         revoke_jwt_bearer_credential(org_id, connector_id)
         try:
             rec = db.org_connector_get(org_id, connector_id)
@@ -1107,6 +1158,9 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             "connector_credentials_revoked",
             connector_id=connector_id,
             user_id=_get_user_id_from_token(token),
+        )
+        billing_ledger.emit_system_disconnected(
+            org_id, connector_id, was_connected=was_connected, system_identity=system_identity
         )
         return Response(status_code=204)
 
@@ -1197,6 +1251,9 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 "Failed to record client_credentials auth mode for connector %s",
                 connector_id,
             )
+        # R-1.9.1-L2 / T2 (AC2): capture the connection state BEFORE marking connected
+        # so the ledger distinguishes a genuine addition from a re-connect.
+        was_connected = billing_ledger.is_connected(org_id, connector_id)
         try:
             rec = db.org_connector_get(org_id, connector_id) or {}
             rec["status"] = "connected"
@@ -1213,6 +1270,9 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             connector_id=connector_id,
             user_id=_get_user_id_from_token(token),
             scopes_granted=config.client_credentials_scopes or config.scopes,
+        )
+        billing_ledger.emit_system_connected(
+            org_id, connector_id, was_connected=was_connected
         )
         return ClientCredentialsConnectStatus(
             connector_id=connector_id,
