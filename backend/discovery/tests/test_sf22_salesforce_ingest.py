@@ -258,6 +258,7 @@ class TestErrorHandling:
     def test_live_mode_without_credential_raises_ingest_error(self, monkeypatch):
         import discovery.ingest as ingest_pkg
         from discovery.ingest import salesforce as sf_mod
+        from discovery.ingest.operational_config import CredentialRecordError
 
         # Force is_live to return True for this test
         monkeypatch.setattr(sf_mod, "is_live", lambda: True)
@@ -269,9 +270,9 @@ class TestErrorHandling:
         monkeypatch.setattr(ingest_pkg, "get_live_connector", lambda cid: None)
         monkeypatch.setattr(ingest_pkg, "resolve_vault_connector", lambda cid: None)
 
-        # Live ingest is credential-record-only now — with no credential, _get_client
-        # raises a clear IngestError naming Salesforce (never a silent env default).
-        with pytest.raises(sf_mod.IngestError, match="Salesforce credential"):
+        # Live ingest is credential-record-only now; with no credential, _get_client
+        # raises the shared credential-record error.
+        with pytest.raises(CredentialRecordError, match="Salesforce credential"):
             sf_mod._get_client()
 
     def test_live_mode_credential_missing_url_raises_named_error(self, monkeypatch):
@@ -279,6 +280,7 @@ class TestErrorHandling:
         # NAMED configuration error — never a silent SF_INSTANCE_URL env default.
         import discovery.ingest as ingest_pkg
         from discovery.ingest import salesforce as sf_mod
+        from discovery.ingest.operational_config import CredentialRecordError
 
         monkeypatch.setattr(sf_mod, "is_live", lambda: True)
         monkeypatch.setenv("SF_INSTANCE_URL", "https://env-should-never-be-used")
@@ -290,12 +292,14 @@ class TestErrorHandling:
         )
         monkeypatch.setattr(ingest_pkg, "resolve_vault_connector", lambda cid: None)
 
-        with pytest.raises(sf_mod.IngestError) as exc:
+        with pytest.raises(CredentialRecordError) as exc:
             sf_mod._get_client()
         msg = str(exc.value)
         assert "instance URL" in msg
         assert "salesforce" in msg                      # names the record
         assert "env-should-never-be-used" not in msg    # never leaks / uses the env value
+        assert exc.value.connector_id == "salesforce"
+        assert exc.value.missing_field == "url"
 
     def test_live_mode_credential_url_used_no_env(self, monkeypatch):
         # The instance URL comes from the credential record, not the environment.

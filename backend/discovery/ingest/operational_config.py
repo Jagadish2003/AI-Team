@@ -84,6 +84,35 @@ def find_inline_secret_keys(entry: Dict[str, Any]) -> List[str]:
     )
 
 
+class CredentialRecordError(Exception):
+    """Raised when a connector credential record is missing required safe config.
+
+    This is for SaaS connector records whose token exists but whose non-secret
+    connection metadata (for example, the instance URL captured at OAuth connect)
+    is incomplete. It carries only safe identifiers and field names.
+    """
+
+    def __init__(
+        self,
+        *,
+        org_id: str,
+        connector_id: str,
+        missing_field: str,
+        message: Optional[str] = None,
+    ):
+        self.org_id = org_id
+        self.connector_id = connector_id
+        self.missing_field = missing_field
+        super().__init__(
+            message
+            or (
+                f"Credential record for connector '{connector_id}' in org '{org_id}' "
+                f"is missing required field '{missing_field}'. Reconnect the "
+                "connector so the credential record is complete."
+            )
+        )
+
+
 class OperationalCredentialMissing(Exception):
     """Raised when a target declares a ``credential_ref`` but the vault has no token.
 
@@ -147,19 +176,22 @@ def resolve_target_secret(
     cred = None
     try:
         cred = connector_lookup(credential_ref)
-    except Exception:  # noqa: BLE001 — a lookup error is a miss, not an env fallback.
+    except Exception as exc:  # noqa: BLE001
         # Do NOT echo the exception (a live client repr can embed a Bearer token):
         # only the safe identifiers. A lookup failure is treated as a vault miss and
         # fails closed exactly like an absent credential.
         logger.warning(
             "operational ingest: credential lookup failed for target '%s' (org=%s, "
-            "credential_ref=%s) — failing closed (no environment fallback)",
+            "credential_ref=%s, exception_type=%s) — failing closed "
+            "(no environment fallback)",
             app_id,
             org_id,
             credential_ref,
+            type(exc).__name__,
         )
-    if cred and cred.get("token"):
-        return str(cred["token"]).strip()
+    token = str(cred.get("token") if cred else "").strip()
+    if token:
+        return token
 
     # Vault miss — fail closed. No os.environ read.
     raise OperationalCredentialMissing(
@@ -188,7 +220,7 @@ def credential_missing_health(
         "system": system,
         "status": "error",
         "message": (
-            f"Credential missing for target '{exc.app_id}' "
+            f"Credential missing for org '{exc.org_id}', target '{exc.app_id}' "
             f"(credential_ref='{exc.credential_ref}') — target skipped. "
             "Connect this connector's credential in the Integration Hub to enable it."
         ),
@@ -198,3 +230,73 @@ def credential_missing_health(
         "credentialRef": exc.credential_ref,
         "orgId": exc.org_id,
     }
+
+
+def classify_endpoint_error(exc: BaseException) -> str:
+    """Map an endpoint failure to a safe, credential-free error category."""
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    if "timeout" in name or "timeout" in msg or "timed out" in msg:
+        return "timeout"
+    if any(t in name for t in ("ssl", "certificate")) or "certificate" in msg or "tls" in msg:
+        return "tls_error"
+    if (
+        "auth" in name
+        or "unauthorized" in msg
+        or "forbidden" in msg
+        or " 401" in f" {msg}"
+        or " 403" in f" {msg}"
+    ):
+        return "auth_error"
+    if "connection" in name or "connection" in msg or "refused" in msg or "unreachable" in msg:
+        return "connection_error"
+    if "http" in name or any(code in msg for code in ("404", "500", "502", "503")):
+        return "http_error"
+    if any(t in name for t in ("json", "decode", "parse", "value")):
+        return "parse_error"
+    return "unknown_error"
+
+
+def _target_environment(target: Any) -> str:
+    value = getattr(target, "environment", "")
+    if value:
+        return str(value)
+    metadata = getattr(target, "metadata", None)
+    if isinstance(metadata, dict) and metadata.get("environment"):
+        return str(metadata.get("environment"))
+    return ""
+
+
+def safe_endpoint_error(
+    target: Any,
+    endpoint_type: str,
+    exc: BaseException,
+) -> Dict[str, str]:
+    """Build a credential-free error record for a failed endpoint read."""
+    return {
+        "app_id": str(getattr(target, "app_id", "")),
+        "endpoint_type": str(endpoint_type),
+        "error_category": classify_endpoint_error(exc),
+        "exception_type": type(exc).__name__,
+        "environment": _target_environment(target),
+    }
+
+
+def log_endpoint_failure(
+    org_id: str,
+    target: Any,
+    endpoint_type: str,
+    exc: BaseException,
+) -> Dict[str, str]:
+    """Log a failed endpoint read using only safe fields, and return that record."""
+    safe = safe_endpoint_error(target, endpoint_type, exc)
+    logger.warning(
+        "operational ingest: endpoint read failed org=%s app_id=%s endpoint=%s "
+        "category=%s (%s)",
+        org_id,
+        safe["app_id"],
+        safe["endpoint_type"],
+        safe["error_category"],
+        safe["exception_type"],
+    )
+    return safe

@@ -80,6 +80,14 @@ export default function ConnectorTile({
   const isMultiScope = Boolean(connector.multiScope);
   const isEnabled = isMultiScope || ENABLED_CONNECTOR_IDS.includes(connector.id);
 
+  // R191-R1 T5 (AT-726): a roadmap connector (SAP/D365 and any tile whose
+  // ingestion does not ship yet) is never connectable. Keep the release target
+  // available for metadata/tooltips, but use one clean visible label everywhere.
+  const isRoadmap = connector.roadmap === true;
+  const roadmapTarget = connector.roadmapTarget ?? null;
+  const roadmapIsVersioned = Boolean(roadmapTarget && /\d/.test(roadmapTarget));
+  const comingLabel = 'Coming soon';
+
   // Connecting / configuring / reconnecting are analyst+ writes (the connector
   // auth-url and token routes are analyst+). Viewers get a read-only hub: their
   // action button is disabled, EXCEPT the read-only "View data" action on an
@@ -123,9 +131,13 @@ export default function ConnectorTile({
   const outboundSetupGate = hideAuthCode && isEnabled;
 
   // When the token is expired/missing, override the button to "Reconnect".
-  // Multi-scope cloud connectors take precedence: their action opens the
-  // onboarding/health panel ("Set up" when new, "Manage" once configured).
-  const actionLabel = isMultiScope
+  // A roadmap tile always shows its "Coming soon" label (it can never connect) —
+  // that outranks every other posture, including multi-scope. Multi-scope cloud
+  // connectors come next: their action opens the onboarding/health panel
+  // ("Set up" when new, "Manage" once configured).
+  const actionLabel = isRoadmap
+    ? comingLabel
+    : isMultiScope
     ? isConnected
       ? 'Manage'
       : 'Set up'
@@ -160,15 +172,20 @@ export default function ConnectorTile({
   // Owner-only edits enforced inside the panel (MSP-B13 AT-748, T6-AC3).
   const viewerBlocks = isViewer && !isMultiScope && actionLabel !== 'View data';
   // A multi-scope tile only OPENS the panel (no OAuth/new connection here), so the
-  // license new-connection gate never disables it.
+  // license new-connection gate never disables it. A roadmap tile is not
+  // connectable at all, so it stays disabled regardless of posture.
   const actionDisabled =
-    !isEnabled || (limitBlocksNew && !isMultiScope) || viewerBlocks;
+    isRoadmap || !isEnabled || (limitBlocksNew && !isMultiScope) || viewerBlocks;
 
   // R18-C0 P4 / AT-566: a connected tile offers Disconnect. Disconnecting is a
   // connector write (analyst+), so viewers never see it; it is independent of the
   // new-connection license gate (removing a connection is always allowed).
   const canDisconnect = isConnected && !isViewer && Boolean(onDisconnect);
-  const disabledTitle = (limitBlocksNew && !isMultiScope)
+  const disabledTitle = isRoadmap
+    ? roadmapIsVersioned
+      ? `${connector.name} is on the AgentIQ roadmap (coming in ${roadmapTarget}) and is not yet connectable.`
+      : `${connector.name} is on the AgentIQ roadmap and is not yet connectable.`
+    : (limitBlocksNew && !isMultiScope)
     ? (connectBlockMessage || 'Your license limit has been reached. Contact CloudFulcrum to add more.')
     : !isEnabled
     ? 'Connecting new sources is currently unavailable'
@@ -205,7 +222,18 @@ export default function ConnectorTile({
                 Token expired
               </span>
             )}
-            <Badge status={connector.status} />
+            {isRoadmap ? (
+              // Roadmap tile: an honest Coming soon pill in place of the
+              // meaningless connection-status badge (R191-R1 T5 / AT-726).
+              <span
+                data-testid="connector-roadmap-badge"
+                className="integration-coming-soon-status-pill inline-flex items-center whitespace-nowrap rounded-full border text-xs font-medium leading-none"
+              >
+                {comingLabel}
+              </span>
+            ) : (
+              <Badge status={connector.status} />
+            )}
           </div>
         </div>
       </div>

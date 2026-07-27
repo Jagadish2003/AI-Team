@@ -15,6 +15,8 @@ from psycopg2 import pool as _pg_pool
 from dotenv import load_dotenv
 from fastapi import HTTPException
 
+from . import connector_roadmap
+
 logger = logging.getLogger(__name__)
 
 # The canonical discovery step-id list lives in the discovery layer
@@ -741,21 +743,30 @@ def _org_connector_overrides(org_id: str) -> Dict[str, Dict[str, Any]]:
 
 def org_connectors_list(org_id: str) -> List[Dict[str, Any]]:
     """All connectors visible to org_id: catalog defaults overlaid with this
-    org's own connection state. Catalog ordering is preserved."""
+    org's own connection state. Catalog ordering is preserved.
+
+    Each row is stamped with the R191-R1 T5 roadmap flags (`roadmap` /
+    `roadmapTarget`) via `connector_roadmap.annotate_connector`, so a tile whose
+    ingestion does not ship yet (SAP/D365 and other unshipped connectors) is
+    surfaced as a non-connectable "Coming — <target>" tile. This is additive —
+    it never mutates status/tier — so per-org connection state is preserved."""
     merged = _connector_catalog()
     for connector_id, override in _org_connector_overrides(org_id).items():
         merged[connector_id] = {**merged.get(connector_id, {}), **override}
-    return list(merged.values())
+    return [connector_roadmap.annotate_connector(row) for row in merged.values()]
 
 
 def org_connector_get(org_id: str, connector_id: str) -> Optional[Dict[str, Any]]:
     """This org's connector record if it has one, else the catalog template.
-    Returns None only when the connector id is unknown entirely."""
+    Returns None only when the connector id is unknown entirely. The returned
+    row carries the roadmap flags (see `org_connectors_list`)."""
     catalog = get_one("connectors", connector_id)
     row = get_one("connectors", f"{org_id}{_ORG_CONNECTOR_SEP}{connector_id}")
     if row is not None:
-        return {**(catalog or {}), **row}
-    return catalog
+        return connector_roadmap.annotate_connector({**(catalog or {}), **row})
+    if catalog is None:
+        return None
+    return connector_roadmap.annotate_connector(catalog)
 
 
 def org_connector_set(org_id: str, connector_id: str, payload: Dict[str, Any]) -> None:

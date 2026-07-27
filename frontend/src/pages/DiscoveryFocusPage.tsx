@@ -151,6 +151,9 @@ export default function DiscoveryFocusPage({
   const selectedTemplates = templates.filter(template =>
     selectedTemplateIds.includes(template.template_id),
   );
+  const selectedIndustry =
+    industries.find(ind => ind.industry_id === state.industryId) ?? null;
+  const roadmapSystems = selectedIndustry?.roadmap_systems ?? [];
 
   async function handleIndustrySelect(industryId: string) {
     const next = state.industryId === industryId ? null : industryId;
@@ -238,6 +241,22 @@ export default function DiscoveryFocusPage({
                   onToggle={() => handleIndustrySelect(ind.industry_id)}
                 />
               ))}
+            </div>
+          )}
+          {roadmapSystems.length > 0 && (
+            <div className="mt-4 flex flex-wrap gap-2" aria-label="Roadmap systems">
+              {roadmapSystems.map(system => {
+                return (
+                  <span
+                    key={system.system_id}
+                    title={system.reason}
+                    className="inline-flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-100"
+                  >
+                    <span>{system.label}</span>
+                    <span className="text-amber-200/80">Coming soon</span>
+                  </span>
+                );
+              })}
             </div>
           )}
         </section>

@@ -20,7 +20,7 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { MemoryRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { vi, describe, it, expect } from "vitest";
 
@@ -110,7 +110,7 @@ describe("AC1 — Source Intake absent from TopNav", () => {
     expect(screen.getByText("Integration Hub")).toBeDefined();
   });
 
-  it("renders exactly 7 nav items after merging Agent Roadmap into Agent Blueprint", () => {
+  it("renders exactly 8 nav items after merging Agent Roadmap into Agent Blueprint", () => {
     render(
       <MemoryRouter initialEntries={["/integration-hub"]}>
         <TopNav />
@@ -120,6 +120,7 @@ describe("AC1 — Source Intake absent from TopNav", () => {
       "Integration Hub",
       "Stack Builder",
       "Discovery Run",
+      "Run Health",
       "Source Intelligence",
       "Opportunity Review",
       "Agent Blueprint",
@@ -131,6 +132,26 @@ describe("AC1 — Source Intake absent from TopNav", () => {
     expect(screen.queryByText("Agent Roadmap")).toBeNull();
     // Source Intake must not be present
     expect(screen.queryByText("Source Intake")).toBeNull();
+  });
+
+  it("places Run Health immediately after Discovery Run in primary navigation", () => {
+    render(
+      <MemoryRouter initialEntries={["/integration-hub"]}>
+        <TopNav />
+      </MemoryRouter>,
+    );
+    const primaryNav = screen.getByRole("navigation", { name: "Primary" });
+    const labels = within(primaryNav).getAllByRole("link").map((link) => link.textContent);
+    expect(labels).toEqual([
+      "Integration Hub",
+      "Stack Builder",
+      "Discovery Run",
+      "Run Health",
+      "Source Intelligence",
+      "Opportunity Review",
+      "Agent Blueprint",
+      "Executive Report",
+    ]);
   });
 });
 

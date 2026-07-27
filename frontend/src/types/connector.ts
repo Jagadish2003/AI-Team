@@ -44,4 +44,10 @@ export interface Connector {
   // Singular noun for one scope of a multi-scope connector ('account' /
   // 'subscription'). Carried from the catalog; drives display copy.
   scopeNoun?: string;
+  // R191-R1 T5 (AT-726): anchor-on-shipped roadmap flags. A tile whose ingestion
+  // does not ship yet (SAP/D365 and other unshipped connectors) is roadmap:
+  // rendered as a non-connectable "Coming soon" tile. roadmapTarget is retained
+  // as release metadata ("2.0.1") or "unscheduled"; shipped tiles have roadmap=false.
+  roadmap?: boolean;
+  roadmapTarget?: string | null;
 }

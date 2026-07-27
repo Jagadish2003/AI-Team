@@ -283,16 +283,31 @@ def _vault_static_credential(org_id: str, connector_id: str) -> Optional[Tuple[s
 
 
 def _production_env_fallback_blocked() -> bool:
-    """True when this process is production, so the env hub-key fallback is off.
+    """True when the env hub-key fallback is off, so the key must come from the vault.
 
-    Mirrors the R1.9.1-H1 T4 (F4) fix for the customer-tenant model credential:
-    ``app.deployment_profile.is_production()`` is the SINGLE source of truth for
-    "is this process production" (``ENVIRONMENT=production`` OR
-    ``REQUIRE_CONNECTOR_SECRETS=1``). In production the hub key lives ONLY in the
-    vault, so reading it from the environment is a bypass of the credential story
-    — it is refused here rather than merely discouraged in a docstring. A failure
-    to resolve the deployment profile is treated as production (fail closed).
+    Mirrors the R1.9.1-H1 T4 (F4) fix for the customer-tenant model credential: in
+    production the hub key lives ONLY in the vault, so reading it from the
+    environment is a bypass of the credential story — it is refused here rather
+    than merely discouraged in a docstring.
+
+    TWO independent signals close the fallback, and either is sufficient:
+
+      * ``app.deployment_profile.is_production()`` — the single source of truth for
+        the deployment PROFILE. It intentionally keys on ``ENVIRONMENT=production``
+        alone, because an operational flag does not redefine the profile for
+        staging/CI/standalone runs.
+      * ``REQUIRE_CONNECTOR_SECRETS=1`` — checked here IN ADDITION, because that
+        flag's whole meaning is "connector secrets must be present/managed rather
+        than improvised". An env-var credential fallback is a direct bypass of
+        that requirement, independent of which profile the process runs under, so
+        this guard stays stricter than the profile check on purpose. Do not
+        collapse the two into ``is_production()`` alone — that is exactly how this
+        guard silently stopped covering a real deployment once.
+
+    A failure to resolve either signal is treated as blocked (fail closed).
     """
+    if os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1":
+        return True
     try:
         from app.deployment_profile import is_production
     except Exception:  # pragma: no cover - import guard: fail closed
