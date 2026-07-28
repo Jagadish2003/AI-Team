@@ -203,6 +203,44 @@ class TestNoProhibitedVocabularyOnAnySurface:
             + "; ".join(str(v) for v in violations)
         )
 
+    def test_a_seeded_savings_claim_is_scrubbed_on_the_opportunities_api(self, client):
+        """The same guarantee on the API the Opportunity Review renders.
+
+        The live route composes its response from stored opps directly, so the
+        guard has to sit on the serve path — not only inside the report engine.
+        """
+        org, run = _ids()
+        _seed_run(
+            org,
+            run,
+            [
+                _seeded_opp(
+                    aiRationale="This agent will reduce cost by 40% and guarantees savings."
+                )
+            ],
+        )
+
+        served = client.get(
+            f"/api/runs/{run}/opportunities", headers=_auth(org)
+        ).json()
+        violations = scan_payload(served)
+        assert not violations, (
+            "a seeded savings claim reached the opportunities API: "
+            + "; ".join(str(v) for v in violations)
+        )
+        assert "40%" not in served[0]["aiRationale"]
+
+    def test_scrubbing_never_rewrites_the_stored_opportunity(self):
+        """A replay must serve what the run produced, not a doctored version."""
+        org, run = _ids()
+        claim = "This agent will reduce cost by 40% and guarantees savings."
+        _seed_run(org, run, [_seeded_opp(aiRationale=claim)])
+
+        stored = db.run_kv_get("opps", run, [])[0]
+        assert stored["aiRationale"] == claim, (
+            "the guard is a serve-time overlay — it must not edit stored history"
+        )
+
     def test_blueprint_agent_purpose_is_scrubbed(self, client):
         org, run = _ids()
         _seed_run(

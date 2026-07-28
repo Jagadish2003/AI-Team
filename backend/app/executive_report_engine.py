@@ -18,44 +18,11 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 
-#: Narrative fields on an opportunity that reach the executive report and its
-#: PDF export. Measured fields (impact, effort, evidence ids) are untouched —
-#: the guard is about claims, not about numbers.
-_NARRATIVE_FIELDS = ("title", "aiRationale", "aiSummary")
-
-
-def _scrub_opportunity_narrative(opp: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a copy of ``opp`` with projection claims stripped from its prose.
-
-    Copied rather than mutated: the report must not rewrite the stored
-    opportunity a run persisted, or a replay would serve different text than the
-    run produced.
-    """
-    from discovery.projection.vocabulary import contains_prohibited, sanitize_text
-
-    if not isinstance(opp, dict):
-        return opp
-    if not any(contains_prohibited(opp.get(f)) for f in _NARRATIVE_FIELDS):
-        return opp
-
-    cleaned = dict(opp)
-    for field in _NARRATIVE_FIELDS:
-        value = cleaned.get(field)
-        if isinstance(value, str) and value:
-            cleaned[field] = sanitize_text(value)
-    return cleaned
-
-
-def scrub_executive_summary(summary: Optional[str]) -> str:
-    """Strip projection claims from the executive summary paragraph.
-
-    Exported because the summary is written by the enrichment layer AFTER this
-    engine builds the report shape (``aiExecutiveSummary`` starts empty here),
-    so whoever fills it in must run it through the same guard.
-    """
-    from discovery.projection.vocabulary import sanitize_text
-
-    return sanitize_text(summary or "")
+from .projection_copy_guard import (  # noqa: F401  (re-exported)
+    scrub_executive_summary,
+    scrub_opportunity_narrative as _scrub_opportunity_narrative,
+    scrub_opportunity_narratives,
+)
 
 
 def build_executive_report(

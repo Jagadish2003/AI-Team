@@ -451,7 +451,7 @@ def run_trackb_and_persist(
                 # 2.0-A1 T5 / AC3 — the guard runs at generation AND here, at the
                 # report boundary, so a summary arriving by any future path
                 # cannot carry a savings claim into the executive report.
-                from .executive_report_engine import scrub_executive_summary
+                from .projection_copy_guard import scrub_executive_summary
 
                 exec_report["aiExecutiveSummary"] = scrub_executive_summary(
                     enrichment["executiveSummary"]
