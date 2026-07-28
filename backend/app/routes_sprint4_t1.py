@@ -99,6 +99,7 @@ def _append_event(run_id: str, stage: str, message: str, level: str = "INFO") ->
 
 from .materialize_t2 import (
     _apply_intervention_projection,
+    _rebuild_roadmap_with_projections,
     _finalise,
     _emit_event,
     _ingest_summary_from_payload,
@@ -434,12 +435,15 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
         # T7 - temporal enrichment (non-blocking, T3-S11-A)
         opps = _apply_temporal_enrichment(run_id, run, pack, opps, run_org_id)
 
-        # 2.0-A1 T1 — intervention projection (non-blocking).
+        # 2.0-A1 — intervention projection (non-blocking).
         # Runs AFTER temporal enrichment so a projection can widen its band from
         # the observed recurrence series (recent_values) and cite the baseline it
-        # moves against, and re-persists "opps" so the projection is STORED with
-        # the opportunity (2.0-A1 AC6) rather than recomputed per request.
-        _apply_intervention_projection(run_id, opps)
+        # moves against. Stamps provenance and stores the projection with the
+        # opportunity (2.0-A1 AC6) rather than recomputing it per request, then
+        # re-stores the roadmap — which was built earlier, before any projection
+        # existed — so its artifact carries them too.
+        _apply_intervention_projection(run_id, opps, org_id=run_org_id)
+        _rebuild_roadmap_with_projections(run_id, opps)
 
         status = "complete" if len(succeeded) == len(systems) else "partial"
         audit_action = (

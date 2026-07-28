@@ -249,8 +249,45 @@ export interface InterventionProjection {
    * null when the finding has no detector profile or no projection to describe.
    */
   recommendation?: ProjectionRecommendation | null;
+  /**
+   * 2.0-A1 T6 — the stored projection's identifying stamp.
+   *
+   * Present on any projection read back from storage; absent on one computed
+   * in-memory, because it is stamped at STORE time (a timestamp inside the
+   * computed payload would break projection reproducibility).
+   *
+   * The UI does not need to render this — it exists so 2.0-A2 can tie a stored
+   * projection to the opportunity it describes and follow it across runs.
+   */
+  provenance?: ProjectionProvenance | null;
   /** True when the finding's confidence is capped for want of corroboration. */
   confidenceCapped: boolean;
+}
+
+/**
+ * 2.0-A1 T6 — how a stored projection is identified for later comparison.
+ *
+ * `opportunityIdentity` is the stable cross-run key: the same real-world problem
+ * carries it run after run, which is what lets outcome tracking follow one
+ * finding through time. `crossRunComparable` is false when it is absent — the
+ * projection is still stored and valid within its run, just not trackable.
+ */
+export interface ProjectionProvenance {
+  provenanceSchemaVersion: string;
+  runId: string | null;
+  oppId: string | null;
+  /** Stable cross-run identity, or null when the opportunity carries none. */
+  opportunityIdentity: string | null;
+  /** ISO-8601 timestamp, timezone-aware. */
+  createdAt: string | null;
+  orgId: string | null;
+  packId: string | null;
+  packVersion: string | null;
+  projectionSchemaVersion: string | null;
+  bandWidthModelVersion: string | null;
+  recommendationSchemaVersion: string | null;
+  /** False when there is no stable identity to follow across runs. */
+  crossRunComparable: boolean;
 }
 
 /** 2.0-A1 T5 — one named part of the recommendation. */

@@ -65,21 +65,34 @@ def _org_id_for_run(run: Dict[str, Any] | None, fallback: str | None = None) -> 
     return run.get("orgId") or run.get("org_id") or input_org_id or fallback
 
 
-def _apply_intervention_projection(run_id: str, opps: List[Dict[str, Any]]) -> int:
-    """2.0-A1 T1 — attach the intervention projection and re-persist "opps".
+def _apply_intervention_projection(
+    run_id: str, opps: List[Dict[str, Any]], org_id: str | None = None
+) -> int:
+    """2.0-A1 — compute, identify, and STORE the intervention projection.
 
     Shared by both materialization paths (this module and routes_sprint4_t1).
     Call AFTER temporal enrichment: the projection widens its magnitude band from
     the observed recurrence series and cites the baseline it moves against, both
     of which temporal enrichment puts on the in-memory opportunity.
 
-    The projection is written back to run_kv ``"opps"`` so it is STORED with the
-    opportunity (2.0-A1 AC6) — every read surface then serves the same stored
-    projection, and 2.0-A2 has something durable to compare a measured outcome
-    against. Non-blocking by contract: a projection failure must never fail a run
-    or lose an opportunity.
+    Three steps, in this order and for these reasons:
 
-    Returns the number of opportunities that received a projection.
+    1. **Compute** (T1–T5). ``project_opportunities`` is pure and deterministic —
+       no clock, no run context — which is what makes AC5 hold.
+    2. **Identify** (T6). ``stamp_projections`` adds the provenance spine (run id,
+       opportunity id, stable cross-run identity, timestamp, pack + schema
+       versions). Separate from step 1 precisely so the computed core stays
+       byte-identical to a later recomputation.
+    3. **Store** (T6 / AC6). The stamped payload is written back to run_kv
+       ``"opps"`` — the copy every read surface serves — and onto the
+       opportunity-instance row, which is the copy 2.0-A2 can query ACROSS runs
+       by identity. Run KV cannot answer "every projection ever made about this
+       problem"; the instance row can.
+
+    Non-blocking by contract at every step: a projection failure must never fail
+    a run or lose an opportunity.
+
+    Returns the number of opportunities that received a stored projection.
     """
     import logging
 
@@ -89,7 +102,18 @@ def _apply_intervention_projection(run_id: str, opps: List[Dict[str, Any]]) -> i
 
         projected = project_opportunities(opps)
         if projected:
+            from .projection_store import (
+                record_projections_on_instances,
+                stamp_projections,
+            )
+
+            stamp_projections(opps, run_id, org_id=org_id)
             db.run_kv_set("opps", run_id, opps)
+            # Cross-run tracking copy. Best-effort and deliberately AFTER the KV
+            # write: the serving copy is what the run depends on, and a missing
+            # instance row (identity not stamped, table not migrated) must not
+            # cost the run its projections.
+            record_projections_on_instances(opps, run_id)
         logger.info(
             "Attached intervention projections to %d/%d opportunities for run %s",
             projected,
@@ -100,6 +124,37 @@ def _apply_intervention_projection(run_id: str, opps: List[Dict[str, Any]]) -> i
     except Exception as exc:  # noqa: BLE001
         logger.warning("Intervention projection failed (non-blocking): %s", exc)
         return 0
+
+
+def _rebuild_roadmap_with_projections(run_id: str, opps: List[Dict[str, Any]]) -> None:
+    """2.0-A1 T6 — re-store the roadmap once projections exist.
+
+    The roadmap is built and stored EARLY in materialization (before temporal
+    enrichment), but a projection can only be computed AFTER it — so the stored
+    roadmap artifact carried opportunities with no projection at all, and
+    ``GET /api/runs/{run_id}/roadmap`` served them that way. That also meant
+    2.0-A1 T4's capped-confidence ordering rule, which reads each opportunity's
+    projection, was ordering a stage where every projection was absent.
+
+    Rebuilding here rather than moving the original build keeps the roadmap
+    available early (it is emitted as a pipeline event and other steps read it)
+    while making the STORED artifact the complete one. ``build_roadmap`` is
+    deterministic over the same opportunities, so this re-store changes nothing
+    except the presence of the projections.
+
+    Non-blocking: a roadmap that fails to rebuild keeps its earlier version.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        from .roadmap_engine import build_roadmap
+
+        db.run_kv_set("roadmap", run_id, build_roadmap(opps))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Roadmap rebuild with projections failed (non-blocking): %s", exc
+        )
 
 
 def _audit_prepend(run_id: str, event: Dict[str, Any]) -> None:
@@ -504,10 +559,15 @@ def run_trackb_and_persist(
         except Exception as e:
             logger.warning("T7 temporal enrichment failed (non-blocking): %s", e)
 
-        # 2.0-A1 T1 — intervention projection (non-blocking). See the helper
-        # docstring: runs after temporal enrichment and re-persists "opps" so the
-        # projection is stored with the opportunity (AC6).
-        _apply_intervention_projection(run_id, opps)
+        # 2.0-A1 — intervention projection (non-blocking). See the helper
+        # docstring: runs after temporal enrichment, stamps provenance, and
+        # stores the projection with the opportunity (AC6). The roadmap is then
+        # re-stored so its artifact carries the projections too — it was built
+        # before they existed.
+        # run_org_id (not the temporal block's _org_id, which is bound inside a
+        # try and would be unbound if temporal enrichment failed).
+        _apply_intervention_projection(run_id, opps, org_id=run_org_id)
+        _rebuild_roadmap_with_projections(run_id, opps)
 
         status = "complete" if len(succeeded) == len(systems) else "partial"
         audit_action = (
