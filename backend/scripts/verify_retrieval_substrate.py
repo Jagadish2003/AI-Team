@@ -154,6 +154,29 @@ def _verify_schema() -> bool:
     return has_ext and has_table and has_vector_col
 
 
+def _vector_dimensions(org_id: str) -> set[int]:
+    """Return the distinct vector dimensions stored for an org.
+
+    A store holding two different dimensions means two incompatible models were
+    mixed into one partition, which the AC8 stamp exists to prevent. Reporting the
+    dimension also lets an operator confirm the model that ANSWERED matches the one
+    configured — text-embedding-3-small emits 1536 — rather than trusting the
+    config string alone.
+    """
+    from contextlib import closing
+
+    from app import db
+
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT DISTINCT vector_dims(embedding) FROM retrieval_chunks "
+            "WHERE org_id = %s AND embedding IS NOT NULL",
+            (org_id,),
+        )
+        return {int(r[0]) for r in cur.fetchall() if r[0] is not None}
+
+
 def _cleanup() -> None:
     """Remove every chunk this script wrote, for both orgs."""
     from app.retrieval import store
@@ -340,6 +363,13 @@ def main() -> int:
         f"{store.count_chunks(ORG_A, embedded_only=True)}/"
         f"{store.count_chunks(ORG_A)} embedded",
     )
+    dims = _vector_dimensions(ORG_A)
+    _check(
+        "every vector shares one dimension (no mixed vector spaces)",
+        len(dims) == 1 and next(iter(dims), 0) > 0,
+        f"dimension(s)={sorted(dims)} — cross-check against the configured model "
+        f"(text-embedding-3-small emits 1536)",
+    )
 
     _section("AC5 — retrieve(): ranked results with EvidencePointer fields")
     hits = retrieve(ORG_A, _QUERY, k=5)
@@ -392,13 +422,27 @@ def main() -> int:
         all(h.source_system == "document" for h in docs_only),
         f"{len(docs_only)} hits",
     )
-    floor = min(0.99, top.similarity + 0.005)
-    weak = retrieve(ORG_A, _QUERY, k=5, min_score=floor)
-    _check(
-        "min_score excludes weak matches",
-        all(h.similarity >= floor for h in weak) and len(weak) < len(hits),
-        f"floor={floor:.4f}: {len(weak)} of {len(hits)} hits survive",
-    )
+    # Pick a floor strictly BETWEEN the best and worst hit, so the check proves a
+    # partition — some results kept, some dropped. A floor above every hit would
+    # return nothing and satisfy `all(...)` vacuously, proving only that a filter
+    # can exclude everything.
+    if len(hits) >= 2 and hits[0].similarity > hits[-1].similarity:
+        floor = (hits[0].similarity + hits[-1].similarity) / 2
+        weak = retrieve(ORG_A, _QUERY, k=5, min_score=floor)
+        _check(
+            "min_score keeps strong matches and excludes weak ones",
+            bool(weak)
+            and len(weak) < len(hits)
+            and all(h.similarity >= floor for h in weak),
+            f"floor={floor:.4f}: {len(weak)} of {len(hits)} hits survive "
+            f"(range {hits[-1].similarity:.4f}–{hits[0].similarity:.4f})",
+        )
+    else:
+        _check(
+            "min_score keeps strong matches and excludes weak ones",
+            False,
+            "inconclusive: needs >=2 hits with distinct similarities",
+        )
     none_scoped = retrieve(ORG_A, _QUERY, k=5, source_filter=["nonexistent-system"])
     _check(
         "a filter naming nothing valid returns nothing (never widens)",
