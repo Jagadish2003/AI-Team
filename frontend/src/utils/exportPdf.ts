@@ -20,6 +20,7 @@ import {
   isThinProjectionEvidence,
   projectionBasisSummary,
 } from '../components/projection/ProjectionBasis';
+import { recommendationHeadline } from '../components/projection/ProjectionRecommendation';
 
 export interface ExecutiveReportPdfData {
   confidence: string;
@@ -381,13 +382,23 @@ export async function downloadExecutiveReportPdf(
       const thinEvidenceText = isThinProjectionEvidence(o.projection)
         ? 'Thin evidence - projection band is wider because evidence is limited.'
         : null;
+      // 2.0-A1 T5: the export carries the same intervention-language statement
+      // the screens show. AC3 covers exports explicitly, and a PDF is the
+      // artefact most likely to be quoted in a board paper.
+      const recommendation = recommendationHeadline(o.projection);
+      const recommendationLines = recommendation
+        ? (pdf.splitTextToSize(sanitize(recommendation), CW - 10) as string[])
+        : [];
       const basisLines = basisSummary
         ? (pdf.splitTextToSize(sanitize(basisSummary), CW - 10) as string[])
         : [];
       const thinLines = thinEvidenceText
         ? (pdf.splitTextToSize(sanitize(thinEvidenceText), CW - 10) as string[])
         : [];
-      const extraH = (basisLines.length + thinLines.length) * lineHeight(8) + 2;
+      const extraH =
+        (recommendationLines.length + basisLines.length + thinLines.length) *
+          lineHeight(8) +
+        2;
       const qcH = 14 + extraH;
       ensure(qcH + 3);
       setDraw(CARD_BORDER);
@@ -402,6 +413,13 @@ export async function downloadExecutiveReportPdf(
         y + 11,
       );
       let basisY = y + 15.5;
+      if (recommendationLines.length > 0) {
+        setFont(8, 'normal', NAVY);
+        recommendationLines.forEach((ln) => {
+          pdf.text(ln, MX + 5, basisY);
+          basisY += lineHeight(8);
+        });
+      }
       if (basisLines.length > 0) {
         setFont(8, 'normal', MUTED);
         basisLines.forEach((ln) => {

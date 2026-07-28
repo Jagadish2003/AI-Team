@@ -238,8 +238,48 @@ export interface InterventionProjection {
    * be ordered above an uncapped one on `value` alone.
    */
   projectionStrength?: ProjectionStrength | null;
+  /**
+   * 2.0-A1 T5 — recommendation text in intervention language.
+   *
+   * Composed on the backend and carried here so every surface renders the SAME
+   * wording. Never compose recommendation copy in the UI: the backend's
+   * vocabulary guard only covers what the backend emits, so a sentence written
+   * in a component is a savings claim waiting to happen.
+   *
+   * null when the finding has no detector profile or no projection to describe.
+   */
+  recommendation?: ProjectionRecommendation | null;
   /** True when the finding's confidence is capped for want of corroboration. */
   confidenceCapped: boolean;
+}
+
+/** 2.0-A1 T5 — one named part of the recommendation. */
+export interface ProjectionRecommendationPart {
+  /**
+   * agent_handles | cases_in_scope | remains_manual | signal_expected_to_move
+   * | band_and_horizon
+   */
+  id: string;
+  label: string;
+  text: string;
+}
+
+/**
+ * 2.0-A1 T5 — the intervention-language recommendation.
+ *
+ * Always states five things: what the agent handles, which recurring cases are
+ * in scope, what remains manual, which measured signal is expected to move, and
+ * the projection band and horizon. Never a guaranteed saving.
+ */
+export interface ProjectionRecommendation {
+  schemaVersion: string;
+  /** "Agent handles the N …; the residual requires judgement (…)." */
+  headline: string;
+  parts: ProjectionRecommendationPart[];
+  /** Concrete actions to validate and scope the intervention — never outcomes. */
+  nextSteps: string[];
+  /** Flattened headline + parts, for surfaces with room for only one string. */
+  summary: string;
 }
 
 /** 2.0-A1 T4 — one band-width axis's contribution, for the audit trail. */

@@ -59,8 +59,9 @@ _DETECTOR_META: Dict[str, Dict[str, str]] = {
             "{owner_changes} owner changes recorded across {total_cases} Cases in "
             "90 days — an average of {score:.1f} reassignments per case (threshold "
             "{threshold}). Agents are manually re-routing cases that pattern analysis "
-            "could route correctly on first assignment. An intelligent routing agent "
-            "would reduce time-to-resolution and eliminate repetitive escalation cycles."
+            "could route correctly on first assignment. A routing agent would handle "
+            "the recurring reassignment cases; cases whose correct owner is genuinely "
+            "ambiguous still require judgement."
         ),
         "required_permissions": [
             "Salesforce: read CaseHistory",
@@ -135,9 +136,9 @@ _DETECTOR_META: Dict[str, Dict[str, str]] = {
         "rationale_template": (
             "Cross-system echo detected: {sf_count} Salesforce Cases reference external "
             "ticket IDs (SF echo score {sf_score:.2f}){sn_part}{jira_part}. "
-            "Agents are manually duplicating the same issue across systems — a pattern "
-            "that agent-based bidirectional sync would eliminate, reducing manual effort "
-            "and improving resolution continuity across teams."
+            "Agents are manually duplicating the same issue across systems. A sync agent "
+            "would handle the issues duplicated across two systems; records whose two "
+            "sides genuinely disagree still require judgement."
         ),
         "required_permissions": [
             "Salesforce: read Case",

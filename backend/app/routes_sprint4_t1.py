@@ -419,7 +419,12 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
             )
             db.run_kv_set(KV_LLM_ENRICHMENT, run_id, enrichment)
             if enrichment.get("executiveSummary"):
-                exec_report["aiExecutiveSummary"] = enrichment["executiveSummary"]
+                # 2.0-A1 T5 / AC3 — same report-boundary guard as materialize_t2.
+                from .executive_report_engine import scrub_executive_summary
+
+                exec_report["aiExecutiveSummary"] = scrub_executive_summary(
+                    enrichment["executiveSummary"]
+                )
                 db.run_kv_set("executive_report", run_id, exec_report)
             _emit_event(run_id, "COMPLETE", "AI analysis and enrichment completed")
         except Exception as e:

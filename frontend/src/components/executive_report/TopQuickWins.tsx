@@ -7,6 +7,7 @@ import {
   isThinProjectionEvidence,
   projectionBasisSummary,
 } from '../projection/ProjectionBasis';
+import { RecommendationHeadline } from '../projection/ProjectionRecommendation';
 
 interface TopQuickWinsProps {
   quickWins: OpportunityCandidate[];
@@ -40,6 +41,9 @@ export default function TopQuickWins({ quickWins }: TopQuickWinsProps) {
               <div className="mt-1 text-xs text-muted">
                 {o.category} | Impact {o.impact}/10 | Effort {o.effort}/10
               </div>
+              {/* 2.0-A1 T5: the quick win is stated as an intervention, not as a
+                  benefit — this is the line an executive quotes. */}
+              <RecommendationHeadline projection={o.projection} className="mt-2" />
               {basisSummary && (
                 <div
                   data-testid={`executive-report-projection-basis-${o.id}`}

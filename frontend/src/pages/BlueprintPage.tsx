@@ -39,6 +39,7 @@ import {
   projectionAssumptions,
 } from '../components/projection/ProjectionAssumptionLedger';
 import { ProjectionBandCompact } from '../components/projection/ProjectionBand';
+import { ProjectionRecommendationCompact } from '../components/projection/ProjectionRecommendation';
 import { ProjectionBasisCompact } from '../components/projection/ProjectionBasis';
 
 function TierBadge({ tier }: { tier?: string }) {
@@ -372,6 +373,12 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
               ? blueprint.agentTopic
               : 'Agent purpose not available for this opportunity.'}
           </p>
+          {/* 2.0-A1 T5: the intervention statement — what the agent handles and
+              what still needs a person — sits with the purpose, so the purpose
+              is never read as a promised outcome. */}
+          <div className="mt-3">
+            <ProjectionRecommendationCompact projection={projection} />
+          </div>
         </SectionBlock>
 
         {/* 2.0-A1 T4 — the projection band, its evidence label, and its
