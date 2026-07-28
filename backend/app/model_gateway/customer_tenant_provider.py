@@ -307,15 +307,36 @@ class CustomerTenantModelProvider(ModelProvider):
     def embedding_identity(self) -> "tuple[str, str]":
         """Stamp identity/version for customer-tenant vectors (R18-B1 T3 / AC8).
 
-        Identity qualifies the provider name with the configured embedding
-        deployment so repinning ``CUSTOMER_TENANT_EMBEDDING_DEPLOYMENT`` yields a
-        distinct identity — the retrieval substrate then never compares vectors
-        across deployments. The managed service exposes an explicit API version
-        (``CUSTOMER_TENANT_API_VERSION``), which is a genuine version signal, so it
-        is stamped as the version component. Read live from a fresh config, like
-        ``_run_embed``; an unconfigured deployment falls back to ``(name, "")``.
+        The stamp is the compatibility marker the retrieval substrate filters on,
+        so it must name what actually determines the VECTOR SPACE — the embedding
+        model — and change only when that space changes.
+
+        Preferred form (``CUSTOMER_TENANT_EMBEDDING_MODEL`` declared): identity is
+        the provider name qualified by the underlying model
+        (``customer_tenant:text-embedding-3-small``) and version is the model's own
+        version (``CUSTOMER_TENANT_EMBEDDING_MODEL_VERSION``, e.g. ``1``). This is
+        the accurate marker on two counts:
+
+        * A managed deployment NAME is an operator-chosen alias. Two deployments of
+          the same model produce the same, mutually comparable vector space, so
+          keying identity on the alias would needlessly invalidate every vector if
+          the deployment were ever recreated under a different name.
+        * The service ``api-version`` versions the REST surface, not the model.
+          Moving from ``2023-05-15`` to ``2024-12-01-preview`` changes nothing about
+          the embeddings, so stamping it as the model version would invalidate the
+          entire index and force a full re-embed of unchanged content on a routine
+          API-version bump.
+
+        Fallback (model undeclared): the previous behaviour — deployment alias +
+        API version — so an existing deployment's stamps do not shift underneath it.
+        An unconfigured embedding deployment falls back to ``(name, "")``.
+
+        Read live from a fresh config, like ``_run_embed``.
         """
         cfg = CustomerTenantConfig()
+        model = cfg.embedding_model()
+        if model:
+            return (f"{self.name}:{model}", cfg.embedding_model_version())
         deployment = cfg.embedding_deployment()
         if not deployment:
             return (self.name, "")
