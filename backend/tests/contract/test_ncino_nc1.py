@@ -41,9 +41,9 @@ def mock_status(code):
 
 @contextmanager
 def patch_sf_env(url="https://test.my.salesforce.com", token="test-sf-token"):
-    # nCino runs against the connected Salesforce org: the URL stays instance
-    # config (env), the token now comes from the per-run credential context
-    # (vault-sourced) — never a process-global env credential.
+    # nCino runs against the connected Salesforce org: URL and token both come
+    # from the per-run credential context (vault-sourced). The env var remains
+    # patched so tests prove the health check ignores any process-global URL.
     with patch.dict("os.environ", {"SF_INSTANCE_URL": url}):
         set_live_connectors({"salesforce": {"url": url, "token": token}})
         try:
@@ -71,13 +71,36 @@ class TestNcinoHealthCheck:
         assert result.system == "nCino"
         assert result.is_live is False
 
-    def test_url_but_no_token_returns_fixture(self):
+    def test_env_url_without_vault_record_returns_fixture(self):
         env = {k: v for k, v in os.environ.items() if k != "SF_ACCESS_TOKEN"}
         env["SF_INSTANCE_URL"] = "https://test.my.salesforce.com"
         with patch.dict(os.environ, env, clear=True):
             result = self._check()()
 
         assert result.status == "fixture"
+        assert "test.my.salesforce.com" not in result.message
+
+    def test_vault_record_missing_url_returns_named_error(self):
+        marker = "https://env-should-never-be-used.example"
+        set_live_connectors({"salesforce": {"token": "test-sf-token"}})
+        with patch.dict(os.environ, {"SF_INSTANCE_URL": marker}, clear=True):
+            result = self._check()()
+
+        assert result.status == "error"
+        assert "Salesforce credential record" in result.message
+        assert "instance URL" in result.message
+        assert "salesforce" in result.message
+        assert marker not in result.message
+
+    def test_vault_record_missing_token_returns_named_error(self):
+        set_live_connectors({"salesforce": {"url": "https://test.my.salesforce.com"}})
+        with patch.dict(os.environ, {"SF_ACCESS_TOKEN": "ENV-TOKEN-MUST-NOT-BE-USED"}, clear=True):
+            result = self._check()()
+
+        assert result.status == "error"
+        assert "Salesforce credential record" in result.message
+        assert "access token" in result.message
+        assert "ENV-TOKEN-MUST-NOT-BE-USED" not in result.message
 
     def test_200_returns_live(self):
         with patch_sf_env():

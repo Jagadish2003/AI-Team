@@ -82,6 +82,12 @@ function normalizeConnector(raw: ConnectorPayload): Connector | null {
     products: Array.isArray(raw.products)
       ? raw.products.filter((product): product is string => typeof product === 'string')
       : [],
+    // R191-R1 T5 (AT-726): roadmap flags stamped by the backend catalog overlay.
+    // A tile without a shipped ingestor comes back roadmap=true with its target
+    // release metadata; the tile renders it non-connectable "Coming soon".
+    roadmap: raw.roadmap === true,
+    roadmapTarget:
+      typeof raw.roadmapTarget === 'string' ? raw.roadmapTarget : null,
   };
 }
 

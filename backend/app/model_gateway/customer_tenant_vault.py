@@ -16,15 +16,13 @@ Resolution order (secure first, dev fallback second)
    production the credential lives ONLY in the vault (the env var is unset), so
    revoking the vault credential fully revokes access.
 
-Production guard (R1.9.1-H1 T4 — F4 fix)
-------------------------------------------
-The 1.8 verification's F4 finding: the env fallback above is acceptable in
-dev, but must be *impossible* under a production deployment profile — not
-merely discouraged. :func:`resolve_customer_tenant_api_key` now gates the env
-fallback on :func:`app.deployment_profile.is_production` rather than checking
-``REQUIRE_CONNECTOR_SECRETS`` directly, so both recognised production signals
-(``ENVIRONMENT=production`` and ``REQUIRE_CONNECTOR_SECRETS=1``) block it, not
-just the latter. :func:`validate_no_production_env_fallback` is the paired
+Production guard (R1.9.1-H1 T4)
+--------------------------------
+The env fallback above is acceptable in dev/standalone runs, but must be
+impossible under the production deployment profile. Production is selected only
+by ``ENVIRONMENT=production``; ``REQUIRE_CONNECTOR_SECRETS=1`` is an operational
+startup-enforcement flag and does not itself make staging/CI production.
+:func:`validate_no_production_env_fallback` is the paired
 startup check: if the deployment is production AND the env var is still set,
 it logs a warning naming the var — the value is never read for use, but a
 stale var left in a production environment is a config-hygiene problem worth
@@ -92,9 +90,9 @@ def resolve_customer_tenant_api_key() -> str:
 
     # 2) Dev/standalone fallback: the environment variable.
     #
-    # Suppressed in production (R1.9.1-H1 T4 / F4 fix): under the production
-    # deployment profile — ENVIRONMENT=production or REQUIRE_CONNECTOR_SECRETS=1
-    # — the credential MUST come from the vault so that customer
+    # Suppressed in production (R1.9.1-H1 T4): under the production
+    # deployment profile (ENVIRONMENT=production), the credential MUST come
+    # from the vault so that customer
     # rotation/revocation is authoritative. If we fell back to
     # CUSTOMER_TENANT_API_KEY here, a revoked vault credential could be silently
     # overridden by a stale env var — bypassing the vault entirely. In that case
@@ -130,8 +128,8 @@ def validate_no_production_env_fallback() -> None:
     if is_production() and os.getenv(CONFIG_KEY_API_KEY):
         logger.warning(
             "%s is set in the environment, but this deployment is running "
-            "under the production profile (ENVIRONMENT=production or "
-            "REQUIRE_CONNECTOR_SECRETS=1). The customer-tenant credential "
+            "under the production profile (ENVIRONMENT=production). The "
+            "customer-tenant credential "
             "vault is the sole source of this credential in production, so "
             "the environment variable is ignored. Remove it from the "
             "production environment and manage the credential through the "

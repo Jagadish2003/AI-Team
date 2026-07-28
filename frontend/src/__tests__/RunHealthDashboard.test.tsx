@@ -210,6 +210,32 @@ describe("RunHealthDashboardPage", () => {
     expect(screen.getByText("Health partially unavailable")).toBeInTheDocument();
   });
 
+  it("keeps supporting source details constrained inside the content panel", async () => {
+    api.fetchContentHealth.mockResolvedValue({
+      ...contentResponse,
+      indexed_by_source: [{
+        source_system: "sharepoint_workspace_with_extremely_long_identifier_that_used_to_expand_the_table",
+        chunk_count: 120,
+        embedded_count: 110,
+      }],
+      skipped: [{ reason: "very_long_skip_reason_that_should_wrap_inside_the_panel", count: 3 }],
+    });
+    renderPage();
+
+    const panel = await screen.findByTestId("panel-content");
+    expect(panel).toHaveClass("min-w-0");
+    expect(panel).toHaveClass("overflow-hidden");
+
+    const details = within(panel).getByText("Supporting source details").closest("details");
+    expect(details).toHaveClass("min-w-0");
+    expect(details).toHaveClass("overflow-hidden");
+    expect(details?.querySelector("table")?.className).toContain("table-fixed");
+
+    const sourceCell = within(panel).getByText(/Sharepoint Workspace With Extremely Long Identifier/i).closest("td");
+    expect(sourceCell).toHaveClass("break-words");
+    expect(within(panel).getByText(/Very Long Skip Reason That Should Wrap Inside The Panel/i)).toHaveClass("break-words");
+  });
+
   it("shows independent loading states for every health read", () => {
     const pending = new Promise(() => undefined);
     api.fetchConnectorHealth.mockReturnValue(pending);

@@ -164,7 +164,7 @@ class TestAC1_FailClosedVaultMiss:
         assert {h["appId"] for h in ingestor.credential_health} == {"payments-api"}
 
     def test_health_record_is_actionable_and_secret_free(self):
-        """The connector-health record names the target + credential ref, no secret."""
+        """The connector-health record names org + target + credential ref, no secret."""
         ingestor = _fake_ingestor(
             targets=[_Target("payments-api", credential_ref="java_app")],
             vault={},  # miss
@@ -177,6 +177,7 @@ class TestAC1_FailClosedVaultMiss:
         assert h["isLive"] is False
         assert h["appId"] == "payments-api"
         assert h["credentialRef"] == "java_app"        # a vault KEY name, not a secret
+        assert "org-h1-t5" in h["message"]
         assert "payments-api" in h["message"]
         assert "java_app" in h["message"]
 
@@ -252,6 +253,12 @@ class TestAC2_GuardCoversIngestLayer:
         stale = [f"{p} / {m}" for p, m in guard._INGEST_ALLOWLIST if (p, m) not in live]
         assert stale == [], f"stale allow-list entries: {stale}"
 
+    def test_salesforce_jira_health_urls_are_not_allowlisted(self):
+        """Health probes must not preserve the old SF_INSTANCE_URL/JIRA_URL path."""
+        guard = _load_guard_module()
+        assert ("connector_health.py", "JIRA_URL") not in guard._INGEST_ALLOWLIST
+        assert ("connector_health.py", "SF_INSTANCE_URL") not in guard._INGEST_ALLOWLIST
+
 
 class TestAC3_UnlistedEnvReadFailsCI:
     """AC3: a new ingest module with an unlisted env read fails CI, no test edit."""
@@ -322,6 +329,7 @@ class TestAC4_CredentialRecordUrlEnforcement:
     def test_salesforce_missing_url_raises_named_error_no_env_leak(self, monkeypatch):
         import discovery.ingest as ingest_pkg
         from discovery.ingest import salesforce as sf_mod
+        from discovery.ingest.operational_config import CredentialRecordError
 
         monkeypatch.setattr(sf_mod, "is_live", lambda: True)
         monkeypatch.setenv("SF_INSTANCE_URL", "https://env-should-never-be-used")
@@ -331,12 +339,14 @@ class TestAC4_CredentialRecordUrlEnforcement:
         )
         monkeypatch.setattr(ingest_pkg, "resolve_vault_connector", lambda cid: None)
 
-        with pytest.raises(sf_mod.IngestError) as exc:
+        with pytest.raises(CredentialRecordError) as exc:
             sf_mod._get_client()
         msg = str(exc.value)
         assert "instance URL" in msg
         assert "salesforce" in msg                      # names the record
         assert "env-should-never-be-used" not in msg    # never uses/leaks the env value
+        assert exc.value.connector_id == "salesforce"
+        assert exc.value.missing_field == "url"
 
     def test_jira_missing_url_raises_named_error_no_env_leak(self, monkeypatch):
         monkeypatch.setenv("INGEST_MODE", "live")
@@ -378,8 +388,8 @@ _FAKE_ENV_KEY = "env-FAKE-KEY-never-used-in-prod"
 class TestAC5_CustomerTenantProductionProfile:
     """AC5: env fallback is impossible under production; dev behaviour unchanged."""
 
-    def test_is_production_recognises_both_signals(self, monkeypatch):
-        """Either ENVIRONMENT=production or REQUIRE_CONNECTOR_SECRETS=1 is prod."""
+    def test_is_production_recognises_environment_only(self, monkeypatch):
+        """Only ENVIRONMENT=production selects the production profile."""
         from app.deployment_profile import is_production
 
         monkeypatch.delenv("ENVIRONMENT", raising=False)
@@ -387,7 +397,7 @@ class TestAC5_CustomerTenantProductionProfile:
         assert is_production() is False
 
         monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")
-        assert is_production() is True
+        assert is_production() is False
 
         monkeypatch.delenv("REQUIRE_CONNECTOR_SECRETS", raising=False)
         monkeypatch.setenv("ENVIRONMENT", "production")
@@ -402,6 +412,7 @@ class TestAC5_CustomerTenantProductionProfile:
         from app.model_gateway.customer_tenant_config import CONFIG_KEY_API_KEY
         from app.model_gateway.customer_tenant_vault import resolve_customer_tenant_api_key
 
+        monkeypatch.setenv("ENVIRONMENT", "production")
         monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")
         monkeypatch.delenv("CREDENTIAL_VAULT_KEY", raising=False)
         monkeypatch.setenv(CONFIG_KEY_API_KEY, _FAKE_ENV_KEY)
@@ -436,7 +447,8 @@ class TestAC5_CustomerTenantProductionProfile:
         from app.model_gateway._interface import GenerationRequest
         from app.model_gateway.customer_tenant_config import CONFIG_KEY_API_KEY
 
-        monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")           # production
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")           # secret enforcement only
         monkeypatch.delenv("CREDENTIAL_VAULT_KEY", raising=False)      # no usable vault
         monkeypatch.setenv(CONFIG_KEY_API_KEY, _FAKE_ENV_KEY)          # present but ignored
         # A non-empty endpoint so generation_endpoint() is truthy; the path is
@@ -474,6 +486,7 @@ class TestAC5_CustomerTenantProductionProfile:
             validate_no_production_env_fallback,
         )
 
+        monkeypatch.setenv("ENVIRONMENT", "production")
         monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")
         monkeypatch.setenv(CONFIG_KEY_API_KEY, _FAKE_ENV_KEY)
         with caplog.at_level(logging.WARNING):

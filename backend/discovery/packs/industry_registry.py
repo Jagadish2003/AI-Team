@@ -29,8 +29,18 @@ IndustryConfig fields:
   system_defaults     — dict[system_id -> SystemDefaultConfig]
                         industry-calibrated role + workflow focus defaults
                         for each system. Replaces generic SYSTEM_DEFAULT_ASSUMPTIONS.
+                        R191-R1 "anchor-on-shipped" rule: every key here MUST have
+                        a shipped ingestor/connector — never a roadmap system. See
+                        roadmap_systems below for the non-connectable counterpart.
   recommended_systems — system IDs to suggest as additions on Screen 4
-                        when not already selected. Ordered by priority.
+                        when not already selected. Ordered by priority. Same
+                        anchor-on-shipped rule as system_defaults.
+  roadmap_systems     — (R191-R1) list[RoadmapSystemConfig] for systems this
+                        industry genuinely wants but that have no shipped
+                        ingestor yet (e.g. SAP/D365, target 2.0.1). Rendered as
+                        an explicit roadmap label in Stack Builder / the
+                        Integration Hub — never a connectable default, never
+                        selectable by a run. Defaults to empty.
   llm_context_suffix  — appended to pack llm_context for industry specificity
 
 SystemDefaultConfig fields:
@@ -38,17 +48,37 @@ SystemDefaultConfig fields:
   priority       — SystemPriority default
   workflow_focus — list of WorkflowFocusTag defaults (max 3)
 
+RoadmapSystemConfig fields (R191-R1 — anchor-on-shipped):
+  system_id      — same id space as SystemDefaultConfig keys; MUST NOT also
+                   appear in system_defaults or recommended_systems for the
+                   same industry (a system is either shipped-and-connectable
+                   or roadmap-and-not, never both).
+  label          — display label for the roadmap tile/badge.
+  target_release — the release expected to ship the ingestor (e.g. "2.0.1").
+  reason         — short, honest, user-facing note on why it isn't connectable yet.
+
 Public API:
   get_industry(industry_id) -> Optional[IndustryConfig]
   list_industries() -> list[IndustryConfig]
   get_system_defaults(industry_id, system_id) -> Optional[SystemDefaultConfig]
   get_recommended_systems(industry_id, selected_ids) -> list[str]
   get_pack_hints(industry_id) -> list[str]
+  get_roadmap_systems(industry_id) -> list[RoadmapSystemConfig]
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+
+# R191-R1: the SAP/D365 demand-gated release target is owned by
+# app.connector_roadmap (the catalog's roadmap source of truth). Import it here so
+# the Stack Builder registry and the Integration Hub catalog never drift on the
+# target string — one edit there moves both surfaces. (app.connector_roadmap is a
+# standalone, dependency-light module, so this import introduces no cycle.)
+try:
+    from app.connector_roadmap import TARGET_2_0_1
+except ModuleNotFoundError:  # project-root execution uses backend as package
+    from backend.app.connector_roadmap import TARGET_2_0_1
 
 
 # ── Data models ───────────────────────────────────────────────────────────────
@@ -65,6 +95,20 @@ class SystemDefaultConfig:
 
 
 @dataclass
+class RoadmapSystemConfig:
+    """
+    A system this industry genuinely wants but that has no shipped ingestor
+    yet (R191-R1 "anchor-on-shipped" rule). Rendered as an explicit roadmap
+    label in Stack Builder / the Integration Hub catalog — never a connectable
+    default, never selectable by a run.
+    """
+    system_id: str        # same id space as SystemDefaultConfig keys
+    label: str             # display label for the roadmap tile/badge
+    target_release: str    # e.g. "2.0.1"
+    reason: str             # short, honest, user-facing note
+
+
+@dataclass
 class IndustryConfig:
     """
     Full configuration for one industry in the Stack Builder registry.
@@ -75,6 +119,7 @@ class IndustryConfig:
     system_defaults: Dict[str, SystemDefaultConfig]   # system_id -> defaults
     recommended_systems: List[str]                     # ordered by priority
     llm_context_suffix: str
+    roadmap_systems: List[RoadmapSystemConfig] = field(default_factory=list)
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
@@ -84,7 +129,9 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
     "financial_services": IndustryConfig(
         industry_id="financial_services",
         label="Financial services",
-        pack_hints=["ncino", "service_cloud"],
+        # R191-R1 T3: sqlserver_opsignal added — the shipped native-DB pack
+        # serves the new database anchor below.
+        pack_hints=["ncino", "service_cloud", "sqlserver_opsignal"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals", "compliance_risk"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests", "compliance_risk"]),
@@ -95,8 +142,16 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "confluence":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
             "sharepoint":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
+            # R191-R1 T4: Teams available wherever Slack is offered — mirrors
+            # slack's priority/workflow_focus exactly (the established pattern
+            # from public_sector/manufacturing/logistics_supply_chain).
+            "teams":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
+            # R191-R1 T3: databases — a shipped source (native DB connector,
+            # sqlserver_opsignal pack) that genuinely fits core banking / loan
+            # servicing / risk data stores underneath the CRM layer.
+            "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "backlog_work_queues"]),
         },
-        recommended_systems=["jira", "servicenow", "confluence"],
+        recommended_systems=["jira", "servicenow", "confluence", "sqlserver"],
         llm_context_suffix=(
             "Financial services context. Regulatory compliance (FCA, SEC, OCC) "
             "is the highest-weight signal category. Covenant tracking, approval "
@@ -108,7 +163,9 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
     "public_sector": IndustryConfig(
         industry_id="public_sector",
         label="Public sector",
-        pack_hints=["service_cloud"],
+        # R191-R1 T3: sqlserver_opsignal added — the shipped native-DB pack
+        # serves the new database anchor below.
+        pack_hints=["service_cloud", "sqlserver_opsignal"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals", "compliance_risk"]),
             "salesforce_pss": SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "compliance_risk", "approvals"]),
@@ -119,8 +176,13 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "sharepoint":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
             "teams":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
+            # R191-R1 T3: databases — a shipped source (native DB connector,
+            # sqlserver_opsignal pack) that genuinely fits the legacy
+            # case-management / records databases underneath many agencies'
+            # public-facing systems.
+            "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "backlog_work_queues"]),
         },
-        recommended_systems=["slack", "sharepoint", "servicenow"],
+        recommended_systems=["slack", "sharepoint", "servicenow", "sqlserver"],
         llm_context_suffix=(
             "Public sector context. Regulatory deadline compliance, fiduciary "
             "obligations, and audit-trail completeness are highest-weight signals. "
@@ -132,29 +194,53 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
    "logistics_supply_chain": IndustryConfig(
     industry_id="logistics_supply_chain",
     label="Logistics & supply chain",
-    pack_hints=["service_cloud"],
+    # R191-R1: sqlserver_opsignal added — the shipped native-DB pack fits the
+    # operational-signal role sap/dynamics365 used to (incorrectly) anchor.
+    pack_hints=["service_cloud", "sqlserver_opsignal"],
     system_defaults={
         "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "handoffs_routing", "approvals"]),
         "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "handoffs_routing"]),
-        "sap":            SystemDefaultConfig("system_of_record",          "primary",   ["handoffs_routing", "approvals", "compliance_risk"]),
-        "dynamics365":    SystemDefaultConfig("system_of_record",          "primary",   ["handoffs_routing", "approvals"]),
         "jira":           SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "handoffs_routing"]),
         "servicenow":     SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "compliance_risk"]),
         "confluence":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
+        # R191-R1 re-anchor: databases, documents, and Teams are shipped sources
+        # that genuinely fit logistics/supply-chain operations (dispatch/procurement
+        # records, carrier and customs paperwork, cross-team handoff chat) — replacing
+        # the removed SAP/D365 anchoring below.
+        "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "backlog_work_queues"]),
+        "documents":      SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge", "handoffs_routing"]),
+        "teams":          SystemDefaultConfig("operational_signal_source", "secondary", ["communications", "handoffs_routing"]),
         "slack":          SystemDefaultConfig("operational_signal_source", "secondary", ["communications", "handoffs_routing"]),
     },
-    recommended_systems=["jira", "slack", "confluence"],
+    recommended_systems=["jira", "sqlserver", "documents"],
     llm_context_suffix=(
         "Logistics and supply chain context. Cross-system handoffs, "
         "throughput bottlenecks, and approval delays in procurement and "
         "dispatch workflows are the primary friction categories."
     ),
+    # R191-R1 "anchor-on-shipped": SAP and Dynamics 365 are genuinely relevant
+    # to this industry but have no shipped ingestor/pack today. They render as
+    # roadmap (target 2.0.1) rather than a connectable default — never
+    # selectable by a run — until a real connector ships (CEO decision:
+    # SAP/D365 connectors and packs defer to 2.0.1, demand-gated).
+    roadmap_systems=[
+        RoadmapSystemConfig(
+            "sap", "SAP", TARGET_2_0_1,
+            "SAP connector and pack are demand-gated for 2.0.1 — not yet connectable.",
+        ),
+        RoadmapSystemConfig(
+            "dynamics365", "Dynamics 365", TARGET_2_0_1,
+            "Dynamics 365 connector and pack are demand-gated for 2.0.1 — not yet connectable.",
+        ),
+    ],
 ),
 
     "retail_commerce": IndustryConfig(
         industry_id="retail_commerce",
         label="Retail & commerce",
-        pack_hints=["service_cloud"],
+        # R191-R1 T3: sqlserver_opsignal added — the shipped native-DB pack
+        # serves the new database anchor below.
+        pack_hints=["service_cloud", "sqlserver_opsignal"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests"]),
@@ -162,9 +248,16 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "jira":           SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues"]),
             "servicenow":     SystemDefaultConfig("operational_signal_source", "secondary", ["service_casework", "backlog_work_queues"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "secondary", ["communications"]),
+            # R191-R1 T4: Teams available wherever Slack is offered — mirrors
+            # slack's priority/workflow_focus exactly.
+            "teams":          SystemDefaultConfig("operational_signal_source", "secondary", ["communications"]),
             "confluence":     SystemDefaultConfig("documentation_system",      "optional",  ["documents_knowledge"]),
+            # R191-R1 T3: databases — a shipped source (native DB connector,
+            # sqlserver_opsignal pack) that genuinely fits POS / inventory /
+            # order-management databases underneath the storefront layer.
+            "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "backlog_work_queues"]),
         },
-        recommended_systems=["jira", "slack", "confluence"],
+        recommended_systems=["jira", "slack", "confluence", "sqlserver"],
         llm_context_suffix=(
             "Retail and commerce context. Customer service case routing, "
             "returns processing, and order-to-fulfilment handoffs are "
@@ -175,7 +268,9 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
     "healthcare": IndustryConfig(
         industry_id="healthcare",
         label="Healthcare",
-        pack_hints=["service_cloud"],
+        # R191-R1 T3: sqlserver_opsignal added — the shipped native-DB pack
+        # serves the new database anchor below.
+        pack_hints=["service_cloud", "sqlserver_opsignal"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "compliance_risk", "approvals"]),
             "salesforce_hc":  SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "compliance_risk", "approvals"]),
@@ -185,8 +280,15 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "sharepoint":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge", "compliance_risk"]),
             "confluence":     SystemDefaultConfig("documentation_system",      "optional",  ["documents_knowledge"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
+            # R191-R1 T4: Teams available wherever Slack is offered — mirrors
+            # slack's priority/workflow_focus exactly.
+            "teams":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
+            # R191-R1 T3: databases — a shipped source (native DB connector,
+            # sqlserver_opsignal pack) that genuinely fits clinical/ancillary
+            # data stores underneath the EHR layer (lab, scheduling, billing).
+            "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "compliance_risk"]),
         },
-        recommended_systems=["servicenow", "sharepoint", "slack"],
+        recommended_systems=["servicenow", "sharepoint", "slack", "sqlserver"],
         llm_context_suffix=(
             "Healthcare context. HIPAA compliance, clinical workflow approvals, "
             "and patient-facing service SLAs are highest-weight signal categories. "
@@ -197,67 +299,146 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
     "energy_utilities": IndustryConfig(
         industry_id="energy_utilities",
         label="Energy & utilities",
-        pack_hints=["service_cloud"],
+        # R191-R1 T3: sqlserver_opsignal added — the shipped native-DB pack
+        # serves the new database anchor below. R191-R1 T6 now enforces the
+        # full anchor-on-shipped rule, so SAP moves to roadmap until its real
+        # ingestor ships.
+        pack_hints=["service_cloud", "sqlserver_opsignal"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "compliance_risk", "approvals"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "compliance_risk"]),
-            "sap":            SystemDefaultConfig("system_of_record",          "primary",   ["approvals", "compliance_risk", "handoffs_routing"]),
             "servicenow":     SystemDefaultConfig("operational_signal_source", "secondary", ["compliance_risk", "backlog_work_queues"]),
             "jira":           SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "change_release"]),
             "sharepoint":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge", "compliance_risk"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
+            # R191-R1 T4: Teams available wherever Slack is offered — mirrors
+            # slack's priority/workflow_focus exactly.
+            "teams":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
+            # R191-R1 T3: databases — a shipped source (native DB connector,
+            # sqlserver_opsignal pack) that genuinely fits asset-management /
+            # billing / SCADA-adjacent data stores underneath the ERP layer.
+            "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "backlog_work_queues"]),
         },
-        recommended_systems=["servicenow", "sharepoint", "jira"],
+        recommended_systems=["servicenow", "sharepoint", "jira", "sqlserver"],
         llm_context_suffix=(
             "Energy and utilities context. Regulatory compliance, asset "
             "maintenance approval workflows, and field-to-office handoff "
             "friction are primary signal categories."
         ),
+        roadmap_systems=[
+            RoadmapSystemConfig(
+                "sap", "SAP", TARGET_2_0_1,
+                "SAP connector and pack are demand-gated for 2.0.1 - not yet connectable.",
+            ),
+        ],
     ),
 
     "manufacturing": IndustryConfig(
         industry_id="manufacturing",
         label="Manufacturing",
-        pack_hints=["service_cloud"],
+        # R191-R1: sqlserver_opsignal added — the shipped native-DB pack fits the
+        # operational-signal role sap/dynamics365 used to (incorrectly) anchor.
+        pack_hints=["service_cloud", "sqlserver_opsignal"],
         system_defaults={
-            "sap":            SystemDefaultConfig("system_of_record",          "primary",   ["approvals", "handoffs_routing", "compliance_risk"]),
-            "dynamics365":    SystemDefaultConfig("system_of_record",          "primary",   ["approvals", "handoffs_routing"]),
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "approvals"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "handoffs_routing"]),
             "servicenow":     SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "compliance_risk"]),
             "jira":           SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "change_release"]),
             "confluence":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
+            # R191-R1 re-anchor: databases, documents, and Teams are shipped sources
+            # that genuinely fit manufacturing operations (MES/plant-floor database
+            # signal, work-order/quality documentation, cross-shift handoff chat) —
+            # replacing the removed SAP/D365 anchoring below.
+            "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "backlog_work_queues"]),
+            "documents":      SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge", "compliance_risk"]),
+            "teams":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
         },
-        recommended_systems=["servicenow", "jira", "confluence"],
+        recommended_systems=["servicenow", "sqlserver", "documents"],
         llm_context_suffix=(
             "Manufacturing context. Work order approval friction, maintenance "
             "scheduling bottlenecks, and cross-system handoffs between ERP "
             "and operations systems are primary friction patterns."
         ),
+        # R191-R1 "anchor-on-shipped": SAP and Dynamics 365 are genuinely relevant
+        # to this industry but have no shipped ingestor/pack today. They render as
+        # roadmap (target 2.0.1) rather than a connectable default — never
+        # selectable by a run — until a real connector ships (CEO decision:
+        # SAP/D365 connectors and packs defer to 2.0.1, demand-gated).
+        roadmap_systems=[
+            RoadmapSystemConfig(
+                "sap", "SAP", TARGET_2_0_1,
+                "SAP connector and pack are demand-gated for 2.0.1 — not yet connectable.",
+            ),
+            RoadmapSystemConfig(
+                "dynamics365", "Dynamics 365", TARGET_2_0_1,
+                "Dynamics 365 connector and pack are demand-gated for 2.0.1 — not yet connectable.",
+            ),
+        ],
     ),
 
     "technology": IndustryConfig(
         industry_id="technology",
         label="Technology",
-        pack_hints=["service_cloud"],
+        # R191-R1 T2: sqlserver_opsignal added — the shipped native-DB pack
+        # serves the new database anchor below. T4: github_engineering added —
+        # technology already anchors github as a connectable default (T2); the
+        # pack that actually scores its PR/commit/branch signal was missing
+        # from the hint list, leaving this industry an honest-pack-list gap
+        # (the story's own example for this sub-goal). The 1.9 cloud-ops/
+        # sec-ops packs the story also names are NOT present in this codebase
+        # (no such pack_id exists in pack_config.PACK_REGISTRY) — anchor-on-
+        # shipped means they are deliberately omitted, not guessed at.
+        pack_hints=["service_cloud", "sqlserver_opsignal", "github_engineering"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests"]),
             "salesforce_rc":  SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals"]),
-            "jira":           SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "change_release"]),
+            # R191-R1 T4: reduce Salesforce-centric anchoring — technology's own
+            # llm_context_suffix names engineering delivery friction, backlog
+            # bottlenecks, and deployment approval delays as the PRIMARY signal
+            # category for this industry, not case/service work. Jira (shipped)
+            # is the honest co-primary system for that signal, not a secondary
+            # one — elevated from operational_signal_source/secondary to
+            # workflow_system/primary. Salesforce variants stay primary too
+            # (a tech company's customer-facing side is real); this is additive
+            # primary-anchor diversification, not a Salesforce removal.
+            "jira":           SystemDefaultConfig("workflow_system",           "primary",   ["backlog_work_queues", "change_release"]),
             "servicenow":     SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "compliance_risk"]),
+            # R191-R1 T2: GitHub has a shipped connector/pack (connectors/saas/
+            # github.py + github_engineering) and stays a connectable default —
+            # optional priority, unchanged. GitLab has no shipped ingestor and
+            # moves to roadmap_systems below (was incorrectly anchored here).
             "github":         SystemDefaultConfig("engineering_change_system", "optional",  ["change_release", "backlog_work_queues"]),
-            "gitlab":         SystemDefaultConfig("engineering_change_system", "optional",  ["change_release", "backlog_work_queues"]),
             "confluence":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "secondary", ["communications", "change_release"]),
+            # R191-R1 T4: Teams available wherever Slack is offered — mirrors
+            # slack's priority/workflow_focus exactly.
+            "teams":          SystemDefaultConfig("operational_signal_source", "secondary", ["communications", "change_release"]),
+            # R191-R1 T2: databases — a shipped source (native DB connector,
+            # sqlserver_opsignal pack) that genuinely fits a technology company's
+            # internal operational/ticketing database signal.
+            "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "backlog_work_queues"]),
         },
-        recommended_systems=["jira", "slack", "confluence"],
+        recommended_systems=["jira", "slack", "confluence", "sqlserver"],
         llm_context_suffix=(
             "Technology company context. Engineering delivery friction, "
             "backlog bottlenecks, deployment approval delays, and cross-team "
             "handoff failures are primary signal categories."
         ),
+        # R191-R1 "anchor-on-shipped": GitLab is genuinely relevant to a
+        # technology company but has no shipped ingestor today. It renders as
+        # roadmap rather than a connectable default — never selectable by a
+        # run. Unlike SAP/D365 (explicitly committed to 2.0.1), GitLab carries
+        # no committed release target in the story, so it is marked
+        # "unscheduled" rather than a fabricated version.
+        roadmap_systems=[
+            RoadmapSystemConfig(
+                "gitlab", "GitLab", "unscheduled",
+                "GitLab has no shipped ingestor — GitHub is the connectable "
+                "engineering-change source today; GitLab is not yet connectable.",
+            ),
+        ],
     ),
 }
 
@@ -335,3 +516,18 @@ def get_llm_context_suffix(industry_id: str) -> str:
     if not config:
         return ""
     return config.llm_context_suffix
+
+
+def get_roadmap_systems(industry_id: str) -> List[RoadmapSystemConfig]:
+    """
+    Return the non-connectable roadmap systems for this industry (R191-R1).
+
+    These are systems the industry genuinely wants but that have no shipped
+    ingestor yet (e.g. SAP/D365, target 2.0.1). Callers must render them as an
+    explicit roadmap label — never as a connectable default, never as a run
+    selection. Returns [] if the industry is not found or declares none.
+    """
+    config = INDUSTRY_REGISTRY.get(industry_id)
+    if not config:
+        return []
+    return config.roadmap_systems

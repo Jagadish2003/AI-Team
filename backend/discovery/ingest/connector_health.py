@@ -168,32 +168,45 @@ def check_jira() -> ConnectorHealth:
     """
     JIRA-CONNECT-1: Test Jira connectivity.
 
-    Env vars required for live mode:
-      JIRA_URL    e.g. https://mycompany.atlassian.net
-      JIRA_TOKEN  Personal access token or API token
+    Live mode uses the per-org Jira credential record only: base URL plus token.
+    There is no JIRA_URL / JIRA_TOKEN environment fallback.
 
     Health endpoint: GET /rest/api/3/myself
     Returns ConnectorHealth with status "live", "fixture", or "error".
     """
     cred = _resolve_live_credential("jira")
-    jira_url = (cred.get("url") or os.getenv("JIRA_URL", "")).rstrip("/")
+    jira_url = (cred.get("url") or "").rstrip("/")
     jira_token = cred.get("token") or ""
     # Present on a static credential only — check with Basic (email + API token)
     # instead of an OAuth Bearer header (R18-A3 outbound-only path).
     jira_username = cred.get("username") or ""
 
-    if not jira_url:
+    if not cred:
         return ConnectorHealth(
             system="Jira",
             status="fixture",
-            message="JIRA_URL not set — using fixture data",
+            message="No Jira credential in the vault — using fixture data",
+        )
+
+    if not jira_url:
+        return ConnectorHealth(
+            system="Jira",
+            status="error",
+            message=(
+                "Jira credential record is missing its base URL ('jira' connector). "
+                "Reconnect Jira in the Integration Hub so the record carries its URL. "
+                "(No JIRA_URL environment fallback is used.)"
+            ),
         )
 
     if not jira_token:
         return ConnectorHealth(
             system="Jira",
-            status="fixture",
-            message="No Jira credential in the vault — using fixture data",
+            status="error",
+            message=(
+                "Jira credential record is missing its token ('jira' connector). "
+                "Reconnect Jira in the Integration Hub."
+            ),
         )
 
     try:
@@ -249,7 +262,7 @@ def check_jira() -> ConnectorHealth:
         return ConnectorHealth(
             system="Jira",
             status="error",
-            message=f"Cannot reach {jira_url} — check JIRA_URL",
+            message=f"Cannot reach {jira_url} — check the Jira credential record URL",
         )
     except requests.exceptions.Timeout:
         return ConnectorHealth(
@@ -270,29 +283,44 @@ def check_ncino() -> ConnectorHealth:
     """
     ENG-AIQ-NC-1: Test nCino / Salesforce connectivity.
 
-    Env vars required for live mode:
-      SF_INSTANCE_URL    e.g. https://myorg.my.salesforce.com
-      SF_ACCESS_TOKEN    OAuth bearer token
+    Live mode uses the per-org Salesforce credential record only: instance URL
+    plus OAuth token. There is no SF_INSTANCE_URL / SF_ACCESS_TOKEN environment
+    fallback.
 
     Health endpoint: GET /services/data/v59.0/sobjects/LLC_BI__Loan__c/
     Returns ConnectorHealth with status "live", "fixture", or "error".
     """
     cred = _resolve_live_credential("salesforce")
-    sf_url = (cred.get("url") or os.getenv("SF_INSTANCE_URL", "")).rstrip("/")
+    sf_url = (cred.get("url") or "").rstrip("/")
     sf_token = cred.get("token") or ""
+
+    if not cred:
+        return ConnectorHealth(
+            system="nCino",
+            status="fixture",
+            message="No Salesforce credential in the vault - using fixture data",
+        )
 
     if not sf_url:
         return ConnectorHealth(
             system="nCino",
-            status="fixture",
-            message="SF_INSTANCE_URL not set - using fixture data",
+            status="error",
+            message=(
+                "Salesforce credential record is missing its instance URL "
+                "('salesforce' connector). Reconnect Salesforce in the Integration "
+                "Hub so the record carries its URL. "
+                "(No SF_INSTANCE_URL environment fallback is used.)"
+            ),
         )
 
     if not sf_token:
         return ConnectorHealth(
             system="nCino",
-            status="fixture",
-            message="No Salesforce credential in the vault - using fixture data",
+            status="error",
+            message=(
+                "Salesforce credential record is missing its OAuth access token "
+                "('salesforce' connector). Reconnect Salesforce in the Integration Hub."
+            ),
         )
 
     try:
@@ -380,7 +408,7 @@ def check_ncino() -> ConnectorHealth:
         return ConnectorHealth(
             system="nCino",
             status="error",
-            message=f"Cannot reach {sf_url} - check SF_INSTANCE_URL",
+            message=f"Cannot reach {sf_url} - check the Salesforce credential record URL",
         )
     except requests.exceptions.Timeout:
         return ConnectorHealth(
@@ -417,8 +445,7 @@ def check_strs_benefits() -> ConnectorHealth:
     ENG-STRS-1: Test STRS Benefits Administration / PSS Salesforce connectivity.
 
     Env vars required for live mode (same as nCino — same Salesforce org):
-      SF_INSTANCE_URL    e.g. https://myorg.my.salesforce.com
-      SF_ACCESS_TOKEN    OAuth bearer token
+      Salesforce credential record URL and OAuth token from the vault
 
     Health check: probes IndividualApplication object reachability via
     SOQL smoke query. Same pattern as check_ncino().
@@ -426,21 +453,36 @@ def check_strs_benefits() -> ConnectorHealth:
     Returns ConnectorHealth with status "live", "fixture", or "error".
     """
     cred = _resolve_live_credential("salesforce")
-    sf_url   = (cred.get("url") or os.getenv("SF_INSTANCE_URL", "")).rstrip("/")
+    sf_url   = (cred.get("url") or "").rstrip("/")
     sf_token = cred.get("token") or ""
+
+    if not cred:
+        return ConnectorHealth(
+            system="STRS Benefits (PSS)",
+            status="fixture",
+            message="No Salesforce credential in the vault — using fixture data",
+        )
 
     if not sf_url:
         return ConnectorHealth(
             system="STRS Benefits (PSS)",
-            status="fixture",
-            message="SF_INSTANCE_URL not set — using fixture data",
+            status="error",
+            message=(
+                "Salesforce credential record is missing its instance URL "
+                "('salesforce' connector). Reconnect Salesforce in the Integration "
+                "Hub so the record carries its URL. "
+                "(No SF_INSTANCE_URL environment fallback is used.)"
+            ),
         )
 
     if not sf_token:
         return ConnectorHealth(
             system="STRS Benefits (PSS)",
-            status="fixture",
-            message="No Salesforce credential in the vault — using fixture data",
+            status="error",
+            message=(
+                "Salesforce credential record is missing its OAuth access token "
+                "('salesforce' connector). Reconnect Salesforce in the Integration Hub."
+            ),
         )
 
     try:

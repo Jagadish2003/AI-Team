@@ -140,6 +140,14 @@ def test_empty_vault_token_fails_closed():
         )
 
 
+def test_whitespace_only_vault_token_fails_closed():
+    with pytest.raises(OperationalCredentialMissing):
+        resolve_target_secret(
+            ORG, app_id="a", credential_ref="java_app",
+            connector_lookup=lambda ref: {"token": "   "},   # blank after strip → miss
+        )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # AC1 — the ingestor fail-closes for the missing target, continues for the rest,
 # and surfaces an actionable connector-health record
@@ -178,23 +186,54 @@ def test_missing_credential_surfaces_actionable_health():
     assert health["system"] == "Java Application"
     assert health["status"] == "error"
     assert health["isLive"] is False
-    # Actionable: names the target and the credential ref.
+    # Actionable: names the org, target, and credential ref.
     assert health["appId"] == "payments-api"
     assert health["credentialRef"] == "java_app"
+    assert ORG in health["message"]
     assert "payments-api" in health["message"]
     assert "java_app" in health["message"]
 
 
-def test_health_slate_is_reset_each_pass():
+def test_health_slate_accumulates_until_explicit_run_reset():
     ingestor = _FakeIngestor(
         targets=[_Target("payments-api", credential_ref="java_app")],
         vault={},
     )
     _drive(ingestor)
     assert len(ingestor.credential_health) == 1
-    # Fix the credential and re-run: the prior miss must not linger.
-    ingestor._vault = {"java_app": {"token": "OK"}}
+    ingestor._targets = [_Target("orders-api", credential_ref="orders_ref")]
     _drive(ingestor)
+    assert {h["appId"] for h in ingestor.credential_health} == {
+        "payments-api",
+        "orders-api",
+    }
+
+    ingestor.reset_credential_health()
+    assert ingestor.credential_health == []
+
+
+def test_change_runner_resets_health_at_distinct_run_start():
+    from discovery.ingest import change_runner
+
+    ingestor = _FakeIngestor(
+        targets=[_Target("payments-api", credential_ref="java_app")],
+        vault={},
+    )
+    change_runner.ingest_with_checkpoint(
+        ingestor,
+        ORG,
+        read_checkpoint=lambda org_id, connector_id: None,
+        save_checkpoint=lambda checkpoint: None,
+    )
+    assert len(ingestor.credential_health) == 1
+
+    ingestor._vault = {"java_app": {"token": "OK"}}
+    change_runner.ingest_with_checkpoint(
+        ingestor,
+        ORG,
+        read_checkpoint=lambda org_id, connector_id: None,
+        save_checkpoint=lambda checkpoint: None,
+    )
     assert ingestor.credential_health == []
 
 
