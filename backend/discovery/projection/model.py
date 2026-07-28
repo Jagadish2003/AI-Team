@@ -502,6 +502,13 @@ def build_projection(opp: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         "confidence": str(opp.get("confidence", "")).strip().upper() or None,
         "corroborationStatus": corroboration_state,
         "corroborationSources": list(opp.get("corroboration_sources") or []),
+        # T6 — the ENT-2 human-readable corroboration label ("Corroborated by
+        # ServiceNow incidents") and the rule ids behind it, stored so 2.0-A2 can
+        # report WHAT the projection rested on without re-deriving it from a
+        # cross-run graph that may have moved since.
+        "corroborationLabel": opp.get("corroboration_label"),
+        "corroborationRuleIds": list(opp.get("corroboration_rule_ids") or []),
+        "tripleCorroboration": bool(opp.get("triple_corroboration")),
         "evidenceStrength": "thin" if thin_evidence else "strong",
         "thinEvidence": thin_evidence,
         # T4 — the analyst-facing evidence label and the band-width tier that

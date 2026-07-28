@@ -242,15 +242,23 @@ class TestProjectionIsStoredWithTheOpportunity:
         assert len(opps) == 2, "an opportunity must never be dropped"
 
     def test_stored_projection_is_reproducible(self):
-        """AC5: recomputing from the stored record reproduces the same result."""
-        from discovery.projection import build_projection
+        """AC5: recomputing from the stored record reproduces the same result.
+
+        Compared as CORES. T6 stamps a provenance block (run id, opportunity id,
+        stable identity, timestamp) at STORE time, deliberately outside the
+        deterministic payload: a timestamp inside the computed result would make
+        every recomputation differ from its stored twin and destroy exactly the
+        guarantee this test exists to protect. The core — direction, band,
+        horizon, ledger, basis — is what must reproduce, and does.
+        """
+        from discovery.projection import build_projection, projection_core
 
         org, run = _ids()
         opps = _seed_run_with_projection(org, run)
         stored = db.run_kv_get("opps", run, [])[0]
 
         recomputed = build_projection(stored)
-        assert recomputed == stored["projection"]
+        assert projection_core(recomputed) == projection_core(stored["projection"])
         assert opps[0]["projection"] == stored["projection"]
 
 

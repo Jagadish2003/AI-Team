@@ -42,6 +42,17 @@ from .band_width import (
     projection_rank_key,
     projection_strength_of,
 )
+from .provenance import (
+    PROVENANCE_KEY,
+    PROVENANCE_SCHEMA_VERSION,
+    REQUIRED_PROVENANCE_FIELDS,
+    build_provenance,
+    get_provenance,
+    is_storable,
+    missing_provenance_fields,
+    projection_core,
+    stamp_projection,
+)
 from .recommendation import (
     RECOMMENDATION_SCHEMA_VERSION,
     REQUIRED_PARTS,
@@ -93,6 +104,15 @@ __all__ = [
     "BAND_WIDTH_MODEL_VERSION",
     "RECOMMENDATION_SCHEMA_VERSION",
     "VOCABULARY_VERSION",
+    "PROVENANCE_SCHEMA_VERSION",
+    "PROVENANCE_KEY",
+    "REQUIRED_PROVENANCE_FIELDS",
+    "build_provenance",
+    "get_provenance",
+    "is_storable",
+    "missing_provenance_fields",
+    "projection_core",
+    "stamp_projection",
     "REQUIRED_PARTS",
     "CATEGORY_GUARANTEE",
     "CATEGORY_POINT_ESTIMATE",
