@@ -219,6 +219,143 @@ TEMPLATE_REGISTRY: Dict[str, TemplateDefinition] = {
         terminology={},
         metadata={"source": "R18-C1", "version": "1.0.0"},
     ),
+
+    # MSP-B6 T5 (AT-740): the Managed Cloud Operations template — the SECOND
+    # production instance of the R18-C1 model, proving a new template is
+    # configuration only (a dict entry here + the already-served registry route),
+    # a domain away from lending. It activates the Cloud-Operations (NOC) pack and
+    # the core-operations focus, both already wired: pack_config.PACK_REGISTRY
+    # ["cloud_ops"] supplies the detectors + T4 ops-impact scorer, and
+    # focus_affinity.FOCUS_CORE_OPERATIONS already emphasises this pack's
+    # detectors. Every field below is an EDITABLE default (resolve_launch_config).
+    "managed_cloud_operations": TemplateDefinition(
+        template_id="managed_cloud_operations",
+        label="Managed Cloud Operations",
+        description=(
+            "Managed cloud-operations (NOC) starting point: ServiceNow as the "
+            "system of record, AWS/Azure event sources for operational signal, "
+            "and a runbook library for supporting context — the Cloud-Operations "
+            "pack with a core-operations focus. Speaks NOC: alerts, incidents, "
+            "runbooks, MTTR, toil, escalation."
+        ),
+        # ServiceNow (system of record) + AWS/Azure event sources (operational
+        # signal) + runbook library (supporting/documentation), per scope §2.
+        suggested_systems=[
+            "servicenow",
+            "aws_event_source",
+            "azure_event_source",
+            "runbook_library",
+        ],
+        suggested_roles={
+            "servicenow": "system_of_record",
+            "aws_event_source": "operational_signal_source",
+            "azure_event_source": "operational_signal_source",
+            # The runbook library is the supporting documentation source (same
+            # lane as Confluence in the lending template).
+            "runbook_library": "documentation_system",
+        },
+        focus_defaults=FocusDefaults(
+            # core_operations already emphasises this pack's detectors
+            # (focus_affinity.FOCUS_CORE_OPERATIONS) — no code change required.
+            focus_id="core_operations",
+            emphasis=["backlog_work_queues", "handoffs_routing", "communications"],
+        ),
+        # Cloud-Operations pack (pack_config.PACK_REGISTRY["cloud_ops"]).
+        pack_id="cloud_ops",
+        # The five primary MSP-B6 Cloud-Operations detectors this template emphasizes
+        # T2 record/stream detectors + the T3 shared-CI hotspot). Launching the
+        # untouched template applies this emphasis through the already-wired
+        # cloud_ops scorer (T4) and core-operations focus-affinity ranking.
+        detector_emphasis=[
+            "RECURRING_RESOLUTION_LOOP",
+            "ALERT_TRIAGE_TOIL",
+            "REASSIGNMENT_PING_PONG",
+            "QUEUE_AGEING",
+            "SHARED_CI_HOTSPOT",
+        ],
+        # NOC vocabulary — mirrors the pack's language_map in
+        # cloud_ops_pack_config.json so template + pack speak the same language.
+        terminology={
+            "opportunity": "finding",
+            "ticket": "incident",
+            "notification": "alert",
+            "documentation": "runbook",
+            "resolution_time": "MTTR",
+            "friction": "toil",
+            "handoff": "escalation",
+        },
+        metadata={
+            "industry_id": "technology",
+            "lane": "managed_services",
+            "source": "MSP-B6",
+            "version": "1.0.0",
+            "evidence_contract": "four_part_observed_finding",
+            "compatible_templates": ["security_operations"],
+        },
+    ),
+
+    # MSP-B12 T5: Security Operations is a registry-only instance of the same
+    # generic TemplateDefinition used by every Stack Builder template. All
+    # values are editable defaults; no customer configuration is locked here.
+    "security_operations": TemplateDefinition(
+        template_id="security_operations",
+        label="Security Operations",
+        description=(
+            "Security operations starting point: ServiceNow ITSM and Security "
+            "Operations as the system of record, AWS and Azure operational events "
+            "as supporting signals, and the runbook or playbook library as the "
+            "supporting documentation source. Activates the Security Operations "
+            "pack for recurring remediation work, routing loops, ageing, shared "
+            "infrastructure concentration, and incident-response triage effort."
+        ),
+        suggested_systems=[
+            "servicenow",
+            "aws_event_source",
+            "azure_event_source",
+            "runbook_library",
+        ],
+        suggested_roles={
+            "servicenow": "system_of_record",
+            "aws_event_source": "operational_signal_source",
+            "azure_event_source": "operational_signal_source",
+            "runbook_library": "documentation_system",
+        },
+        focus_defaults=FocusDefaults(
+            focus_id="core_operations",
+            emphasis=[
+                "backlog_work_queues",
+                "handoffs_routing",
+                "compliance_risk",
+            ],
+        ),
+        pack_id="security_ops",
+        detector_emphasis=[
+            "SECOPS_REMEDIATION_RECURRENCE",
+            "SECOPS_SECURITY_IT_PING_PONG",
+            "SECOPS_SLA_DEFERRAL_AGEING",
+            "SECOPS_SHARED_INFRA_CONCENTRATION",
+            "SECOPS_SIR_TRIAGE_TOIL",
+        ],
+        terminology={
+            "opportunity": "finding",
+            "friction": "toil",
+            "ticket": "remediation task",
+            "resolution_time": "time-in-state",
+            "handoff": "reassignment",
+            "queue": "security queue",
+            "sla_breach": "SLA ageing",
+            "documentation": "playbook",
+        },
+        metadata={
+            "industry_id": "technology",
+            "lane": "managed_security",
+            "source": "MSP-B12",
+            "version": "1.0.0",
+            "servicenow_capabilities": ["ITSM", "Security Operations"],
+            "evidence_contract": "four_part_observed_finding",
+            "compatible_templates": ["managed_cloud_operations"],
+        },
+    ),
 }
 
 
@@ -270,22 +407,61 @@ def unregister_template(template_id: str) -> None:
 
 def template_defaults_snapshot(defn: TemplateDefinition) -> Dict[str, Any]:
     """A plain-dict snapshot of the defaults a template contributes to a launch."""
+    from discovery.packs.pack_config import get_pack_version
+
     return {
         "template_id": defn.template_id,
+        "template_version": str(defn.metadata.get("version") or "1.0.0"),
+        "label": defn.label,
+        "description": defn.description,
         "pack_id": defn.pack_id,
+        # R191-P1 T5: the template's FULL pack selection (a template may activate
+        # more than one pack). pack_id remains the primary/first for compat.
         "packs": list(defn.packs),
+        "pack_version": get_pack_version(defn.pack_id),
         "focus_id": defn.focus_defaults.focus_id,
         "focus_emphasis": list(defn.focus_defaults.emphasis),
         "suggested_systems": list(defn.suggested_systems),
         "suggested_roles": dict(defn.suggested_roles),
         "detector_emphasis": list(defn.detector_emphasis),
         "terminology": dict(defn.terminology),
+        "metadata": dict(defn.metadata),
     }
+
+
+def normalize_template_ids(template_ids: Optional[List[str]]) -> List[str]:
+    """Return an order-preserving, de-duplicated template selection.
+
+    Composition lives here, outside ``TemplateDefinition``. This keeps the
+    generic model unchanged while allowing one run to select multiple registry
+    entries.
+    """
+    normalized: List[str] = []
+    seen = set()
+    for raw in template_ids or []:
+        template_id = str(raw or "").strip()
+        if template_id and template_id not in seen:
+            normalized.append(template_id)
+            seen.add(template_id)
+    return normalized
+
+
+def _stable_union(groups: List[List[str]]) -> List[str]:
+    values: List[str] = []
+    seen = set()
+    for group in groups:
+        for raw in group:
+            value = str(raw or "").strip()
+            if value and value not in seen:
+                values.append(value)
+                seen.add(value)
+    return values
 
 
 def resolve_launch_config(
     template_id: Optional[str],
     *,
+    template_ids: Optional[List[str]] = None,
     pack_id: Optional[str] = None,
     pack_ids: Optional[List[str]] = None,
     focus_id: Optional[str] = None,
@@ -322,94 +498,140 @@ def resolve_launch_config(
 
     submitted_systems = list(selected_system_ids or [])
     submitted_weightings = dict(weightings or {})
-    # R191-P1 T5: the caller's explicit pack selection (multi-select UI or an
-    # explicit pack_ids/pack_id on the request), folded into ONE order-preserving,
-    # de-duplicated list. Non-empty => the caller is authoritative over the
-    # template's packs (an edit); empty => the template's packs apply.
+    selected_template_ids = normalize_template_ids(
+        list(template_ids or []) + ([template_id] if template_id else [])
+    )
+    definitions = [
+        defn
+        for selected_id in selected_template_ids
+        if (defn := get_template(selected_id)) is not None
+    ]
     submitted_pack_ids = normalize_pack_ids(
         list(pack_ids or []) + ([pack_id] if pack_id else [])
     )
 
-    defn = get_template(template_id) if template_id else None
-
-    if defn is None:
+    if not definitions:
         eff_pack_ids = submitted_pack_ids
         return {
             "effective": {
-                "pack_id": pack_id or (eff_pack_ids[0] if eff_pack_ids else None),
+                "pack_id": eff_pack_ids[0] if eff_pack_ids else pack_id,
                 "pack_ids": eff_pack_ids,
+                "template_ids": selected_template_ids,
                 "focus_id": focus_id,
                 "selected_system_ids": submitted_systems,
                 "roles": _roles_from_weightings(submitted_weightings),
+                "pack_boundaries": [],
             },
             "provenance": {
                 "template_id": template_id,
+                "template_ids": selected_template_ids,
                 "applied": False,
                 "template_defaults": None,
+                "template_defaults_list": [],
+                "pack_boundaries": [],
                 "edited_fields": [],
                 "untouched": False,
             },
         }
 
-    defaults = template_defaults_snapshot(defn)
+    snapshots = [template_defaults_snapshot(defn) for defn in definitions]
+    primary = definitions[0]
+    # R191-P1 T5: each selected template contributes its FULL pack list — a
+    # multi-pack template (defn.packs = [service_cloud, ncino]) activates all of
+    # its packs, and multiple selected templates union their packs. Falls back to
+    # the singular pack_id for a template with no explicit packs.
+    default_pack_ids = normalize_pack_ids(
+        [pack for defn in definitions for pack in (defn.packs or [defn.pack_id])]
+    )
+    default_systems = _stable_union(
+        [list(defn.suggested_systems) for defn in definitions]
+    )
+    default_roles: Dict[str, str] = {}
+    for defn in definitions:
+        for system_id, role in defn.suggested_roles.items():
+            # The first selected template is primary when defaults ever conflict.
+            default_roles.setdefault(system_id, role)
+
     edited_fields: List[str] = []
 
-    # pack selection (R191-P1 T5) — the template's full `packs` list is honored
-    # end to end. An explicit caller submission (singular pack_id or plural
-    # pack_ids) is authoritative and overrides the template; an empty submission
-    # inherits the template's packs, so an UNTOUCHED multi-pack template activates
-    # every one of its packs on run creation (AC5). `eff_pack` is always the
-    # primary (first) of the effective list, consistent with the singular pack_id.
-    if submitted_pack_ids:
-        eff_pack_ids = submitted_pack_ids
-    else:
-        eff_pack_ids = normalize_pack_ids(list(defn.packs))
-    eff_pack = eff_pack_ids[0] if eff_pack_ids else defn.pack_id
-    # An explicit selection whose primary diverges from the template's primary is
-    # recorded as a pack edit (provenance / AC5 of R18-C1).
-    if submitted_pack_ids and eff_pack != defn.pack_id:
+    # Explicit pack selections replace the composed defaults. With no explicit
+    # pack selection, every selected template contributes its pack.
+    eff_pack_ids = submitted_pack_ids or default_pack_ids
+    if submitted_pack_ids and submitted_pack_ids != default_pack_ids:
         edited_fields.append("pack_id")
+    eff_pack = eff_pack_ids[0] if eff_pack_ids else None
 
-    # focus_id — same rule.
-    eff_focus = focus_id or defn.focus_defaults.focus_id
-    if focus_id and focus_id != defn.focus_defaults.focus_id:
+    # A run has one workflow focus. The first selected template supplies it;
+    # target combined templates both use core_operations. Separate template
+    # snapshots retain every template's own focus defaults for traceability.
+    eff_focus = focus_id or primary.focus_defaults.focus_id
+    if focus_id and focus_id != primary.focus_defaults.focus_id:
         edited_fields.append("focus_id")
 
-    # selected_system_ids — empty submission inherits the template's suggested
-    # systems; a non-empty submission that differs (as a set) is an edit.
     if submitted_systems:
         eff_systems = submitted_systems
-        if set(submitted_systems) != set(defn.suggested_systems):
+        if set(submitted_systems) != set(default_systems):
             edited_fields.append("selected_system_ids")
     else:
-        eff_systems = list(defn.suggested_systems)
+        eff_systems = default_systems
 
-    # roles — start from the template's suggested roles, overlay any caller
-    # weightings' roles; a role that differs from the template default is an edit.
     submitted_roles = _roles_from_weightings(submitted_weightings)
-    eff_roles = dict(defn.suggested_roles)
+    eff_roles = dict(default_roles)
     roles_edited = False
     for system_id, role in submitted_roles.items():
         if eff_roles.get(system_id) != role:
             roles_edited = True
         eff_roles[system_id] = role
+    # Effective configuration contains roles only for sources that will actually
+    # be used. A removed template default must not survive as a stale role.
+    selected_system_set = set(eff_systems)
+    eff_roles = {
+        system_id: role
+        for system_id, role in eff_roles.items()
+        if system_id in selected_system_set
+    }
     if roles_edited:
         edited_fields.append("roles")
 
+    active_pack_set = set(eff_pack_ids)
+    pack_boundaries = [
+        {
+            "template_id": snapshot["template_id"],
+            "template_version": snapshot["template_version"],
+            "pack_id": snapshot["pack_id"],
+            "pack_version": snapshot["pack_version"],
+            "focus_id": snapshot["focus_id"],
+            "focus_emphasis": list(snapshot["focus_emphasis"]),
+            "detector_emphasis": list(snapshot["detector_emphasis"]),
+            "terminology": dict(snapshot["terminology"]),
+            "evidence_contract": snapshot["metadata"].get("evidence_contract"),
+        }
+        for snapshot in snapshots
+        if snapshot["pack_id"] in active_pack_set
+    ]
+
+    effective = {
+        "pack_id": eff_pack,
+        "pack_ids": eff_pack_ids,
+        "template_ids": [defn.template_id for defn in definitions],
+        "focus_id": eff_focus,
+        "selected_system_ids": eff_systems,
+        "roles": eff_roles,
+        "pack_boundaries": pack_boundaries,
+    }
     return {
-        "effective": {
-            "pack_id": eff_pack,
-            "pack_ids": eff_pack_ids,
-            "focus_id": eff_focus,
-            "selected_system_ids": eff_systems,
-            "roles": eff_roles,
-        },
+        "effective": effective,
         "provenance": {
-            "template_id": defn.template_id,
+            "template_id": primary.template_id,
+            "template_ids": [defn.template_id for defn in definitions],
             "applied": True,
-            "template_defaults": defaults,
+            # Singular alias retained for every R18-C1 consumer.
+            "template_defaults": snapshots[0],
+            "template_defaults_list": snapshots,
+            "pack_boundaries": pack_boundaries,
             "edited_fields": edited_fields,
             "untouched": not edited_fields,
+            "effective_configuration": effective,
         },
     }
 

@@ -29,7 +29,7 @@ from .rbac import require_role
 from . import db
 from .llm_enrichment import KV_LLM_ENRICHMENT
 from .opportunity_display import with_display_title
-from .terminology import apply_terminology, resolve_run_terminology
+from .terminology import apply_run_terminology
 
 
 # ── Detector metadata keyed by detector_id ───────────────────────────────────
@@ -432,6 +432,9 @@ def _build_blueprint(
         "complexity":           _derive_complexity(effort, tier),
         "evidenceIds":          opp.get("evidenceIds") or [],
         "detectorId":           detector_id,
+        # Carries pack ownership through combined-run terminology and keeps the
+        # generated blueprint traceable to the pack that produced its finding.
+        "packId":               opp.get("packId"),
     }
 
 
@@ -460,6 +463,7 @@ class BlueprintResponse(BaseModel):
     complexity: BlueprintComplexity
     evidenceIds: List[str]
     detectorId: str
+    packId: Optional[str] = None
 
 
 # ── Route registration ────────────────────────────────────────────────────────
@@ -505,6 +509,6 @@ def register_blueprint_routes(app) -> None:
         # Salesforce object API names (suggestedActions[].object), detectorId,
         # tier, and permission labels are outside the terminology allowlist and
         # stay verbatim. No-op when no template is active.
-        blueprint = apply_terminology(blueprint, resolve_run_terminology(run_id))
+        blueprint = apply_run_terminology(blueprint, run_id)
 
         return BlueprintResponse(**blueprint)

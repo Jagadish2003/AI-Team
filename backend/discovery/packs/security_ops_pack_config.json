@@ -1,0 +1,110 @@
+{
+  "_meta": {
+    "story": "MSP-B12",
+    "task": "T1",
+    "description": "Externalized configuration for the Security Operations Discovery Pack: pack version, SecOps terminology set, detector thresholds, and scorer calibration. Loaded from this file so a config change alters pack behaviour with no code deploy — the same externalized mechanism the Cloud-Operations pack (MSP-B6) established. Detector and scorer LOGIC is not here (T2/T6) — only the values those tasks read.",
+    "status": "SCAFFOLD",
+    "note": "Editing a value below changes behaviour on the next run; no restart or code change required. Bump packVersion (mirrored in pack_config.py) on any detector/scorer/corroboration change."
+  },
+
+  "packVersion": "1.2.0",
+
+  "terminology": {
+    "_note": "The SecOps vocabulary this pack speaks in findings, roadmap, and executive report — the same externalized re-labelling mechanism the lending and cloud-ops packs use. glossary defines each canonical SecOps term (MSP-B12 §2); language_map re-labels generic AgentIQ / service-management vocabulary into SecOps language for terminology-aware rendering (later tasks).",
+    "glossary": {
+      "remediation": "The work of resolving a vulnerability or security finding — the SecOps unit of effort, measured as median time-in-state per remediation cycle.",
+      "scan_cycle": "One recurring vulnerability-scan-to-remediation loop over the estate; findings count and characterise effort per scan cycle rather than per host.",
+      "deferral": "A postponed or risk-accepted remediation, tracked by justification class — a compliance-pressure signal a federal MSP answers for every month.",
+      "sla": "The remediation service-level agreement a queue is measured against; ageing against an SLA baseline is the queue-pressure signal.",
+      "triage": "Classification and initial disposition of a security incident (SIR); high-volume same-classification triage in short time is the enrichment-agent candidate.",
+      "severity_band": "The banded severity of a vulnerability class or incident (critical / high / medium / low / informational) used to weight workload so critical-band toil ranks above informational-band toil at equal effort.",
+      "security_queue": "A security or remediation work queue (an assignment group's backlog), the aggregation unit for ageing and workload — never an individual analyst.",
+      "ci_class": "A class of configuration item (a shared infrastructure component type) that vulnerability workload traces to via dependency edges — the concentration unit, never an individual host."
+    },
+    "language_map": {
+      "opportunity": "finding",
+      "friction": "toil",
+      "ticket": "remediation task",
+      "resolution_time": "time-in-state",
+      "handoff": "reassignment",
+      "queue": "security queue",
+      "sla_breach": "SLA ageing",
+      "documentation": "playbook"
+    }
+  },
+
+  "thresholds": {
+    "_note": "Detector firing boundaries. Read by the detectors built in MSP-B12 T2 (Section 1); no detector logic lives here. One block per Section-1 detector.",
+    "remediation_recurrence": {
+      "min_cycles": 3,
+      "window_days": 30
+    },
+    "security_it_ping_pong": {
+      "min_hops": 2
+    },
+    "sla_deferral_ageing": {
+      "baseline_departure_pct": 0.25,
+      "min_baseline_runs": 3
+    },
+    "shared_infrastructure_concentration": {
+      "max_hops": 2,
+      "min_services": 3,
+      "require_dependency_path": true
+    },
+    "sir_triage_toil": {
+      "max_close_minutes": 30,
+      "min_daily_volume": 5
+    }
+  },
+
+  "calibration": {
+    "_note": "SecOps impact scorer calibration. Read by the scorer built in MSP-B12 T6; no scorer logic lives here. impact_weights are relative ranking weights (effort concentration x recurrence stability x breadth of services relieved); severity_band carries the per-band weighting so critical-band toil ranks above informational-band toil at equal effort (T6 AC6 — a value change alters ranked order with no code deploy); confidence describes the honest-confidence caps enforced at the pack boundary.",
+    "impact_weights": {
+      "effort_concentration": 0.35,
+      "breadth": 0.25,
+      "recurrence_stability": 0.2,
+      "severity_band": 0.2
+    },
+    "severity_band": {
+      "default_band": "medium",
+      "_note": "Severity-band weighting (T6 AC6). Higher weight ranks that band's toil above a lower band's at equal effort. Config, not code — editing these re-ranks findings with no code deploy.",
+      "critical": 1.0,
+      "high": 0.75,
+      "medium": 0.5,
+      "low": 0.25,
+      "informational": 0.1
+    },
+    "recurrence_stability": {
+      "_note": "Stable recurrence can be supplied as a 0..1 value. Otherwise the scorer derives it from recurrence count using target_occurrences, or uses default.",
+      "target_occurrences": 6,
+      "default": 0.5
+    },
+    "normalization": {
+      "_note": "Boundaries used when a finding is scored alone. Whole-run ranking compares effort and breadth against the largest eligible finding in that run.",
+      "effort_target_minutes": 1440,
+      "breadth_target": 10,
+      "impact_min": 1,
+      "impact_max": 10
+    },
+    "score_tiers": {
+      "strategic": {"min_score": 0.7, "tier": "Strategic"},
+      "quick_win": {"min_score": 0.0, "tier": "Quick Win"}
+    },
+    "roadmap_stages": {
+      "strategic": "strategic",
+      "quick_win": "quick_win"
+    },
+    "confidence_defaults": {
+      "missing": "MEDIUM"
+    },
+    "presentation": {
+      "effort": 3,
+      "effort_label": "Low-Med"
+    },
+    "confidence": {
+      "single_source_cap": "MEDIUM",
+      "corroborated_max": "HIGH",
+      "conversation_source_cap": "MEDIUM"
+    }
+  }
+}

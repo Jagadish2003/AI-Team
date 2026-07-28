@@ -86,6 +86,12 @@ const CATEGORY_SYSTEMS: Record<string, string[]> = {
 
 const START_BAR_SOURCE_IDS = ['salesforce', 'servicenow', 'jira'];
 
+// MSP-B13 (AT-748): the Cloud Operations group is NOT a hardcoded id list.
+// Membership is derived from the catalog itself — any connector the catalog marks
+// `multiScope` (AWS/Azure Events today, future cloud connectors automatically)
+// registers here — so no connector tile is hardcoded (T6-AC1/AC4).
+const CLOUD_OPS_CATEGORY = 'cloud_operations';
+
 // ── Group metadata ────────────────────────────────────────────────────────────
 
 interface GroupMeta {
@@ -114,6 +120,11 @@ const GROUP_META: GroupMeta[] = [
     categoryId: 'data_engineering',
     label:      'Data & Engineering Sources',
     subLabel:   'Source control, databases, and data platform connectors',
+  },
+  {
+    categoryId: CLOUD_OPS_CATEGORY,
+    label:      'Cloud Operations',
+    subLabel:   'Multi-account/subscription cloud event connectors (AWS, Azure)',
   },
 ];
 
@@ -286,16 +297,25 @@ export default function IntegrationHubPage() {
     }
   }, [location.state, location.pathname, location.search, allConnectors, loading, push, navigate]);
 
-  // Build groups
+  // Build groups. The Cloud Operations group is catalog-driven — its membership
+  // is every connector the catalog flags `multiScope`, not a hardcoded id list
+  // (MSP-B13 / AT-748, T6-AC1/AC4). The other groups keep their category map.
   const groups: GroupConfig[] = useMemo(
     () =>
-      GROUP_META.map(meta => ({
-        ...meta,
-        allSystemIds: CATEGORY_SYSTEMS[meta.categoryId] ?? [],
-        connectors: allConnectors.filter(c =>
-          connectorBelongsToCategory(c, meta.categoryId)
-        ),
-      })),
+      GROUP_META.map(meta => {
+        const connectors =
+          meta.categoryId === CLOUD_OPS_CATEGORY
+            ? allConnectors.filter(c => c.multiScope)
+            : allConnectors.filter(c => connectorBelongsToCategory(c, meta.categoryId));
+        return {
+          ...meta,
+          allSystemIds:
+            meta.categoryId === CLOUD_OPS_CATEGORY
+              ? connectors.map(c => c.id)
+              : CATEGORY_SYSTEMS[meta.categoryId] ?? [],
+          connectors,
+        };
+      }),
     [allConnectors],
   );
 

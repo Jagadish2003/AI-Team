@@ -31,6 +31,7 @@ export interface BlueprintResponse {
   complexity: BlueprintComplexity;
   evidenceIds: string[];
   detectorId: string;
+  packId?: string | null;
 }
 
 /**

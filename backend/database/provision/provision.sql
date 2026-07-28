@@ -204,7 +204,7 @@ CREATE TABLE "public"."entity_relationships" (
     "last_seen_run_id" character varying(64) NOT NULL,
     "run_count" integer NOT NULL,
     "created_at" timestamp without time zone NOT NULL,
-    CONSTRAINT "entity_relationships_relationship_type_check" CHECK ((("relationship_type")::"text" = ANY ((ARRAY['depends_on'::character varying, 'escalates_to'::character varying, 'member_of'::character varying, 'owns'::character varying, 'routes_to'::character varying])::"text"[])))
+    CONSTRAINT "entity_relationships_relationship_type_check" CHECK ((("relationship_type")::"text" = ANY ((ARRAY['connects_to'::character varying, 'depends_on'::character varying, 'escalates_to'::character varying, 'member_of'::character varying, 'owns'::character varying, 'routes_to'::character varying, 'runs_on'::character varying, 'used_by'::character varying])::"text"[])))
 );
 
 

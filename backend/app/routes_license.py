@@ -130,6 +130,12 @@ class LicenseLimitsResponse(BaseModel):
     systemsLicensed: Optional[int] = None  # null => unlimited license
     unlimited: bool
     canConnectMore: bool
+    # MSP-B13 / T4 (AT-746) — approaching-cap notice + at-cap hard stop the
+    # Integration Hub / cloud-connector cards render (AC2/AC5). Additive to the T10
+    # shape: pre-T4 clients simply ignore them.
+    approachingCap: bool = False
+    atCap: bool = False
+    notice: Optional[str] = None  # approaching or at-cap wording; null when neither
 
 
 class LicenseOrgNameResponse(BaseModel):

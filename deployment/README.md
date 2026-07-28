@@ -161,6 +161,44 @@ provider's OAuth app registration before going to production.
   simply not read under the real org. Communicate this one-time reconnect to early-access
   customers when deploying this change.
 
+### Native AWS event connector (`aws_events`, MSP-B1)
+
+The native AWS connector (CloudWatch alarm history, EventBridge, CloudTrail) uses
+**cross-account role assumption from a hub identity** — one connection, many
+accounts, each account a scope. It is configured, not discovered, and no AWS
+secret ever lives in `.env` or config.
+
+> **Setting it up / what needs live customer data:**
+> [`AWS_EVENT_CONNECTOR_SETUP.md`](./AWS_EVENT_CONNECTOR_SETUP.md) is the
+> step-by-step guide — what the customer must provide, what runs offline with no
+> AWS account, the exact V1 read scope, the EventBridge boundary, and the GovCloud
+> follow-through.
+
+The everyday path is the **Integration Hub AWS Events card**: an Owner connects the
+hub key (validated against AWS before anything is stored) and then PINS each
+managed account. Those pinned accounts are the only ones polled; they are read back
+per org by `discovery/ingest/aws_events_config.py`, which is also what puts
+`aws_events` into a live run's systems set. A discovery run polls AWS when the
+connector is connected **and** a `cloud_ops` pack is selected. The settings below
+are the per-deployment override for that UI path.
+
+| Setting | Purpose |
+|---|---|
+| `AWS_EVENT_ACCOUNTS` | Secret-free managed-account config — either a plain JSON array (applies to every org) or an object keyed by org id with a `default`/`*` fallback. Entries are `{account_id, role_arn?, external_id?, regions[], partition?}`. Role ARNs/regions/external id are non-secret and live here (or offline uses the fixture); an account with a `role_arn` is reached by role assumption, one without by direct keys. Inline AWS keys are rejected. Takes precedence over the pinned accounts on the Integration Hub record. |
+| `partition` (per account) | `aws` (commercial, default) or `aws-us-gov` (GovCloud). Selectable per connection; when omitted it is derived from the account's region, and a region that contradicts the partition (a GovCloud region under commercial, or vice-versa) is rejected at config time. GovCloud resolves `*.us-gov-west-1.amazonaws.com` endpoints and `arn:aws-us-gov:…` ARNs. Live GovCloud verification (incl. FIPS endpoints) is MSP-B9's follow-through. |
+| Vault: `aws_events` | The **hub** identity's access key (username = access key id, secret = secret access key), Fernet-encrypted in the credential vault. |
+| Vault: `aws_events:account:{account_id}` | Optional **direct per-account read-only keys** — the fallback used when an account offers no cross-account role (or role assumption fails). |
+| `AWS_EVENTS_HUB_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` / `_SESSION_TOKEN` | CLI/standalone hub-key fallback **only**, and **refused in production** — the resolver gates it on `is_production()` (`ENVIRONMENT=production` or `REQUIRE_CONNECTOR_SECRETS=1`) and logs the variable name (never its value) when it is set but ignored. Never in `.env` templates. |
+
+Per managed account the hub calls `sts:AssumeRole` on the account's read-only
+role (ExternalId-gated) for short-lived scoped credentials. The **minimal
+read-only IAM policy** AWS reviewers should inspect before granting access is the
+partner artifact [`aws_readonly_iam_policy.json`](./aws_readonly_iam_policy.json) +
+[`AWS_READONLY_IAM_POLICY.md`](./AWS_READONLY_IAM_POLICY.md) — exactly the calls
+the connector makes (`cloudwatch:DescribeAlarmHistory`, `events:ListRules`/`DescribeRule`,
+`cloudtrail:LookupEvents`, `sts:AssumeRole`), no wildcard or write actions.
+`boto3` is a lazy, live-only dependency (offline runs and tests never import it).
+
 ---
 
 ## No-Public-Inbound Deployments (R18-A3)
@@ -256,6 +294,25 @@ design, and it is the *only* AUTH-2 constraint added by the no-inbound posture. 
 `AGENTIQ_BACKEND_URL` / `PUBLIC_HOSTNAME` are left at their `localhost` defaults, or pointed
 at a public host the internal admin cannot reach, the links will not resolve; point them at
 the internal deployment URL. No inbound firewall rule is required.
+
+---
+
+## MSP Connector Partner Security Artifacts
+
+Cloud connectors that read a customer's estate ship a **least-privilege, read-only**
+access artifact a customer security team reviews before granting access — the same
+posture per provider.
+
+- **Azure Event Connector (MSP-B2)** — the minimal, read-only Azure custom RBAC role
+  (Alerts + Administrative Activity Log + Service Health reads only; no write/delete/
+  management/metrics/Log Analytics/Defender/Sentinel). Works for both Azure Lighthouse
+  delegated access and direct per-subscription assignment; identical in AzureCloud and
+  AzureUSGovernment.
+
+  **→ See [`deployment/AZURE_EVENT_CONNECTOR_RBAC.md`](AZURE_EVENT_CONNECTOR_RBAC.md)**
+  for the permission-by-capability mapping, exclusions, `az` deployment steps,
+  Lighthouse/direct guidance, and the security-review checklist. The importable role
+  definition is [`deployment/azure_event_connector_role.json`](azure_event_connector_role.json).
 
 ---
 

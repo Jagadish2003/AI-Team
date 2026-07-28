@@ -1,0 +1,16 @@
+{
+  "Name": "AgentIQ Azure Event Connector (Reader)",
+  "IsCustom": true,
+  "Description": "Least-privilege, READ-ONLY custom role for the AgentIQ Azure Event Connector (MSP-B2). Grants exactly the three read actions the connector uses to poll Azure Monitor Alerts, Activity Log administrative events, and Service Health events. No write, delete, management, metrics, Log Analytics, diagnostic-log, Defender, or Sentinel permissions. Works for both Azure Lighthouse delegated access and direct per-subscription assignment; identical in AzureCloud and AzureUSGovernment. Replace the AssignableScopes placeholder with the target subscription id(s) before creating the role.",
+  "Actions": [
+    "Microsoft.AlertsManagement/alerts/read",
+    "Microsoft.Insights/eventtypes/values/read",
+    "Microsoft.ResourceHealth/*/read"
+  ],
+  "NotActions": [],
+  "DataActions": [],
+  "NotDataActions": [],
+  "AssignableScopes": [
+    "/subscriptions/REPLACE-WITH-SUBSCRIPTION-ID"
+  ]
+}

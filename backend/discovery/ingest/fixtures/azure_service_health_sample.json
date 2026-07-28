@@ -1,0 +1,47 @@
+{
+  "_meta": {
+    "story": "MSP-B2",
+    "task": "T3 (AT-650)",
+    "description": "Offline sample Azure Service Health events (category=ServiceHealth), Activity-Log-shaped with service-health specifics under 'properties'. Normalised by map_service_health. Non-secret; the subscription id is embedded as it is in real Azure records."
+  },
+  "value": [
+    {
+      "eventDataId": "sh-aaaa-1111",
+      "correlationId": "sh-corr-1111",
+      "eventTimestamp": "2026-06-02T08:00:00.0000000Z",
+      "subscriptionId": "11111111-2222-3333-4444-555555555555",
+      "level": "Warning",
+      "operationName": {"value": "Microsoft.ResourceHealth/healthevent/action"},
+      "category": {"value": "ServiceHealth"},
+      "status": {"value": "Active"},
+      "properties": {
+        "title": "Networking degradation in East US",
+        "service": "Virtual Machines",
+        "region": "East US",
+        "incidentType": "Incident",
+        "stage": "Active",
+        "trackingId": "SH-ABC-123",
+        "impactStartTime": "2026-06-02T07:50:00.0000000Z"
+      }
+    },
+    {
+      "eventDataId": "sh-bbbb-2222",
+      "correlationId": "sh-corr-2222",
+      "eventTimestamp": "2026-06-03T22:15:00.0000000Z",
+      "subscriptionId": "11111111-2222-3333-4444-555555555555",
+      "level": "Informational",
+      "operationName": {"value": "Microsoft.ResourceHealth/healthevent/action"},
+      "category": {"value": "ServiceHealth"},
+      "status": {"value": "Resolved"},
+      "properties": {
+        "title": "Planned maintenance for SQL Database",
+        "service": "SQL Database",
+        "region": "East US",
+        "incidentType": "Maintenance",
+        "stage": "Resolved",
+        "trackingId": "SH-DEF-456",
+        "impactStartTime": "2026-06-03T22:00:00.0000000Z"
+      }
+    }
+  ]
+}

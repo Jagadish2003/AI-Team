@@ -1,6 +1,21 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.14
-Date: 2026-07-23
+Version: v1.15
+Date: 2026-07-27
+
+> v1.15 — MSP-B13 (Cloud Connector Onboarding): added the multi-scope cloud
+> connector routes for `aws_events` / `azure_events` (T3 / AT-745 — create with
+> write-only vault credentials, `POST /{id}/test`, `GET/POST/DELETE /{id}/scopes`,
+> `GET /{id}/scopes/{scope}/health`) documented under "Connectors & Confidence".
+> T5 / AT-747 adds the per-connector security-artifact routes
+> `GET /api/connectors/{id}/security-artifacts` (list) and
+> `GET /api/connectors/{id}/security-artifacts/{artifactId}` (download), serving the
+> shipped `deployment/` IAM-policy / RBAC-role docs (viewer+). T4 / AT-746 (system-count integration) extends `GET /api/license/limits`'s
+> `LicenseLimitsResponse` with the additive optional fields `approachingCap`
+> (`boolean`), `atCap` (`boolean`), and `notice` (`string | null`) — the
+> approaching-capacity warning and at-cap hard-stop wording the Integration Hub /
+> cloud-connector cards render. Each pinned AWS account / Azure subscription counts
+> as one system against the licence's `max_systems`, enforced at pin time (HTTP 402
+> hard stop). Additive; pre-v1.12 consumers are unaffected.
 
 > v1.11 — R191-P1 T3 (Multi-Pack Discovery Runs — provenance tagging, AC1/AC6):
 > documents the `packId` (`string`, optional) and `packVersion` (`string`,
@@ -63,6 +78,31 @@ Date: 2026-07-23
 > → 400. Also available offline as a CLI (`backend/scripts/generate_usage_report.py`).
 > Additive — no previously documented shape changed.
 >
+> v1.11 — MSP-B5 T4: added authenticated Analyst+ runbook-match lifecycle
+> endpoints: `GET /api/runbook-matches/{recurrenceId}`, `POST
+> /api/runbook-matches/{recurrenceId}/decision`, and `GET
+> /api/runbook-matches/{recurrenceId}/decision-history`. Decisions are
+> organization-scoped and accept `accept`, `dismiss`, or `defer`. Real changes
+> append history; repeating the current action is idempotent. The response keeps
+> `proposed` visibly distinct from `observed` and `confirmed`, and represents a
+> dismissed match as `absent`. Additive; existing consumers are unaffected.
+
+> v1.11 — R191-P1 T3 (Multi-Pack Discovery Runs — provenance tagging, AC1/AC6):
+> documents the `packId` (`string`, optional) and `packVersion` (`string`,
+> optional) fields on `OpportunityCandidate` (`GET /api/runs/{runId}/opportunities`)
+> and the `packId` (`string`, optional) field on `EvidenceReview`
+> (`GET /api/runs/{runId}/evidence`) — the backend already stamped `packId`/
+> `packVersion` on stored opportunities (R16-B1 §4); this bump documents that
+> existing field and newly extends the same stamp to every evidence item
+> (previously undocumented and, for evidence, unstamped). Because
+> `RoadmapStage.opportunities` (`src/types/pilotRoadmap.ts`) reuses
+> `OpportunityCandidate`, every roadmap entry carries `packId`/`packVersion` too
+> with no separate type change. All additive/optional — existing consumers are
+> unaffected; absent on runs materialized before this field existed. The run
+> record's `packIds` (`string[]`) / `packVersions` (`Record<string, string>`) /
+> `packs` (per-pack execution metadata) fields were already added by R191-P1 T2
+> and are unchanged here.
+
 > v1.11 — R-1.9.1-L1 / T1 + T2 (Licensing Completion & Hardening): extended the
 > Owner-only `LicenseStatusResponse` (`GET /api/license`, also returned by
 > `POST /api/license/update-key`) with two additive, optional-null fields:
@@ -205,6 +245,29 @@ Purpose: persist connector connection status + metadata.
 Request (v1): `{ "status": "connected" }`  
 Response: updated `Connector`
 
+#### Cloud Connector Onboarding — AWS & Azure Events (MSP-B13 / AT-745)
+
+Multi-scope cloud connectors (`aws_events`, `azure_events`): one connection, many
+accounts/subscriptions, each scope a system. Secret fields are **write-only** —
+encrypted into the per-org vault (R17-D3 path) and never returned. RBAC: Owner
+creates/tests/pins/unpins; Analyst/Viewer read scopes + health only.
+
+- `POST /api/connectors/{aws_events|azure_events}` — Owner: create/rotate the connection.
+  - AWS request: `{ "partition": "aws"|"aws-us-gov", "access_key_id", "secret_access_key", "session_token"? }`
+  - Azure request: `{ "environment": "AzureCloud"|"AzureUSGovernment", "mode": "lighthouse"|"direct", "tenant_id", "client_id", "client_secret" }`
+  - Response: `CloudConnectionStatus` (metadata only — no secret): `{ connector_id, provider, configured, status, partition?, environment?, mode?, scope_count, updated_at }`
+- `POST /api/connectors/{id}/test` — Owner: validate auth + reachability **before save** (never persists).
+  - Response `TestConnectionResult`: `{ connector_id, provider, ok, reason?, message, identity? }` (HTTP 200 with the verdict; provider-specific `reason` on failure).
+- `GET /api/connectors/{id}/scopes` — Viewer+: `{ connector_id, provider, scopes: ScopeView[], candidates: string[] }`. Candidates are discovered-but-unpinned scopes (never ingested until pinned).
+- `POST /api/connectors/{id}/scopes` — Owner: pin (activate forward-only) a scope, validated by an assume-role (AWS) / auth (direct-keys, Azure) probe.
+  - AWS request: `{ "account_id", "role_arn"?, "external_id"?, "regions"?: string[], "partition"?, "label"?, "access_key_id"?, "secret_access_key"? }`
+  - Azure request: `{ "subscription_id", "label"? }`
+  - Response: `ScopesResponse` (as GET).
+- `DELETE /api/connectors/{id}/scopes/{scopeId}` — Owner: unpin (stops ingestion forward-only; history retained). Idempotent → 204.
+- `GET /api/connectors/{id}/scopes/{scopeId}/health` — Viewer+: `ScopeHealthResponse` `{ connector_id, scope_id, status, healthy, message?, last_checkpoint_at?, event_volume_last_run?, surfaces_ok[], surfaces_failed{} }`. `status` uses the same vocabulary as run health (`pending`/`ok`/`auth_failed`/`partial`/`failed`).
+- `GET /api/connectors/{id}/security-artifacts` — Viewer+ (T5 / AT-747): `{ connector_id, provider, artifacts: SecurityArtifact[] }` where `SecurityArtifact = { id, label, description, filename, media_type }`. The downloadable partner security docs (AWS minimal read-only IAM policy `iam_policy`/`iam_policy_guide`; Azure Reader RBAC role `rbac_role`/`rbac_role_guide`).
+- `GET /api/connectors/{id}/security-artifacts/{artifactId}` — Viewer+: serves the artifact file (`Content-Disposition: attachment`) from the shipped `deployment/` docs — the single source of truth (B1/B2 AC9). Unknown connector/artifact → 404.
+
 #### GET /api/confidence/explanation
 Replaces: `src/data/mockConfidenceExplanation.json`  
 Response: `ConfidenceExplanation` (`src/types/normalization.ts`)
@@ -335,6 +398,78 @@ Request:
 { "decision": "APPROVED" }
 ```
 Response: updated `OpportunityCandidate`
+
+#### GET /api/runbook-matches/{recurrenceId}
+Purpose: return the current runbook-match lifecycle state for one recurrence.
+Requires: authenticated Analyst or Owner. The organization comes only from the
+authenticated request.
+
+Response:
+```json
+{
+  "org_id": "org_001",
+  "recurrence_id": "rec_001",
+  "base_state": "proposed",
+  "current_state": "proposed",
+  "current_action": null,
+  "revision": 0,
+  "current_match": {
+    "org_id": "org_001",
+    "recurrence_id": "rec_001",
+    "match_state": "proposed",
+    "origin": "proposed",
+    "runbook": {
+      "source_system": "document",
+      "source_artifact": "runbooks/restart.md"
+    },
+    "runbook_evidence": {},
+    "citing_incident_evidence": [],
+    "cited_references": [],
+    "match_confidence": 0.89,
+    "label": "Proposed match, pending confirmation",
+    "lifecycle": {
+      "state": "proposed",
+      "label": "Proposed match, pending confirmation",
+      "documented_status": "proposed",
+      "composite_status": "provisional",
+      "ranking_treatment": "provisional",
+      "evidence_status": "proposed",
+      "active": true
+    }
+  },
+  "lifecycle": {
+    "state": "proposed",
+    "label": "Proposed match, pending confirmation",
+    "documented_status": "proposed",
+    "composite_status": "provisional",
+    "ranking_treatment": "provisional",
+    "evidence_status": "proposed",
+    "active": true
+  },
+  "updated_by": null,
+  "updated_at": "2026-07-21T10:00:00Z"
+}
+```
+
+#### POST /api/runbook-matches/{recurrenceId}/decision
+Purpose: accept, dismiss, or defer a proposed runbook match.
+Requires: authenticated Analyst or Owner.
+
+Request:
+```json
+{ "action": "accept" }
+```
+
+`action` is one of `accept | dismiss | defer`. Accept returns
+`current_state="confirmed"`; dismiss returns `current_state="absent"` and
+`current_match=null`; defer keeps `current_state="proposed"`. `changed=false`
+means the same action was already current and no history/feedback row was added.
+
+#### GET /api/runbook-matches/{recurrenceId}/decision-history
+Purpose: return the append-only analyst decision history, newest first.
+Requires: authenticated Analyst or Owner. Each item includes `revision`,
+`action`, `previous_action`, `previous_state`, `resulting_state`, `actor_id`, and
+`decided_at`.
 
 ---
 

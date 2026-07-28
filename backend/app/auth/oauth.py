@@ -40,7 +40,7 @@ _JWT_ASSERTION_TTL_SECONDS = 180
 _JSON_ACCEPT = {"Accept": "application/json"}
 
 
-def _raise_for_token_error(config: ConnectorAuthConfig, response: httpx.Response) -> None:
+def _raise_token_error(connector_id: str, response: httpx.Response) -> None:
     """Log the provider's OAuth error code, then raise :class:`OAuthError`.
 
     A failed token request otherwise surfaces only as a bare status code (e.g.
@@ -62,7 +62,7 @@ def _raise_for_token_error(config: ConnectorAuthConfig, response: httpx.Response
         pass
     logger.warning(
         "OAuth token request failed: connector=%s status=%s error=%r description=%r",
-        config.connector_id,
+        connector_id,
         response.status_code,
         err,
         desc,
@@ -70,7 +70,12 @@ def _raise_for_token_error(config: ConnectorAuthConfig, response: httpx.Response
     # Surface the provider error code (no secret) in the exception too, so it
     # appears in the callback traceback — e.g. "401 (invalid_client: AADSTS...)".
     detail = ": ".join(p for p in (err, desc) if p) or None
-    raise OAuthError(config.connector_id, response.status_code, detail=detail)
+    raise OAuthError(connector_id, response.status_code, detail=detail)
+
+
+def _raise_for_token_error(config: ConnectorAuthConfig, response: httpx.Response) -> None:
+    """Config-shaped wrapper around :func:`_raise_token_error` (keyed by connector)."""
+    _raise_token_error(config.connector_id, response)
 
 
 def _parse_token_response(response: httpx.Response) -> dict:
@@ -256,22 +261,57 @@ async def get_client_credentials_token(
     never logged (a failed request logs only the provider error code, not the body).
     """
     scopes = config.client_credentials_scopes or config.scopes
+    return await request_client_credentials_token(
+        connector_id=config.connector_id,
+        token_url=config.token_url,
+        client_id=config.client_id,
+        client_secret=resolve_secret(config.secret_key),
+        scopes=scopes,
+        _transport=_transport,
+    )
+
+
+async def request_client_credentials_token(
+    *,
+    connector_id: str,
+    token_url: str,
+    client_id: str,
+    client_secret: str,
+    scopes,
+    _transport: Optional[httpx.AsyncBaseTransport] = None,
+) -> dict:
+    """Low-level client-credentials token POST with EXPLICIT credentials.
+
+    The single implementation of the client-credentials grant exchange — the
+    resource POST + response parse + provider-error surfacing — shared by both the
+    env-secret path (:func:`get_client_credentials_token`, which resolves the
+    secret from ``{CONNECTOR}_CLIENT_SECRET``) and callers that hold the secret
+    already (e.g. an MSP Azure service principal read from the per-org vault, where
+    the secret does not live in an env var). Extracting it keeps ONE token-exchange
+    implementation rather than a second copy for the vault path.
+
+    Outbound-only: no redirect URI, no inbound callback (works under
+    NETWORK_PROFILE=no_public_inbound). ``client_secret`` is used for the single
+    request and never logged (a failure logs only the provider error code, never
+    the body). ``scopes`` may be a list or a single space-joined string.
+    """
+    scope_str = " ".join(scopes) if isinstance(scopes, (list, tuple)) else str(scopes)
     async with httpx.AsyncClient(timeout=OAUTH_HTTP_TIMEOUT, transport=_transport) as client:
         try:
             response = await client.post(
-                config.token_url,
+                token_url,
                 data={
                     "grant_type": "client_credentials",
-                    "client_id": config.client_id,
-                    "client_secret": resolve_secret(config.secret_key),
-                    "scope": " ".join(scopes),
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "scope": scope_str,
                 },
                 headers=_JSON_ACCEPT,
             )
         except httpx.TimeoutException:
-            raise OAuthError(config.connector_id, "timeout")
+            raise OAuthError(connector_id, "timeout")
     if response.status_code != 200:
-        _raise_for_token_error(config, response)
+        _raise_token_error(connector_id, response)
     return _parse_token_response(response)
 
 

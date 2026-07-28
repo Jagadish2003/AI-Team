@@ -83,5 +83,14 @@ mask_url() {
  
 echo "Set DATABASE_URL in .env to ${DB_ENV^^}_DATABASE_URL"
 echo "  -> $(mask_url "$SELECTED_URL")"
+# Default AWS region for the SDK. The AWS Event Connector's hub "Test connection"
+# has no region field, so boto3 needs a region from the environment to sign the
+# STS call (without one it fails with NoRegionError, which the UI mislabels as
+# rejected credentials). The ${VAR:-default} form only sets a default when the
+# developer has not already exported their own, so it never overrides anyone.
+#export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+#export AWS_REGION="${AWS_REGION:-$AWS_DEFAULT_REGION}"
+
 echo "Starting AgentIQ backend against ${DB_ENV^^} database"
+#echo "  AWS region -> ${AWS_DEFAULT_REGION}"
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

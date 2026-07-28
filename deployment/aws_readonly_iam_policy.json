@@ -1,0 +1,71 @@
+{
+  "_comment": "MSP-B1 / AT-642 — the MINIMAL read-only IAM policy the native AWS event connector needs, as a partner-security artifact. Every Action here is a call the connector actually makes (no wildcard actions): DescribeAlarmHistory (CloudWatch alarm state changes), ListRules + DescribeRule (bounded EventBridge scoped rules), LookupEvents (CloudTrail management events), and sts:AssumeRole (the hub identity assuming each account's read-only role). Read-only: no create/update/delete, no data-plane reads beyond these operational surfaces. Scope the Resource ARNs to the managed accounts/regions/rules per your environment. See AWS_READONLY_IAM_POLICY.md.",
+  "read_only_role_policy": {
+    "_note": "Attach to the per-account read-only role the hub assumes (one per managed account).",
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "CloudWatchAlarmHistory",
+        "Effect": "Allow",
+        "Action": [
+          "cloudwatch:DescribeAlarmHistory"
+        ],
+        "Resource": "*"
+      },
+      {
+        "Sid": "EventBridgeScopedRules",
+        "Effect": "Allow",
+        "Action": [
+          "events:ListRules",
+          "events:DescribeRule"
+        ],
+        "Resource": [
+          "arn:aws:events:*:*:rule/*"
+        ]
+      },
+      {
+        "Sid": "CloudTrailLookup",
+        "Effect": "Allow",
+        "Action": [
+          "cloudtrail:LookupEvents"
+        ],
+        "Resource": "*"
+      }
+    ]
+  },
+  "hub_assume_role_policy": {
+    "_note": "Attach to the hub identity. Grants only the ability to assume the per-account read-only roles — scope the Resource to the exact role ARNs you provision.",
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "AssumeReadOnlyRoles",
+        "Effect": "Allow",
+        "Action": [
+          "sts:AssumeRole"
+        ],
+        "Resource": [
+          "arn:aws:iam::*:role/AgentIQReadOnlyEvents"
+        ]
+      }
+    ]
+  },
+  "account_role_trust_policy": {
+    "_note": "Trust policy on each per-account read-only role. Allows ONLY the hub identity to assume it, gated by an ExternalId (confused-deputy guard). Replace HUB_ACCOUNT_ID and EXTERNAL_ID.",
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "AllowHubAssume",
+        "Effect": "Allow",
+        "Principal": {
+          "AWS": "arn:aws:iam::HUB_ACCOUNT_ID:root"
+        },
+        "Action": "sts:AssumeRole",
+        "Condition": {
+          "StringEquals": {
+            "sts:ExternalId": "EXTERNAL_ID"
+          }
+        }
+      }
+    ]
+  }
+}

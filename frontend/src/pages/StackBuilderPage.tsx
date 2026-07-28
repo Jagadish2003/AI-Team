@@ -176,37 +176,49 @@ export function resolvePackId(
 }
 
 // R191-P1 T5 — resolve the full MULTI-pack selection for a run. Run configuration
-// can now activate more than one pack: a template declaring several packs runs
-// them all. Returns an order-preserving, de-duplicated list whose FIRST entry is
-// the primary pack (kept in sync with resolvePackId for backward compatibility).
+// can now activate more than one pack: an explicit multi-select, a template
+// declaring several packs, or a workspace declaring several Salesforce products
+// each map to packs. Returns an order-preserving, de-duplicated list whose FIRST
+// entry is the primary pack (kept in sync with resolvePackId).
 export function resolvePackIds(
   state: ReturnType<typeof useSetupState>['state'],
   catalog: WorkspaceCatalogResponse | null,
   industries: IndustryListItem[],
   templates: TemplateListItem[],
 ): string[] {
-  // An explicit Step 4 pack choice is a single, authoritative selection.
-  if (state.packId) return [state.packId];
-
-  // A selected template may declare MULTIPLE packs — honor the whole list so an
-  // untouched multi-pack template activates every one of its packs on launch.
-  const selectedTemplate = templates.find(
-    template => template.template_id === state.templateId,
-  );
-  const templatePacks = selectedTemplate?.packs;
-  if (templatePacks && templatePacks.length > 0) {
-    const deduped = Array.from(
-      new Set(templatePacks.filter(packId => typeof packId === 'string' && packId)),
-    );
-    if (deduped.length > 0) return deduped;
+  // 1. An explicit multi-select (state.packIds) is authoritative.
+  if (state.packIds?.length) {
+    return Array.from(new Set(state.packIds.filter(Boolean)));
   }
 
-  // The workspace may declare MULTIPLE Salesforce products (Integration Hub →
-  // "Salesforce products in use" is a multi-select). Each declared product maps
-  // to a discovery pack, so a multi-product declaration drives a multi-pack run.
-  // Map every declared product to its pack, order-preserving and de-duplicated
-  // (several products share a pack — Service/Financial/Revenue/Health Cloud all
-  // map to service_cloud). The first entry matches resolvePackId's single result.
+  // 2. An explicit single Step-4 pack choice.
+  if (state.packId) return [state.packId];
+
+  // 3. Selected template(s) — each contributes its FULL packs list (a multi-pack
+  //    template), unioned across all selected templates; falls back to a
+  //    template's singular pack_id when it declares no explicit packs.
+  const selectedTemplateIds = state.templateIds?.length
+    ? state.templateIds
+    : (state.templateId ? [state.templateId] : []);
+  const templatePacks: string[] = [];
+  for (const templateId of selectedTemplateIds) {
+    const template = templates.find(tpl => tpl.template_id === templateId);
+    if (!template) continue;
+    const packs = template.packs && template.packs.length > 0
+      ? template.packs
+      : (template.pack_id ? [template.pack_id] : []);
+    templatePacks.push(...packs);
+  }
+  const dedupedTemplatePacks = Array.from(
+    new Set(templatePacks.filter(packId => typeof packId === 'string' && packId)),
+  );
+  if (dedupedTemplatePacks.length > 0) return dedupedTemplatePacks;
+
+  // 4. The workspace may declare MULTIPLE Salesforce products (Integration Hub →
+  //    "Salesforce products in use" is a multi-select). Each declared product maps
+  //    to a discovery pack, so a multi-product declaration drives a multi-pack run,
+  //    order-preserving and de-duplicated (Service/Financial/Revenue/Health Cloud
+  //    all map to service_cloud). The first entry matches resolvePackId's result.
   const declaredPacks = getCatalogSalesforceProducts(catalog)
     .map(productId => CLOUD_PACK_REGISTRY[productId])
     .filter((packId): packId is string => Boolean(packId));
@@ -214,8 +226,7 @@ export function resolvePackIds(
     return Array.from(new Set(declaredPacks));
   }
 
-  // Otherwise fall back to the single resolved pack (industry hint / safe
-  // default), as a one-element list.
+  // 5. Fallback: the single resolved pack (industry hint / safe default).
   return [resolvePackId(state, catalog, industries, templates)];
 }
 
@@ -234,6 +245,7 @@ export interface StackBuilderLaunchPayload {
   focus_id: SetupState['focusId'];
   industry_id: SetupState['industryId'];
   template_id: SetupState['templateId'];
+  template_ids: string[];
   selected_system_ids: string[];
   pack_id: string;
   // R191-P1 T5: the full multi-pack selection (order-preserving; first = primary).
@@ -276,8 +288,13 @@ export function buildStackBuilderLaunchPayload(
     // was chosen and which fields the user edited — and resolves the template's
     // pack/focus for an untouched launch. null when no template is selected.
     template_id: state.templateId,
+    template_ids: state.templateIds?.length
+      ? state.templateIds
+      : (state.templateId ? [state.templateId] : []),
     selected_system_ids: state.selectedSystemIds,
     pack_id: packId,
+    // The full resolved multi-pack selection (from resolvePackIds — includes the
+    // Salesforce-product-declaration mapping), passed in as `packIds`.
     pack_ids: packIds.length > 0 ? packIds : [packId],
     weightings: state.weightings,
   };
@@ -450,9 +467,13 @@ function StackBuilderSidePanel({
     ? industries.find(i => i.industry_id === state.industryId)?.label
         ?? state.industryId
     : 'Optional';
-  const templateLabel = state.templateId
-    ? templates.find(t => t.template_id === state.templateId)?.label
-        ?? state.templateId
+  const selectedTemplateIds = state.templateIds?.length
+    ? state.templateIds
+    : (state.templateId ? [state.templateId] : []);
+  const templateLabel = selectedTemplateIds.length
+    ? selectedTemplateIds
+        .map(id => templates.find(template => template.template_id === id)?.label ?? id)
+        .join(' + ')
     : 'Optional';
 
   return (

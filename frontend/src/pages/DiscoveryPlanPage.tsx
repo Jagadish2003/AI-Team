@@ -258,7 +258,7 @@ interface Props {
   activePackId: string;
   // R191-P1: the FULL set of packs this run will activate (order-preserving). A
   // Salesforce workspace declaring multiple products runs multiple packs, so the
-  // Analysis pack summary is now read-only and lists them all. Falls back to
+  // Analysis pack summary is read-only and lists them all. Falls back to
   // [activePackId] for callers that only pass the singular primary pack.
   activePackIds?: string[];
   onLaunch: () => void;
@@ -270,7 +270,7 @@ export default function DiscoveryPlanPage({
   industries,
   templates,
   activePackId,
-  activePackIds,
+  activePackIds = [activePackId],
   onLaunch,
   launchState = 'ready',
 }: Props) {
@@ -306,9 +306,13 @@ export default function DiscoveryPlanPage({
     ? industries.find(item => item.industry_id === state.industryId)?.label
       ?? state.industryId
     : '-';
-  const templateLabel = state.templateId
-    ? templates.find(item => item.template_id === state.templateId)?.label
-      ?? state.templateId
+  const selectedTemplateIds = state.templateIds?.length
+    ? state.templateIds
+    : (state.templateId ? [state.templateId] : []);
+  const templateLabel = selectedTemplateIds.length
+    ? selectedTemplateIds
+        .map(id => templates.find(item => item.template_id === id)?.label ?? id)
+        .join(' + ')
     : '-';
   // The packs this run will activate, as a read-only, comma-separated label. A
   // multi-product Salesforce declaration (or a multi-pack template) runs more

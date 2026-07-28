@@ -146,7 +146,8 @@ export type SystemGroup =
   | 'work_tracking'
   | 'comms_knowledge'
   | 'code_engineering'
-  | 'data_infrastructure';
+  | 'data_infrastructure'
+  | 'cloud_operations';
 
 export type ConnectionStatus =
   | 'connected'       // green dot
@@ -247,9 +248,22 @@ export interface SetupState {
   focusId: FocusId | null;
   industryId: IndustryId | null;
   templateId: TemplateId | null;
+  /** Full ordered selection; templateId remains the primary compatibility alias. */
+  templateIds?: TemplateId[];
   /** Explicit editable pack choice; null lets registry/catalog defaults resolve it. */
   packId?: string | null;
+  /** Full ordered pack selection for combined template runs. */
+  packIds?: string[];
   templatePreselectedIds: string[];
+  /** Template-suggested systems the user explicitly removed in this setup. */
+  templateExcludedSystemIds?: string[];
+  /** Per-template defaults used to add/remove one template without disturbing another. */
+  templateContributions?: Record<string, {
+    systemIds: string[];
+    suggestedRoles: Record<string, string>;
+    packId: string;
+    focusId: string;
+  }>;
   selectedSystemIds: string[];
   selectedSalesforceClouds: string[];
   weightings: Record<string, SystemWeighting>;
