@@ -1,3 +1,5 @@
+import type { InterventionProjection } from '../types/enrichment';
+
 /**
  * T41-1 — Blueprint shared types
  *
@@ -31,6 +33,7 @@ export interface BlueprintResponse {
   complexity: BlueprintComplexity;
   evidenceIds: string[];
   detectorId: string;
+  projection?: InterventionProjection | null;
 }
 
 /**

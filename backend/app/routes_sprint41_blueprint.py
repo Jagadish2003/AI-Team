@@ -432,6 +432,9 @@ def _build_blueprint(
         "complexity":           _derive_complexity(effort, tier),
         "evidenceIds":          opp.get("evidenceIds") or [],
         "detectorId":           detector_id,
+        "projection": (
+            opp.get("projection") if isinstance(opp.get("projection"), dict) else None
+        ),
     }
 
 
@@ -460,6 +463,7 @@ class BlueprintResponse(BaseModel):
     complexity: BlueprintComplexity
     evidenceIds: List[str]
     detectorId: str
+    projection: Optional[Dict[str, Any]] = None
 
 
 # ── Route registration ────────────────────────────────────────────────────────

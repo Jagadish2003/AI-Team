@@ -13,6 +13,7 @@ import {
 } from "../../api/enrichmentApi";
 import { useRunContext } from "../../context/RunContext";
 import BaselineContextPanel from "./BaselineContextPanel";
+import ProjectionAssumptionLedger from "../projection/ProjectionAssumptionLedger";
 
 function BulletList({
   items,
@@ -717,6 +718,8 @@ export default function OpportunityDetail({
     );
   }
 
+  const projection = enrichment?.projection ?? opp.projection ?? null;
+
   return (
     <div
       className={`flex h-full min-h-0 w-full flex-col overflow-hidden bg-panel ${
@@ -787,6 +790,9 @@ export default function OpportunityDetail({
 
         {/* T7: LLM enrichment panel */}
         <EnrichmentPanel opp={opp} enrichment={enrichment} />
+
+        {/* 2.0-A1 T2: projection assumptions are rendered with the opportunity. */}
+        <ProjectionAssumptionLedger projection={projection} />
 
         {/* T10: Temporal baseline context panel */}
         <BaselineContextPanel enrichment={enrichment} />
