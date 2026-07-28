@@ -749,7 +749,16 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
     # Pass the run record we already loaded above so terminology resolution does
     # not re-read it from the DB (one fewer round-trip per opportunities fetch).
     terminology = resolve_run_terminology(run_id, run=run)
-    return [apply_terminology(with_display(opp), terminology) for opp in opps]
+    # 2.0-A1 T5 / AC3 — "no projection output — API, UI, report, or export".
+    # This IS the API output the Opportunity Review renders, so the projection
+    # vocabulary guard runs on the way out, uniformly with the executive report.
+    # Applied AFTER terminology so a template's own wording is covered too, and
+    # on copies — the stored opportunity is never rewritten.
+    from .projection_copy_guard import scrub_opportunity_narratives
+
+    return scrub_opportunity_narratives(
+        [apply_terminology(with_display(opp), terminology) for opp in opps]
+    )
 
 
 @app.post(
@@ -938,6 +947,14 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
         )
 
     opps = with_display_titles(opps)
+
+    # 2.0-A1 T5 / AC3 — this route composes the executive report from stored
+    # opps directly rather than through build_executive_report, so the
+    # projection vocabulary guard has to run here too. Scrubbing returns copies;
+    # the stored opportunity a run persisted is never rewritten.
+    from .projection_copy_guard import scrub_opportunity_narratives
+
+    opps = scrub_opportunity_narratives(opps)
     quick_wins = [o for o in opps if o.get("tier") == "Quick Win"]
 
     return apply_terminology(

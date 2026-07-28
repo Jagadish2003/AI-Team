@@ -518,7 +518,7 @@ def build_projection(opp: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         "evidenceIds": list(opp.get("evidenceIds") or []),
     }
 
-    projection = Projection(
+    projection_obj = Projection(
         direction=direction,
         magnitude_band=band,
         observation_horizon_days=horizon,
@@ -534,7 +534,16 @@ def build_projection(opp: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         projection_strength=strength_block,
         confidence_capped=confidence_capped,
     )
-    return projection.to_dict()
+    payload = projection_obj.to_dict()
+
+    # T5 — the intervention-language recommendation rides ON the projection, so
+    # every surface that already serves a projection (opportunity detail,
+    # enrichment, blueprint, executive report, PDF export) gets the honest
+    # wording for free and none of them can compose their own.
+    from .recommendation import build_recommendation
+
+    payload["recommendation"] = build_recommendation(opp, payload)
+    return payload
 
 
 def _affected_signals(

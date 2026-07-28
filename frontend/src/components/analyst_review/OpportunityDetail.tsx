@@ -16,6 +16,7 @@ import BaselineContextPanel from "./BaselineContextPanel";
 import ProjectionAssumptionLedger from "../projection/ProjectionAssumptionLedger";
 import ProjectionBandPanel from "../projection/ProjectionBand";
 import ProjectionBasisPanel from "../projection/ProjectionBasis";
+import ProjectionRecommendationPanel from "../projection/ProjectionRecommendation";
 
 function BulletList({
   items,
@@ -792,6 +793,11 @@ export default function OpportunityDetail({
 
         {/* T7: LLM enrichment panel */}
         <EnrichmentPanel opp={opp} enrichment={enrichment} />
+
+        {/* 2.0-A1 T5: the intervention-language recommendation sits directly
+            under the AI analysis, so the honest statement of what the agent
+            handles is read alongside the narrative rather than after the band. */}
+        <ProjectionRecommendationPanel projection={projection} />
 
         {/* 2.0-A1 T4: the resulting band and its evidence label, above the
             basis — the band is the answer, the basis is the working. */}

@@ -87,6 +87,15 @@ class DetectorSignalProfile:
     volume_signal: Optional[str] = None
     instance_signal: Optional[str] = None
     lower_is_better: bool = True
+    #: 2.0-A1 T5 — what the affected instances ARE, as a plural noun phrase, so
+    #: the recommendation can say "the 240 recurring reassignment cases" rather
+    #: than the generic "the 240 recurring cases". Domain wording, not pack
+    #: terminology: the terminology layer rewrites titles, not this.
+    case_noun: str = "recurring cases"
+    #: What stays with a person after the agent takes the manual step. Every
+    #: recommendation must state a residual — an agent that leaves nothing to
+    #: judgement is a claim this platform does not make.
+    residual: str = "exceptions and cases that need judgement"
 
     #: Units that express a RATE rather than a countable population. A field in
     #: these units can never stand in for an affected-instance count.
@@ -125,6 +134,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="records_90d",
         manual_step="manually repeating the same record-update sequence on each new record",
         unit="count",
+        case_noun="recurring record-update sequences",
+        residual="records whose handling does not match a known pattern",
     ),
     "HANDOFF_FRICTION": DetectorSignalProfile(
         concept=CONCEPT_REASSIGNMENT,
@@ -133,6 +144,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="owner_changes_90d",
         manual_step="manually re-routing cases between queues to find the right owner",
         unit="count",
+        case_noun="recurring reassignment cases",
+        residual="cases whose correct owner is genuinely ambiguous",
     ),
     "KNOWLEDGE_GAP": DetectorSignalProfile(
         concept=CONCEPT_RECURRENCE,
@@ -141,6 +154,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="closed_cases_90d",
         manual_step="re-deriving an answer that an existing resolution already documents",
         unit="count",
+        case_noun="recurring resolutions already documented elsewhere",
+        residual="novel resolutions with no documented precedent",
     ),
     "APPROVAL_BOTTLENECK": DetectorSignalProfile(
         concept=CONCEPT_AGEING,
@@ -149,6 +164,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="pending_count",
         manual_step="chasing approvers by hand to move a pending approval forward",
         unit="days",
+        case_noun="pending approvals waiting on a chase",
+        residual="approval decisions themselves, which stay with the approver",
     ),
     "PERMISSION_BOTTLENECK": DetectorSignalProfile(
         concept=CONCEPT_QUEUE_VOLUME,
@@ -157,6 +174,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="pending_count",
         manual_step="manually locating an available approver when the named approver is unavailable",
         unit="count",
+        case_noun="queued items waiting on an available approver",
+        residual="approval decisions themselves, which stay with the approver",
     ),
     "INTEGRATION_CONCENTRATION": DetectorSignalProfile(
         concept=CONCEPT_QUEUE_VOLUME,
@@ -165,6 +184,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="firing_credential_count",
         manual_step="hand-tracing which automations depend on a shared integration credential",
         unit="count",
+        case_noun="automations sharing one integration credential",
+        residual="credential and governance changes, which stay with an owner",
     ),
     "CROSS_SYSTEM_ECHO": DetectorSignalProfile(
         concept=CONCEPT_RECURRENCE,
@@ -173,6 +194,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="sf_echo_count",
         manual_step="re-entering the same issue in a second system and reconciling the two by hand",
         unit="count",
+        case_noun="issues duplicated across two systems",
+        residual="records whose two sides genuinely disagree",
     ),
     # ---- nCino lending ---------------------------------------------------
     "LOAN_ORIGINATION_ROUTING_FRICTION": DetectorSignalProfile(
@@ -182,6 +205,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="high_friction_count",
         manual_step="manually reassigning a loan between owners as it moves through stages",
         unit="count",
+        case_noun="loans reassigned between owners",
+        residual="credit judgement and any lending decision, which stay with a banker",
     ),
     "SPREADING_BOTTLENECK": DetectorSignalProfile(
         concept=CONCEPT_AGEING,
@@ -190,6 +215,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="unlocked_count",
         manual_step="manually chasing and finalising open spread statement periods",
         unit="days",
+        case_noun="open spread statement periods",
+        residual="the spreading analysis itself, which stays with an analyst",
     ),
     "CHECKLIST_BOTTLENECK": DetectorSignalProfile(
         concept=CONCEPT_AGEING,
@@ -198,6 +225,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="overrun_count",
         manual_step="manually tracking which checklist items have overrun their duration",
         unit="days",
+        case_noun="checklist items past their expected duration",
+        residual="items blocked on a judgement a person must make",
     ),
     "COVENANT_TRACKING_GAP": DetectorSignalProfile(
         concept=CONCEPT_AGEING,
@@ -206,6 +235,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="overdue_count",
         manual_step="manually reviewing covenant schedules to find evaluations that have come due",
         unit="days",
+        case_noun="covenant evaluations that have come due",
+        residual="the covenant assessment itself, which stays with a credit officer",
     ),
     "APPLICATION_STALL": DetectorSignalProfile(
         concept=CONCEPT_AGEING,
@@ -214,6 +245,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="stalled_count",
         manual_step="manually identifying and restarting applications that have gone quiet",
         unit="days",
+        case_noun="stalled retirement applications",
+        residual="the eligibility determination, which stays with a benefits officer",
     ),
     # ---- STRS benefits ---------------------------------------------------
     "DISABILITY_REVIEW_BOTTLENECK": DetectorSignalProfile(
@@ -223,6 +256,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="pending_review_count",
         manual_step="manually tracking which disability reviews are still awaiting a decision",
         unit="days",
+        case_noun="disability reviews awaiting a decision",
+        residual="the medical and eligibility decision, which stays with a reviewer",
     ),
     "DISBURSEMENT_OVERDUE": DetectorSignalProfile(
         concept=CONCEPT_AGEING,
@@ -231,6 +266,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="overdue_count",
         manual_step="manually reconciling disbursement schedules to find overdue payments",
         unit="days",
+        case_noun="overdue disbursements",
+        residual="payment authorisation, which stays with a benefits officer",
     ),
     "BENEFIT_ELECTION_DEADLINE": DetectorSignalProfile(
         concept=CONCEPT_AGEING,
@@ -239,6 +276,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="overdue_election_count",
         manual_step="manually checking benefit elections against their deadlines",
         unit="days",
+        case_noun="benefit elections past their deadline",
+        residual="member contact and any election decision, which stay with staff",
     ),
     # ---- SQL Server operational signal ----------------------------------
     "DB_QUEUE_DEPTH_ELEVATED": DetectorSignalProfile(
@@ -248,6 +287,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="p1_p2_open",
         manual_step="manually triaging the open high-priority ticket queue to decide what is worked next",
         unit="count",
+        case_noun="open high-priority tickets awaiting triage",
+        residual="tickets needing a judgement call on priority or ownership",
     ),
     "DB_SLA_BREACH_RATE": DetectorSignalProfile(
         concept=CONCEPT_TIME_TO_RESOLVE,
@@ -256,6 +297,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="breached_count",
         manual_step="manually watching in-flight tickets to catch one before it breaches its SLA",
         unit="pct",
+        case_noun="tickets tracking toward an SLA breach",
+        residual="the remediation work itself, which stays with the assignee",
     ),
     "DB_TICKET_VOLUME_SURGE": DetectorSignalProfile(
         concept=CONCEPT_QUEUE_VOLUME,
@@ -267,6 +310,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal=None,
         manual_step="manually absorbing an intake surge by re-prioritising the queue by hand",
         unit="ratio",
+        case_noun="tickets arriving in the surge window",
+        residual="prioritisation calls that depend on business context",
     ),
     # ---- Enterprise ops (ServiceNow / Jira) -----------------------------
     "ENT_INCIDENT_RESOLUTION_LAG": DetectorSignalProfile(
@@ -276,6 +321,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="unresolved_count",
         manual_step="manually chasing the linked engineering issue after an incident is closed",
         unit="days",
+        case_noun="incidents awaiting their linked engineering issue",
+        residual="the engineering fix itself, which stays with the team",
     ),
     "ENT_SLA_BREACH_BY_TEAM": DetectorSignalProfile(
         concept=CONCEPT_TIME_TO_RESOLVE,
@@ -288,6 +335,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal=None,
         manual_step="manually rebalancing work across teams once breaches concentrate in one queue",
         unit="ratio",
+        case_noun="breaching tickets in the concentrated queue",
+        residual="rebalancing decisions, which stay with a team lead",
     ),
     "ENT_CHANGE_INCIDENT_CORRELATION": DetectorSignalProfile(
         concept=CONCEPT_RECURRENCE,
@@ -296,6 +345,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="post_change_incidents",
         manual_step="manually correlating new incidents back to the change that preceded them",
         unit="count",
+        case_noun="incidents following a recorded change",
+        residual="the causal assessment, which stays with a change owner",
     ),
     # ---- GitHub engineering ---------------------------------------------
     "GITHUB_PR_REVIEW_BOTTLENECK": DetectorSignalProfile(
@@ -305,6 +356,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="prs_over_threshold",
         manual_step="manually chasing reviewers to move a waiting pull request forward",
         unit="days",
+        case_noun="pull requests waiting past the review threshold",
+        residual="the code review itself, which stays with a reviewer",
     ),
     "GITHUB_STALE_BRANCHES": DetectorSignalProfile(
         concept=CONCEPT_AGEING,
@@ -313,6 +366,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal="stale_count",
         manual_step="manually auditing branches to find which are abandoned",
         unit="days",
+        case_noun="branches with no recent activity",
+        residual="the decision to delete or revive a branch, which stays with its owner",
     ),
     "GITHUB_COMMIT_CONCENTRATION": DetectorSignalProfile(
         concept=CONCEPT_QUEUE_VOLUME,
@@ -322,6 +377,8 @@ _PROFILES: Dict[str, DetectorSignalProfile] = {
         instance_signal=None,
         manual_step="manually spreading review and change load when it concentrates on one contributor",
         unit="ratio",
+        case_noun="changes concentrated on one contributor",
+        residual="the engineering work itself, which stays with the team",
     ),
 }
 
