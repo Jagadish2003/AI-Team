@@ -163,6 +163,9 @@ function PlanHarness(
         onLaunch={vi.fn()}
       />
       <output data-testid="selected-pack">{setupState.state.packId ?? ''}</output>
+      <output data-testid="selected-pack-ids">
+        {(setupState.state.packIds ?? []).join(',')}
+      </output>
     </div>
   );
 }
@@ -281,21 +284,50 @@ describe('R18-C1 T6 - combined registry and first-run guide contract', () => {
     expect(screen.getByText(/Focus Id, Selected System Ids, Roles/)).toBeInTheDocument();
   });
 
-  it('offers an Analysis packs multi-select in the plan (no pack dropdown)', () => {
+  it('offers the analysis pack as a single-select dropdown defaulting to None', () => {
     render(<PlanHarness />);
     fireEvent.click(screen.getByRole('button', { name: 'Load registry plan' }));
 
     expect(screen.getByText(FINANCIAL_SERVICES.label)).toBeInTheDocument();
     expect(screen.getByText(LENDING.label)).toBeInTheDocument();
 
-    // R191-P1: no editable single-pack dropdown; instead a multi-select of the
-    // non-Salesforce analysis packs (Salesforce packs are fixed in the Hub).
-    expect(
-      screen.queryByRole('combobox', { name: 'Analysis pack' }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByText('Analysis packs')).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: /Cloud Ops/i })).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: /GitHub Engineering/i })).toBeInTheDocument();
+    // One analysis pack at most, chosen from a dropdown — NOT a multi-select.
+    const select = screen.getByRole('combobox', {
+      name: 'Analysis pack',
+    }) as HTMLSelectElement;
+    expect(select.multiple).toBe(false);
+    // "None" is the default: applying a template must not pre-pick an analysis
+    // pack (the template's own pack_id is a separate, non-analysis entry).
+    expect(select.value).toBe('');
+    expect((screen.getByRole('option', { name: 'None' }) as HTMLOptionElement).selected)
+      .toBe(true);
+
+    // Every offered analysis pack is an option, and none is a checkbox any more.
+    expect(screen.getByRole('option', { name: 'Cloud Ops' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'GitHub Engineering' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Cloud Ops/i })).not.toBeInTheDocument();
+  });
+
+  it('replaces the analysis pack on each choice and preserves the template pack', () => {
+    render(<PlanHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Load registry plan' }));
+    const select = screen.getByRole('combobox', { name: 'Analysis pack' });
+    const packIds = () => screen.getByTestId('selected-pack-ids').textContent?.trim();
+
+    // The template contributed 'ncino'; it is not an analysis option and must
+    // survive every change made here.
+    expect(packIds()).toBe('ncino');
+
+    fireEvent.change(select, { target: { value: 'cloud_ops' } });
+    expect(packIds()).toBe('ncino,cloud_ops');
+
+    // Single-select: a second choice REPLACES the first rather than adding to it.
+    fireEvent.change(select, { target: { value: 'github_engineering' } });
+    expect(packIds()).toBe('ncino,github_engineering');
+
+    // Back to None clears the analysis slot only.
+    fireEvent.change(select, { target: { value: '' } });
+    expect(packIds()).toBe('ncino');
   });
 
   it('shows the fixed Salesforce packs read-only from the declaration', () => {

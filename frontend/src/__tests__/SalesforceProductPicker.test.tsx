@@ -172,6 +172,59 @@ describe('SalesforceProductPicker', () => {
   });
 });
 
+// ── Shared Integration Hub picker design ──────────────────────────────────────
+// The product declaration is one of seven Integration Hub multi-select pickers
+// (the others: Jira projects, Slack/Teams channels, Confluence spaces,
+// SharePoint sites, GitHub repos). They must read as ONE control — the same
+// capped scrollable list box, the same filled-square selection mark, and the
+// same "X of Y … selected" count. This block pins the parts that had drifted.
+
+describe('SalesforceProductPicker — shared picker design', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDefaultMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('shows the shared selection count, including before anything is picked', async () => {
+    render(<SalesforceProductPicker />);
+    await screen.findByText('nCino');
+
+    expect(screen.getByText('0 of 6 products selected')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('nCino'));
+    expect(screen.getByText('1 of 6 products selected')).toBeInTheDocument();
+  });
+
+  it('caps the option list in the shared scrollable box', async () => {
+    render(<SalesforceProductPicker />);
+    await screen.findByText('nCino');
+
+    const group = screen.getByRole('group', { name: 'Salesforce products' });
+    expect(group.className).toContain('max-h-[15rem]');
+    expect(group.className).toContain('overflow-y-auto');
+  });
+
+  it('marks a selected product with the shared square mark, not a tick glyph', async () => {
+    render(<SalesforceProductPicker />);
+    const row = (await screen.findByText('nCino')).closest(
+      '[role="checkbox"]',
+    ) as HTMLElement;
+
+    expect(row.querySelector('.bg-accent')).toBeNull(); // nothing marked yet
+    fireEvent.click(row);
+
+    expect(row).toHaveAttribute('aria-checked', 'true');
+    // The mark is the shared filled square — never an icon/tick, which is what
+    // made this picker look different from the other six.
+    expect(row.querySelector('.rounded-\\[1px\\].bg-accent')).not.toBeNull();
+    expect(row.querySelector('svg')).toBeNull();
+  });
+});
+
 // ── Placement inside ConnectorDetailPanel ─────────────────────────────────────
 // The product declaration must be the first content section of the Integration
 // Hub right panel — above "Access as:" and Connection Health — so it is

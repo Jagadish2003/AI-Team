@@ -176,8 +176,10 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
 
   if (loading) {
     // Shared skeleton mirrors the header + description + product rows below, so
-    // the real declaration fills the same space instead of popping in.
-    return <PickerSkeleton rows={6} label="Loading product declaration" />;
+    // the real declaration fills the same space instead of popping in. Four rows
+    // ≈ the height of the 15rem list box (the six products now scroll inside it,
+    // as in every other picker) — a six-row skeleton would overshoot it.
+    return <PickerSkeleton rows={4} label="Loading product declaration" />;
   }
 
   return (
@@ -198,11 +200,14 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
         these automatically.
       </p>
 
-      {/* Product toggles */}
+      {/* Product toggles. Same capped, scrollable list box as every other
+          Integration Hub picker (Jira/Slack/Teams/Confluence/SharePoint/GitHub),
+          so the right panel's height does not depend on which connector is
+          selected. */}
       <div
         role="group"
         aria-label="Salesforce products"
-        className="space-y-1.5"
+        className="space-y-1.5 max-h-[15rem] overflow-y-auto pr-1"
       >
         {SALESFORCE_PRODUCTS.map(product => {
           const isSelected = selected.has(product.id);
@@ -224,26 +229,15 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
                   : 'border-border bg-panel hover:border-accent/40',
               ].join(' ')}
             >
-              {/* Checkbox indicator */}
+              {/* Checkbox indicator — the shared Integration Hub multi-select
+                  mark (filled square), identical to the other pickers. The
+                  mt-0.5 offset aligns it with the first line of a two-line row. */}
               <div className={[
-                'mt-0.5 h-3.5 w-3.5 flex-shrink-0 rounded border flex items-center justify-center',
-                isSelected
-                  ? 'border-accent bg-accent/15'
-                  : 'border-border',
+                'mt-0.5 h-3.5 w-3.5 flex-shrink-0 rounded-sm border flex items-center justify-center',
+                isSelected ? 'border-accent bg-accent/20' : 'border-border',
               ].join(' ')}>
                 {isSelected && (
-                  <svg
-                    className="h-2.5 w-2.5 text-accent"
-                    viewBox="0 0 12 12"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden
-                  >
-                    <path d="M2.5 6.5l2.5 2.5 4.5-5" />
-                  </svg>
+                  <div className="h-1.5 w-1.5 rounded-[1px] bg-accent" aria-hidden />
                 )}
               </div>
 
@@ -277,11 +271,14 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
         {saving ? 'Saving…' : 'Save product declaration'}
       </button>
 
-      {selected.size > 0 && (
-        <p className="mt-2 text-center text-[11px] text-accent">
-          {selected.size} product{selected.size > 1 ? 's' : ''} declared
-        </p>
-      )}
+      {/* Selection count in the shared "X of Y … selected" form the other
+          pickers use, and always visible — a count that appears only once
+          something is picked was the one place this picker read differently
+          from the rest of the panel. */}
+      <p className="mt-2 text-center text-[11px] text-accent">
+        {selected.size} of {SALESFORCE_PRODUCTS.length} product
+        {SALESFORCE_PRODUCTS.length > 1 ? 's' : ''} selected
+      </p>
     </div>
   );
 }

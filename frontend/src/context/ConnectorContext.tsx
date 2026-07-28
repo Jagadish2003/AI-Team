@@ -25,7 +25,11 @@ type ConnectorContextValue = {
   nextBestRecommendedId: string | null;
 
   selectConnector: (id: string) => void;
-  connectConnector: (id: string) => void;
+  // Resolves true when the OAuth round-trip was initiated (auth-url minted and
+  // the browser redirect started), false when it failed. Callers use this to
+  // hold a one-shot "Connecting…" button state: on true the browser is already
+  // navigating away, so the button stays busy; on false it is released to retry.
+  connectConnector: (id: string) => Promise<boolean>;
   configureSync: (id: string) => void;
   // R18-C0 P4 / AT-566: disconnect a connector (clears the org vault credential
   // and returns the tile to its unconnected state). Rejects on failure so the
@@ -195,13 +199,15 @@ export function ConnectorProvider({ children }: { children: React.ReactNode }) {
     cache.invalidate(cacheKeys.license);
   }, [cache]);
 
-  const connectConnector = useCallback(async (id: string) => {
+  const connectConnector = useCallback(async (id: string): Promise<boolean> => {
     setMutationError(null);
     try {
       await connectConnectorApi(id);
       invalidateConnectorState();
+      return true;
     } catch (e: any) {
       setMutationError(e?.message ?? 'Failed to connect');
+      return false;
     }
   }, [invalidateConnectorState]);
 
