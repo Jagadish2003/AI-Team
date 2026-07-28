@@ -55,11 +55,15 @@ def _seed_catalog(connector_ids) -> None:
 # Unit — pure derivation (_build_limit_state): no DB, no license needed
 # ===========================================================================
 def test_build_state_under_limit_has_headroom():
+    # MSP-B13 / T4 (AT-746) added the additive approachingCap/atCap/notice keys.
     assert license_limits._build_limit_state(2, 6) == {
         "systemsUsed": 2,
         "systemsLicensed": 6,
         "unlimited": False,
         "canConnectMore": True,
+        "approachingCap": False,
+        "atCap": False,
+        "notice": None,
     }
 
 
@@ -88,6 +92,9 @@ def test_build_state_unlimited_when_max_systems_none():
         "systemsLicensed": None,
         "unlimited": True,
         "canConnectMore": True,
+        "approachingCap": False,
+        "atCap": False,
+        "notice": None,
     }
 
 
@@ -115,6 +122,9 @@ def test_get_limit_state_reflects_connected_count(monkeypatch):
         "systemsLicensed": 6,
         "unlimited": False,
         "canConnectMore": True,
+        "approachingCap": False,
+        "atCap": False,
+        "notice": None,
     }
 
 
@@ -152,6 +162,9 @@ def test_endpoint_returns_shape(client: TestClient, monkeypatch):
         "systemsLicensed": 6,
         "unlimited": False,
         "canConnectMore": True,
+        "approachingCap": False,
+        "atCap": False,
+        "notice": None,
     }
 
 
@@ -198,6 +211,9 @@ def test_ac14_shown_state_matches_enforced_block(client: TestClient, monkeypatch
         "systemsLicensed": 2,
         "unlimited": False,
         "canConnectMore": False,
+        "approachingCap": False,
+        "atCap": True,
+        "notice": "Your license covers 2 systems. Contact CloudFulcrum to add more.",
     }
 
     # The enforced block on the (N+1)th connect carries the SAME counts.

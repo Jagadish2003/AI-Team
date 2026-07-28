@@ -1,0 +1,27 @@
+{
+  "_meta": {
+    "story": "MSP-B2",
+    "task": "T1 (AT-648)",
+    "description": "Offline sample configuration for the Azure Event Connector. NON-SECRET only: the service principal secret lives in the per-org vault (connector_id 'azure_events'), never here. Keyed by org id with a 'default' fallback. The 'subscriptions' list is the PINNED, Owner-approved set — the only subscriptions ingested; it never grows automatically (AC4/AC7)."
+  },
+  "default": {
+    "environment": "AzureCloud",
+    "mode": "lighthouse",
+    "subscriptions": [
+      "11111111-1111-1111-1111-111111111111",
+      "22222222-2222-2222-2222-222222222222"
+    ],
+    "credential_ref": "azure_events",
+    "metadata": {
+      "notes": "Two seeded subscriptions under Lighthouse-delegated access."
+    }
+  },
+  "gov_org": {
+    "environment": "AzureUSGovernment",
+    "mode": "direct",
+    "subscriptions": [
+      "33333333-3333-3333-3333-333333333333"
+    ],
+    "credential_ref": "azure_events"
+  }
+}

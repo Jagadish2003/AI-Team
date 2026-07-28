@@ -60,6 +60,27 @@ describe("LicenseLimitBanner (AT-506 / AC14)", () => {
     );
   });
 
+  it("shows the approaching-capacity notice when within the configured margin (MSP-B13 AC2)", () => {
+    render(
+      <LicenseLimitBanner
+        limits={limits({
+          systemsUsed: 1,
+          systemsLicensed: 2,
+          unlimited: false,
+          canConnectMore: true,
+          approachingCap: true,
+          atCap: false,
+          notice: "You are approaching your licence limit: 1 of 2 systems connected (1 system remaining). Contact CloudFulcrum to add more.",
+        })}
+      />,
+    );
+    expect(screen.getByTestId("license-approaching-limit").textContent).toContain(
+      "approaching your licence limit",
+    );
+    // Not the hard-stop notice — that renders only at the cap.
+    expect(screen.queryByTestId("license-at-limit")).toBeNull();
+  });
+
   it("shows licensing-specific wording at the unlicensed cap (T5 / AC4)", () => {
     licenseMock.status = "readonly"; // no active license → unlicensed cap, not a licensed limit
     render(

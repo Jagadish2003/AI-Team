@@ -1,0 +1,84 @@
+{
+  "_meta": {
+    "story": "MSP-B6",
+    "task": "T1 (AT-736)",
+    "description": "Externalized configuration for the Cloud-Operations Discovery Pack: pack version, NOC terminology set, detector thresholds, and scorer calibration. Loaded from this file so a config change alters pack behaviour with no code deploy (MSP-B6 T1 AC2). Detector and scorer LOGIC is not here (T2/T3/T4) — only the values those tasks read.",
+    "status": "SCAFFOLD",
+    "note": "Editing a value below changes behaviour on the next run; no restart or code change required."
+  },
+
+  "packVersion": "1.2.0",
+
+  "terminology": {
+    "_note": "The NOC vocabulary this pack speaks in findings, roadmap, and executive report — the same externalized mechanism the lending pack uses to drive borrower/covenant language. glossary defines each canonical NOC term (MSP-B6 T1 AC3); language_map re-labels generic AgentIQ vocabulary into NOC language for terminology-aware rendering (later tasks).",
+    "glossary": {
+      "alerts": "Automated notifications raised by monitoring or event sources when a metric or condition crosses a defined boundary.",
+      "incidents": "Tracked ITSM records representing a service disruption or degradation worked to resolution.",
+      "runbooks": "Documented, repeatable operational procedures for resolving a known incident or performing a known task.",
+      "mttr": "Mean time to resolve — the median elapsed time from incident open to close, the core effort measure for operations findings.",
+      "toil": "Manual, repetitive operational work that scales with service growth and produces no lasting value — the primary automation-candidate signal.",
+      "escalation": "Reassignment of an incident to another group or queue, or elevation in priority, when the current owner cannot resolve it."
+    },
+    "language_map": {
+      "opportunity": "finding",
+      "friction": "toil",
+      "ticket": "incident",
+      "notification": "alert",
+      "documentation": "runbook",
+      "resolution_time": "MTTR",
+      "handoff": "escalation"
+    }
+  },
+
+  "thresholds": {
+    "_note": "Detector firing boundaries. Read by the detectors built in MSP-B6 T2/T3; no detector logic lives here.",
+    "recurring_resolution_loop": {
+      "min_occurrences": 3,
+      "window_days": 30
+    },
+    "alert_triage_toil": {
+      "max_resolve_minutes": 30,
+      "min_daily_volume": 5
+    },
+    "reassignment_ping_pong": {
+      "min_hops": 3
+    },
+    "queue_ageing": {
+      "baseline_departure_pct": 0.25,
+      "min_baseline_runs": 3
+    },
+    "shared_ci_hotspot": {
+      "max_hops": 2,
+      "min_services": 3,
+      "require_event_corroboration": true
+    }
+  },
+
+  "calibration": {
+    "_note": "Ops impact scorer calibration. Read by the scorer built in MSP-B6 T4; no scorer logic lives here. impact_weights are relative ranking weights across the four dimensions in Section 2 of the scope; automation_shape/recurrence_stability carry the per-dimension thresholds the scorer derives those two 0..1 dimension scores from (T4 AC2 — a value change alters ranked order with no code deploy); confidence describes the honest-confidence caps enforced at the pack boundary (T6).",
+    "impact_weights": {
+      "effort_concentration": 0.4,
+      "breadth": 0.25,
+      "recurrence_stability": 0.2,
+      "automation_shape": 0.15
+    },
+    "automation_shape": {
+      "_note": "Automation-shape dimension (0..1): a trivially-resolved finding (short MTTR, one close code) scores high and outranks a judgment-heavy one (T4 AC3). Derived from median MTTR against these bounds unless the finding carries an explicit automation_shape value.",
+      "trivial_ttr_minutes": 30,
+      "judgment_ttr_minutes": 240,
+      "single_close_code_bonus": 0.15,
+      "default": 0.5
+    },
+    "recurrence_stability": {
+      "_note": "Recurrence-stability dimension (0..1): a steady cadence scores higher than a bursty one. Used when a finding carries a recurrence_shape ('steady'/'burst') or an interarrival coefficient-of-variation; otherwise the default applies.",
+      "steady": 1.0,
+      "burst": 0.4,
+      "default": 0.6
+    },
+    "confidence": {
+      "single_source_cap": "MEDIUM",
+      "corroborated_max": "HIGH",
+      "conversation_source_cap": "MEDIUM"
+    }
+  }
+}

@@ -471,5 +471,41 @@
       "Lineage"
     ],
     "signalStrength": 42
+  },
+  {
+    "id": "aws_events",
+    "name": "AWS Events",
+    "category": "Cloud Operations - Multi-account",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "multiScope": true,
+    "scopeNoun": "account",
+    "metrics": [],
+    "lastSynced": "—",
+    "reads": [
+      "CloudWatch Alarms",
+      "EventBridge Rules",
+      "CloudTrail Management Events"
+    ],
+    "signalStrength": 55
+  },
+  {
+    "id": "azure_events",
+    "name": "Azure Events",
+    "category": "Cloud Operations - Multi-subscription",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "multiScope": true,
+    "scopeNoun": "subscription",
+    "metrics": [],
+    "lastSynced": "—",
+    "reads": [
+      "Monitor Alerts",
+      "Activity Log (Administrative)",
+      "Service Health"
+    ],
+    "signalStrength": 55
   }
 ]

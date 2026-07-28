@@ -172,6 +172,25 @@ export function resolvePackId(
   return 'service_cloud';
 }
 
+export function resolvePackIds(
+  state: ReturnType<typeof useSetupState>['state'],
+  catalog: WorkspaceCatalogResponse | null,
+  industries: IndustryListItem[],
+  templates: TemplateListItem[],
+): string[] {
+  if (state.packIds?.length) {
+    return Array.from(new Set(state.packIds.filter(Boolean)));
+  }
+  const selectedTemplateIds = state.templateIds?.length
+    ? state.templateIds
+    : (state.templateId ? [state.templateId] : []);
+  const templatePackIds = selectedTemplateIds
+    .map(templateId => templates.find(template => template.template_id === templateId)?.pack_id)
+    .filter(Boolean) as string[];
+  if (templatePackIds.length) return Array.from(new Set(templatePackIds));
+  return [resolvePackId(state, catalog, industries, templates)];
+}
+
 // ── Launch payload builder ─────────────────────────────────────────────────────
 //
 // R16-C1 T5 — the configuration the customer selected is the configuration that
@@ -187,8 +206,10 @@ export interface StackBuilderLaunchPayload {
   focus_id: SetupState['focusId'];
   industry_id: SetupState['industryId'];
   template_id: SetupState['templateId'];
+  template_ids: string[];
   selected_system_ids: string[];
   pack_id: string;
+  pack_ids: string[];
   weightings: Record<string, SystemWeighting>;
 }
 
@@ -224,8 +245,12 @@ export function buildStackBuilderLaunchPayload(
     // was chosen and which fields the user edited — and resolves the template's
     // pack/focus for an untouched launch. null when no template is selected.
     template_id: state.templateId,
+    template_ids: state.templateIds?.length
+      ? state.templateIds
+      : (state.templateId ? [state.templateId] : []),
     selected_system_ids: state.selectedSystemIds,
     pack_id: packId,
+    pack_ids: state.packIds?.length ? state.packIds : [packId],
     weightings: state.weightings,
   };
 }
@@ -347,9 +372,13 @@ function StackBuilderSidePanel({
     ? industries.find(i => i.industry_id === state.industryId)?.label
         ?? state.industryId
     : 'Optional';
-  const templateLabel = state.templateId
-    ? templates.find(t => t.template_id === state.templateId)?.label
-        ?? state.templateId
+  const selectedTemplateIds = state.templateIds?.length
+    ? state.templateIds
+    : (state.templateId ? [state.templateId] : []);
+  const templateLabel = selectedTemplateIds.length
+    ? selectedTemplateIds
+        .map(id => templates.find(template => template.template_id === id)?.label ?? id)
+        .join(' + ')
     : 'Optional';
 
   return (
@@ -511,7 +540,8 @@ export default function StackBuilderPage({
   const handleLaunch = useCallback(async () => {
     if (launchState === 'launching') return;
     setLaunchState('launching');
-    const packId = resolvePackId(state, catalog, industries, templates);
+    const packIds = resolvePackIds(state, catalog, industries, templates);
+    const packId = packIds[0];
     console.log(`packId:`, packId);
     const systems = normaliseSystems(state.selectedSystemIds);
     const headers = buildAuthHeaders(token);
@@ -544,6 +574,7 @@ export default function StackBuilderPage({
           mode: 'live',
           systems,
           pack: packId,
+          pack_ids: packIds,
         }),
       }).catch((err) => {
         console.error('[StackBuilderPage] Compute trigger failed:', err);
@@ -663,6 +694,7 @@ export default function StackBuilderPage({
               industries={industries}
               templates={templates}
               activePackId={resolvePackId(state, catalog, industries, templates)}
+              activePackIds={resolvePackIds(state, catalog, industries, templates)}
               onLaunch={handleLaunch}
               launchState={launchState}
             />

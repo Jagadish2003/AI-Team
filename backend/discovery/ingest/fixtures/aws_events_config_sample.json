@@ -1,0 +1,25 @@
+{
+  "_comment": "MSP-B1 offline configuration fixture for the native AWS Event Connector (discovery/ingest/aws_events_config.py). Mirrors azure_events_config_sample.json: NON-SECRET config only — the managed-account estate, its partition, each account's read-only role ARN / STS ExternalId / regions. No AWS access key ever appears here or in AWS_EVENT_ACCOUNTS; the hub key lives in the per-org credential vault under the connector id 'aws_events' and per-account direct keys under 'aws_events:account:{account_id}'. LIVE DATA NEEDED: replace account_id / role_arn / external_id / regions with the customer's real managed accounts before a live run, and vault the hub access key through the Integration Hub AWS card.",
+  "default": {
+    "partition": "aws",
+    "accounts": [
+      {
+        "account_id": "111122223333",
+        "role_arn": "arn:aws:iam::111122223333:role/AgentIQReadOnly",
+        "external_id": "agentiq-offline-external-id",
+        "regions": ["us-east-1"],
+        "label": "prod (us-east-1)"
+      },
+      {
+        "account_id": "444455556666",
+        "role_arn": "arn:aws:iam::444455556666:role/AgentIQReadOnly",
+        "external_id": "agentiq-offline-external-id",
+        "regions": ["us-west-2"],
+        "label": "non-prod (us-west-2)"
+      }
+    ],
+    "metadata": {
+      "source": "offline_fixture"
+    }
+  }
+}

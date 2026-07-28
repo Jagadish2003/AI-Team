@@ -633,7 +633,16 @@ class TestEntityRelationshipDataclass:
         assert INFERRED_CONFIDENCE == 0.6
 
     def test_five_relationship_types_defined(self):
-        assert RELATIONSHIP_TYPES == {"owns", "member_of", "escalates_to", "depends_on", "routes_to"}
+        assert RELATIONSHIP_TYPES == {
+            "owns",
+            "member_of",
+            "escalates_to",
+            "depends_on",
+            "routes_to",
+            "used_by",
+            "runs_on",
+            "connects_to",
+        }
 
 
 # ---------------------------------------------------------------------------

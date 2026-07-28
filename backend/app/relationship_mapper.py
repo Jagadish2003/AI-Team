@@ -42,6 +42,7 @@ from database.models.entity_relationships import (
     EntityRelationship,
     INFERRED_CONFIDENCE,
     OBSERVED_CONFIDENCE,
+    RELATIONSHIP_TYPES,
 )
 from app.provenance import EvidencePointer
 
@@ -401,6 +402,280 @@ def get_resolved_entity(
     return None
 
 
+def get_resolved_source_entity(
+    org_id: str,
+    entity_type: str,
+    source_system: str,
+    source_record_id: str,
+    entities: List[Entity],
+) -> Optional[Entity]:
+    """Look up an exact resolved source identity within the current org."""
+    stable_id = str(source_record_id or "").strip()
+    if not stable_id:
+        return None
+    for entity in entities:
+        if (
+            entity.org_id == org_id
+            and entity.entity_type == entity_type
+            and entity.source_system == source_system
+            and str(entity.source_record_id or "").strip() == stable_id
+        ):
+            return entity if entity.resolution_status == "resolved" else None
+    return None
+
+
+def _remove_servicenow_relationship_source(
+    *,
+    org_id: str,
+    relationship_sys_id: str,
+    keep_key: Optional[tuple[str, str, str]] = None,
+) -> int:
+    """Remove graph edges for one explicit ServiceNow relationship record.
+
+    The evidence match and delete are both organization-scoped. ``keep_key``
+    lets a changed relationship retain its current natural key while removing
+    a prior direction/type/end-point representation of the same source row.
+    """
+    conn = _connect()
+    removed = 0
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, from_entity_id, to_entity_id, relationship_type, evidence
+            FROM entity_relationships
+            WHERE org_id = %s AND inferred = %s
+            """,
+            (org_id, False),
+        )
+        for row in cur.fetchall():
+            evidence = row["evidence"]
+            if isinstance(evidence, str):
+                try:
+                    evidence = json.loads(evidence)
+                except (TypeError, ValueError):
+                    continue
+            if not isinstance(evidence, dict):
+                continue
+            source_id = str(
+                evidence.get("relationship_sys_id")
+                or evidence.get("source_record_id")
+                or ""
+            ).strip()
+            if evidence.get("source") != "servicenow" or source_id != relationship_sys_id:
+                continue
+            natural_key = (
+                str(row["from_entity_id"]),
+                str(row["to_entity_id"]),
+                str(row["relationship_type"]),
+            )
+            if keep_key is not None and natural_key == keep_key:
+                continue
+            cur.execute(
+                "DELETE FROM entity_relationships WHERE id = %s AND org_id = %s",
+                (row["id"], org_id),
+            )
+            removed += 1
+        conn.commit()
+        return removed
+    finally:
+        conn.close()
+
+
+def list_servicenow_relationship_source_ids(org_id: str) -> set[str]:
+    """List explicit ServiceNow edge ids already admitted for one org."""
+    conn = _connect()
+    source_ids: set[str] = set()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT evidence FROM entity_relationships WHERE org_id = %s AND inferred = %s",
+            (org_id, False),
+        )
+        for row in cur.fetchall():
+            evidence = row["evidence"]
+            if isinstance(evidence, str):
+                try:
+                    evidence = json.loads(evidence)
+                except (TypeError, ValueError):
+                    continue
+            if not isinstance(evidence, dict) or evidence.get("source") != "servicenow":
+                continue
+            if (
+                evidence.get("field") != "cmdb_rel_ci"
+                and evidence.get("source_type") != "servicenow_cmdb_rel_ci"
+            ):
+                continue
+            source_id = str(
+                evidence.get("relationship_sys_id")
+                or evidence.get("source_record_id")
+                or ""
+            ).strip()
+            if source_id:
+                source_ids.add(source_id)
+        return source_ids
+    finally:
+        conn.close()
+
+
+def list_servicenow_cmdb_relationships(org_id: str) -> List[Dict[str, Any]]:
+    """Return active observed CMDB edges with their source provenance.
+
+    Both relationship and endpoint lookups are constrained to ``org_id``.
+    This lets workflow-signal resolvers traverse relationships that were
+    confirmed on an earlier incremental run without treating registry or
+    topology data as a new source observation.
+    """
+    conn = _connect()
+    relationships: List[Dict[str, Any]] = []
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT er.relationship_type, er.evidence,
+                   source.source_record_id AS source_ci_id,
+                   target.source_record_id AS target_ci_id
+            FROM entity_relationships er
+            JOIN entities source
+              ON source.id = er.from_entity_id AND source.org_id = er.org_id
+            JOIN entities target
+              ON target.id = er.to_entity_id AND target.org_id = er.org_id
+            WHERE er.org_id = %s
+              AND er.inferred = %s
+              AND source.entity_type = 'system'
+              AND target.entity_type = 'system'
+              AND source.source_system = 'servicenow'
+              AND target.source_system = 'servicenow'
+              AND source.resolution_status = 'resolved'
+              AND target.resolution_status = 'resolved'
+            """,
+            (org_id, False),
+        )
+        for row in cur.fetchall():
+            evidence = row["evidence"]
+            if isinstance(evidence, str):
+                try:
+                    evidence = json.loads(evidence)
+                except (TypeError, ValueError):
+                    continue
+            if not isinstance(evidence, dict) or evidence.get("source") != "servicenow":
+                continue
+            if (
+                evidence.get("field") != "cmdb_rel_ci"
+                and evidence.get("source_type") != "servicenow_cmdb_rel_ci"
+            ):
+                continue
+            relationship_sys_id = str(
+                evidence.get("relationship_sys_id")
+                or evidence.get("source_record_id")
+                or ""
+            ).strip()
+            source_ci_id = str(row["source_ci_id"] or "").strip()
+            target_ci_id = str(row["target_ci_id"] or "").strip()
+            if not relationship_sys_id or not source_ci_id or not target_ci_id:
+                continue
+            relationships.append(
+                {
+                    "sys_id": relationship_sys_id,
+                    "relationship_type": str(row["relationship_type"]),
+                    "source_ci_id": source_ci_id,
+                    "target_ci_id": target_ci_id,
+                    "source_type": evidence.get("source_type"),
+                    "source_timestamp": evidence.get("source_timestamp"),
+                    "source_url": evidence.get("source_url"),
+                    "origin": "observed",
+                }
+            )
+        return sorted(
+            relationships,
+            key=lambda relationship: (
+                relationship["relationship_type"],
+                relationship["source_ci_id"],
+                relationship["target_ci_id"],
+                relationship["sys_id"],
+            ),
+        )
+    finally:
+        conn.close()
+
+
+def apply_servicenow_cmdb_relationship_delta(
+    *,
+    org_id: str,
+    run_id: str,
+    relationships: List[Dict[str, Any]],
+    entities: List[Entity],
+) -> int:
+    """Apply explicit changed or deleted ``cmdb_rel_ci`` records.
+
+    A tombstone removes only the observed edge carrying that ServiceNow record
+    id. An active row is upserted and any older representation of that same
+    source relationship is removed. No edge is inferred from topology or names.
+    """
+    count = 0
+    for relationship in relationships:
+        if not isinstance(relationship, dict):
+            continue
+        relationship_sys_id = str(
+            relationship.get("sys_id") or relationship.get("artifact_id") or ""
+        ).strip()
+        if not relationship_sys_id:
+            continue
+        if relationship.get("change_kind") == "deleted":
+            _remove_servicenow_relationship_source(
+                org_id=org_id,
+                relationship_sys_id=relationship_sys_id,
+            )
+            count += 1
+            continue
+
+        source_ci_id = str(relationship.get("source_ci_id") or "").strip()
+        target_ci_id = str(relationship.get("target_ci_id") or "").strip()
+        relationship_type = str(relationship.get("relationship_type") or "").strip()
+        if relationship_type not in RELATIONSHIP_TYPES:
+            continue
+        source_entity = get_resolved_source_entity(
+            org_id, "system", "servicenow", source_ci_id, entities
+        )
+        target_entity = get_resolved_source_entity(
+            org_id, "system", "servicenow", target_ci_id, entities
+        )
+        if source_entity is None or target_entity is None:
+            continue
+        natural_key = (
+            str(source_entity.id),
+            str(target_entity.id),
+            relationship_type,
+        )
+        _remove_servicenow_relationship_source(
+            org_id=org_id,
+            relationship_sys_id=relationship_sys_id,
+            keep_key=natural_key,
+        )
+        persisted = upsert_relationship(
+            org_id=org_id,
+            from_entity_id=natural_key[0],
+            to_entity_id=natural_key[1],
+            relationship_type=relationship_type,
+            confidence=OBSERVED_CONFIDENCE,
+            inferred=False,
+            run_id=run_id,
+            evidence={
+                "field": "cmdb_rel_ci",
+                "source": "servicenow",
+                "source_artifact": relationship_sys_id,
+                "source_record_id": relationship_sys_id,
+                "source_type": relationship.get("source_type"),
+                "source_timestamp": relationship.get("source_timestamp"),
+                "source_url": relationship.get("source_url"),
+                "relationship_sys_id": relationship_sys_id,
+            },
+        )
+        if persisted is not None:
+            count += 1
+    return count
+
+
 def _sn_ref_name(value: Any) -> Optional[str]:
     """Extract a display name from a ServiceNow reference field.
 
@@ -473,6 +748,7 @@ def map_directly_observed(
       owns        — Salesforce/nCino Person → Object via OwnerId/owner fields.
       member_of   — ServiceNow Person → Team via assigned_to/assignment_group.
       escalates_to — ServiceNow and Jira Object → Person/Team via escalation fields.
+      CMDB graph verbs — ServiceNow System → System via explicit cmdb_rel_ci rows.
 
     Individual record failures are caught and logged; the function continues
     processing remaining records and never raises to the caller.
@@ -590,9 +866,74 @@ def map_directly_observed(
                 logger.debug("map_directly_observed ncino owns — record skipped: %s", exc)
 
     # -----------------------------------------------------------------------
-    # member_of: ServiceNow Person → Team via assigned_to / assignment_group
+    # ServiceNow CMDB: System -> System, explicitly observed in cmdb_rel_ci.
     # -----------------------------------------------------------------------
     sn_data: Dict[str, Any] = ingestor_data.get("servicenow") or {}
+    cmdb_data: Dict[str, Any] = sn_data.get("cmdb") or {}
+    payload_org = str(cmdb_data.get("org_id") or "").strip()
+    if payload_org and payload_org != org_id:
+        raise ValueError(
+            f"ServiceNow CMDB payload org {payload_org!r} does not match {org_id!r}"
+        )
+    for relationship in cmdb_data.get("relationships", []) or []:
+        if not isinstance(relationship, dict):
+            continue
+        try:
+            source_ci_id = str(relationship.get("source_ci_id") or "").strip()
+            target_ci_id = str(relationship.get("target_ci_id") or "").strip()
+            relationship_type = str(
+                relationship.get("relationship_type") or ""
+            ).strip()
+            relationship_sys_id = str(relationship.get("sys_id") or "").strip()
+            if (
+                not source_ci_id
+                or not target_ci_id
+                or not relationship_sys_id
+                or relationship_type not in RELATIONSHIP_TYPES
+            ):
+                continue
+            source_entity = get_resolved_source_entity(
+                org_id,
+                "system",
+                "servicenow",
+                source_ci_id,
+                entities,
+            )
+            target_entity = get_resolved_source_entity(
+                org_id,
+                "system",
+                "servicenow",
+                target_ci_id,
+                entities,
+            )
+            if source_entity is None or target_entity is None:
+                continue
+            if write_once(
+                source_entity,
+                target_entity,
+                relationship_type,
+                {
+                    "field": "cmdb_rel_ci",
+                    "source": "servicenow",
+                    "source_artifact": relationship_sys_id,
+                    "source_record_id": relationship_sys_id,
+                    "source_type": relationship.get("source_type"),
+                    "source_timestamp": relationship.get("source_timestamp"),
+                    "source_url": relationship.get("source_url"),
+                    "relationship_sys_id": relationship_sys_id,
+                },
+            ):
+                count += 1
+        except Exception as exc:
+            logger.debug(
+                "map_directly_observed CMDB relationship %s skipped: %s",
+                relationship.get("sys_id"),
+                exc,
+            )
+
+    # -----------------------------------------------------------------------
+    # member_of: ServiceNow Person -> Team via assigned_to / assignment_group
+    # -----------------------------------------------------------------------
     incident_metrics: Dict[str, Any] = sn_data.get("incident_metrics") or {}
     for incident in (incident_metrics.get("incidents") or []):
         if not isinstance(incident, dict):

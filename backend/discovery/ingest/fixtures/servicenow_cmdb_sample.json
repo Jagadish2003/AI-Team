@@ -1,0 +1,119 @@
+{
+  "_meta": {
+    "description": "Synthetic bounded ServiceNow CMDB fixture for MSP-B3 T1-T3",
+    "note": "Contains only approved CI fields and explicit relationships among admitted CIs.",
+    "instance_url": "https://example.service-now.com"
+  },
+  "result": [
+    {
+      "sys_id": "ci-app-service-001",
+      "name": "Citizen Services Portal",
+      "sys_class_name": "cmdb_ci_service_auto",
+      "operational_status": "Operational",
+      "assignment_group": "Application Operations",
+      "owned_by": "Digital Services",
+      "environment": "production",
+      "sys_updated_on": "2026-07-01 10:00:00"
+    },
+    {
+      "sys_id": "ci-server-001",
+      "name": "app-prod-01",
+      "sys_class_name": "cmdb_ci_server",
+      "operational_status": "Operational",
+      "assignment_group": "Platform Operations",
+      "owned_by": "Infrastructure",
+      "environment": "production",
+      "sys_updated_on": "2026-07-01 10:05:00"
+    },
+    {
+      "sys_id": "ci-db-001",
+      "name": "citizen-services-db",
+      "sys_class_name": "cmdb_ci_db_instance",
+      "operational_status": "Operational",
+      "assignment_group": "Database Operations",
+      "owned_by": "Infrastructure",
+      "environment": "production",
+      "sys_updated_on": "2026-07-01 10:10:00"
+    },
+    {
+      "sys_id": "ci-storage-001",
+      "name": "prod-storage-01",
+      "sys_class_name": "cmdb_ci_storage_device",
+      "operational_status": "Operational",
+      "assignment_group": "Storage Operations",
+      "owned_by": "Infrastructure",
+      "environment": "production",
+      "sys_updated_on": "2026-07-01 10:15:00"
+    },
+    {
+      "sys_id": "ci-network-001",
+      "name": "core-router-01",
+      "sys_class_name": "cmdb_ci_netgear",
+      "operational_status": "Operational",
+      "assignment_group": "Network Operations",
+      "owned_by": "Infrastructure",
+      "environment": "production",
+      "sys_updated_on": "2026-07-01 10:20:00"
+    },
+    {
+      "sys_id": "ci-lb-001",
+      "name": "public-lb-01",
+      "sys_class_name": "cmdb_ci_lb",
+      "operational_status": "Operational",
+      "assignment_group": "Network Operations",
+      "owned_by": "Infrastructure",
+      "environment": "production",
+      "sys_updated_on": "2026-07-01 10:25:00"
+    }
+  ],
+  "relationships": [
+    {
+      "sys_id": "rel-app-runs-server-001",
+      "parent": {
+        "value": "ci-app-service-001",
+        "display_value": "Citizen Services Portal"
+      },
+      "child": {
+        "value": "ci-server-001",
+        "display_value": "app-prod-01"
+      },
+      "type": {
+        "value": "rel-type-runs-on",
+        "display_value": "Runs on::Runs"
+      },
+      "sys_updated_on": "2026-07-01 11:00:00"
+    },
+    {
+      "sys_id": "rel-server-depends-db-001",
+      "parent": {
+        "value": "ci-server-001",
+        "display_value": "app-prod-01"
+      },
+      "child": {
+        "value": "ci-db-001",
+        "display_value": "citizen-services-db"
+      },
+      "type": {
+        "value": "rel-type-depends-on",
+        "display_value": "Depends on::Used by"
+      },
+      "sys_updated_on": "2026-07-01 11:05:00"
+    },
+    {
+      "sys_id": "rel-lb-connects-network-001",
+      "parent": {
+        "value": "ci-lb-001",
+        "display_value": "public-lb-01"
+      },
+      "child": {
+        "value": "ci-network-001",
+        "display_value": "core-router-01"
+      },
+      "type": {
+        "value": "rel-type-connects-to",
+        "display_value": "Connects to::Connected by"
+      },
+      "sys_updated_on": "2026-07-01 11:10:00"
+    }
+  ]
+}

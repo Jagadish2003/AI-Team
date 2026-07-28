@@ -1,0 +1,49 @@
+{
+  "value": [
+    {
+      "schemaId": "azureMonitorCommonAlertSchema",
+      "data": {
+        "essentials": {
+          "alertId": "/subscriptions/11111111-2222-3333-4444-555555555555/providers/Microsoft.AlertsManagement/alerts/aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb",
+          "alertRule": "prod-api-latency-high",
+          "severity": "Sev2",
+          "signalType": "Metric",
+          "monitorCondition": "Fired",
+          "monitoringService": "Platform",
+          "alertTargetIDs": [
+            "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/prod/providers/Microsoft.Web/sites/prod-api"
+          ],
+          "firedDateTime": "2026-06-01T12:05:30.123Z",
+          "description": "Average response time exceeded 2000ms"
+        },
+        "alertContext": {
+          "conditionType": "SingleResourceMultipleMetricCriteria",
+          "condition": {
+            "allOf": [
+              {"metricName": "HttpResponseTime", "operator": "GreaterThan", "threshold": "2", "metricValue": 3.4}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "schemaId": "azureMonitorCommonAlertSchema",
+      "data": {
+        "essentials": {
+          "alertId": "/subscriptions/11111111-2222-3333-4444-555555555555/providers/Microsoft.AlertsManagement/alerts/cccccccc-4444-5555-6666-dddddddddddd",
+          "alertRule": "prod-db-dtu-high",
+          "severity": "Sev3",
+          "signalType": "Metric",
+          "monitorCondition": "Resolved",
+          "monitoringService": "Platform",
+          "alertTargetIDs": [
+            "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/prod/providers/Microsoft.Sql/servers/prod-sql/databases/appdb"
+          ],
+          "firedDateTime": "2026-06-01T14:22:10.000Z",
+          "resolvedDateTime": "2026-06-01T14:40:00.000Z",
+          "description": "DTU consumption returned to normal"
+        }
+      }
+    }
+  ]
+}

@@ -43,6 +43,14 @@ export interface OpportunityCandidate {
   corroboration_label?: string | null;
   triple_corroboration?: boolean;
   corroboration_rule_ids?: string[];
+  // R191-P1 T3 — the pack (and its version at run time) that produced this
+  // finding. Optional/additive: a single-pack run stamps its one pack; a
+  // multi-pack run stamps whichever pack's detector fired. Absent on runs
+  // materialized before this field existed. Also present on opportunities
+  // embedded in PilotRoadmap stages (RoadmapStage.opportunities reuses this
+  // same type), satisfying "every roadmap entry carries its packId".
+  packId?: string;
+  packVersion?: string;
 }
 
 export interface ReviewAuditEvent {

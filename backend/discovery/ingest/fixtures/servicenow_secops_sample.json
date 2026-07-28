@@ -1,0 +1,150 @@
+{
+  "_meta": {
+    "description": "Synthetic bounded ServiceNow Security Operations (SIR) fixture for MSP-B11 T1.",
+    "note": "sn_si_incident records carry ONLY workflow fields. The exploit_details / scanner_output / work_notes / description / u_ioc / u_credentials keys are seeded deliberately to prove the field-scope boundary (AC2) — they must NEVER appear in an emitted workflow signal.",
+    "instance_url": "https://example.service-now.com"
+  },
+  "sn_si_incident": [
+    {
+      "sys_id": "sir-0001",
+      "number": "SIR0010001",
+      "state": "Contain",
+      "category": "Malicious code activity",
+      "subcategory": "Ransomware",
+      "severity": "1 - High",
+      "priority": "1 - Critical",
+      "assigned_to": "Dana Cruz",
+      "assignment_group": "SecOps Triage",
+      "opened_at": "2026-06-30 08:00:00",
+      "sys_created_on": "2026-06-30 08:00:00",
+      "sys_updated_on": "2026-07-01 09:30:00",
+      "resolved_at": "",
+      "closed_at": "",
+      "close_code": "",
+      "resolution_code": "",
+      "short_description": "Suspected ransomware on finance workstation",
+      "description": "SEEDED OUT-OF-SCOPE: full incident narrative that must never be ingested.",
+      "work_notes": "SEEDED OUT-OF-SCOPE: analyst work notes.",
+      "exploit_details": "SEEDED OUT-OF-SCOPE: CVE-2026-9999 exploit chain and payload steps.",
+      "scanner_output": "SEEDED OUT-OF-SCOPE: raw scanner finding dump.",
+      "attack_vector": "SEEDED OUT-OF-SCOPE: phishing email attachment",
+      "u_ioc": "SEEDED OUT-OF-SCOPE: 10.0.0.5, evil.example.com, hash abc123",
+      "u_credentials": "SEEDED OUT-OF-SCOPE: svc-backup / hunter2"
+    },
+    {
+      "sys_id": "sir-0002",
+      "number": "SIR0010002",
+      "state": "Analysis",
+      "category": "Unauthorized access",
+      "subcategory": "Privilege escalation",
+      "severity": "2 - Medium",
+      "priority": "2 - High",
+      "assigned_to": "Lee Park",
+      "assignment_group": "SecOps Tier 2",
+      "opened_at": "2026-06-30 10:15:00",
+      "sys_created_on": "2026-06-30 10:15:00",
+      "sys_updated_on": "2026-07-01 11:00:00",
+      "resolved_at": "",
+      "closed_at": "",
+      "close_code": "",
+      "resolution_code": "",
+      "description": "SEEDED OUT-OF-SCOPE narrative.",
+      "scanner_output": "SEEDED OUT-OF-SCOPE scanner dump."
+    },
+    {
+      "sys_id": "sir-0003",
+      "number": "SIR0010003",
+      "state": "Closed",
+      "category": "Phishing",
+      "subcategory": "Credential harvesting",
+      "severity": "3 - Low",
+      "priority": "3 - Moderate",
+      "assigned_to": "Dana Cruz",
+      "assignment_group": "SecOps Triage",
+      "opened_at": "2026-06-28 14:00:00",
+      "sys_created_on": "2026-06-28 14:00:00",
+      "sys_updated_on": "2026-07-01 08:45:00",
+      "resolved_at": "2026-06-30 16:20:00",
+      "closed_at": "2026-06-30 17:00:00",
+      "close_code": "Resolved by mitigation",
+      "resolution_code": "True positive - remediated",
+      "exploit_details": "SEEDED OUT-OF-SCOPE exploit detail.",
+      "u_credentials": "SEEDED OUT-OF-SCOPE credentials."
+    },
+    {
+      "sys_id": "sir-0004",
+      "number": "SIR0010004",
+      "state": "Contain",
+      "category": "Denial of service",
+      "subcategory": "Volumetric",
+      "severity": "2 - Medium",
+      "priority": "2 - High",
+      "assigned_to": "Sam Ito",
+      "assignment_group": "SecOps Tier 2",
+      "opened_at": "2026-07-02 09:00:00",
+      "sys_created_on": "2026-07-02 09:00:00",
+      "sys_updated_on": "2026-07-03 12:30:00",
+      "resolved_at": "",
+      "closed_at": "",
+      "close_code": "",
+      "resolution_code": "",
+      "work_notes": "SEEDED OUT-OF-SCOPE work notes."
+    }
+  ],
+  "sn_si_incident_audit": [
+    {
+      "documentkey": "sir-0001",
+      "tablename": "sn_si_incident",
+      "fieldname": "state",
+      "oldvalue": "Draft",
+      "newvalue": "Analysis",
+      "sys_created_on": "2026-06-30 08:05:00",
+      "sys_updated_on": "2026-06-30 08:05:00"
+    },
+    {
+      "documentkey": "sir-0001",
+      "tablename": "sn_si_incident",
+      "fieldname": "state",
+      "oldvalue": "Analysis",
+      "newvalue": "Contain",
+      "sys_created_on": "2026-07-01 09:30:00",
+      "sys_updated_on": "2026-07-01 09:30:00"
+    },
+    {
+      "documentkey": "sir-0001",
+      "tablename": "sn_si_incident",
+      "fieldname": "assignment_group",
+      "oldvalue": "SecOps Triage",
+      "newvalue": "SecOps Tier 2",
+      "sys_created_on": "2026-06-30 12:00:00",
+      "sys_updated_on": "2026-06-30 12:00:00"
+    },
+    {
+      "documentkey": "sir-0001",
+      "tablename": "sn_si_incident",
+      "fieldname": "assignment_group",
+      "oldvalue": "SecOps Tier 2",
+      "newvalue": "SecOps Triage",
+      "sys_created_on": "2026-07-01 09:30:00",
+      "sys_updated_on": "2026-07-01 09:30:00"
+    },
+    {
+      "documentkey": "sir-0003",
+      "tablename": "sn_si_incident",
+      "fieldname": "state",
+      "oldvalue": "Analysis",
+      "newvalue": "Closed",
+      "sys_created_on": "2026-06-30 17:00:00",
+      "sys_updated_on": "2026-06-30 17:00:00"
+    },
+    {
+      "documentkey": "sir-0004",
+      "tablename": "sn_si_incident",
+      "fieldname": "state",
+      "oldvalue": "Draft",
+      "newvalue": "Contain",
+      "sys_created_on": "2026-07-03 12:30:00",
+      "sys_updated_on": "2026-07-03 12:30:00"
+    }
+  ]
+}

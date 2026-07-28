@@ -82,11 +82,18 @@ const SYSTEM_DEFAULT_ASSUMPTIONS: Record<string, Partial<SystemWeighting>> = {
   azure_devops:      { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['change_release', 'backlog_work_queues'] },
   linear:            { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['backlog_work_queues'] },
   zendesk:           { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['service_casework', 'backlog_work_queues'] },
+  // Cloud Operations (MSP-B13) — canonical connector ids; *_event_source are the
+  // legacy template-suggestion ids kept for backward compatibility.
+  aws_events:        { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['backlog_work_queues'] },
+  azure_events:      { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['backlog_work_queues'] },
+  aws_event_source:  { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['backlog_work_queues'] },
+  azure_event_source:{ role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['backlog_work_queues'] },
   slack:             { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['communications', 'handoffs_routing'] },
   teams:             { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['communications'] },
   confluence:        { role: 'documentation_system',      priority: 'secondary', workflowFocus: ['documents_knowledge'] },
   sharepoint:        { role: 'documentation_system',      priority: 'secondary', workflowFocus: ['documents_knowledge', 'compliance_risk'] },
   notion:            { role: 'documentation_system',      priority: 'secondary', workflowFocus: ['documents_knowledge'] },
+  runbook_library:   { role: 'documentation_system',      priority: 'secondary', workflowFocus: ['documents_knowledge'] },
   github:            { role: 'engineering_change_system', priority: 'secondary', workflowFocus: ['change_release', 'backlog_work_queues'] },
   gitlab:            { role: 'engineering_change_system', priority: 'secondary', workflowFocus: ['change_release'] },
   bitbucket:         { role: 'engineering_change_system', priority: 'secondary', workflowFocus: ['change_release'] },
@@ -216,12 +223,16 @@ const INITIAL: SetupState = {
   focusId: null,
   industryId: null,
   templateId: null,
+  templateIds: [],
   packId: null,
+  packIds: [],
   selectedSystemIds: [],
   selectedSalesforceClouds: [],
   weightings: {},
   currentStep: 1,
   templatePreselectedIds: [],
+  templateExcludedSystemIds: [],
+  templateContributions: {},
 };
 
 export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
@@ -236,7 +247,11 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
   }, []);
 
   const setPack = useCallback((packId: string | null) => {
-    setState(s => ({ ...s, packId }));
+    setState(s => {
+      if (!packId) return { ...s, packId: null, packIds: [] };
+      const remaining = (s.packIds ?? []).filter(id => id !== packId);
+      return { ...s, packId, packIds: [packId, ...remaining] };
+    });
   }, []);
 
   const setTemplate = useCallback((id: TemplateId | null, preselected: string[] = []) => {
@@ -258,8 +273,10 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
       return {
         ...s,
         templateId: id,
+        templateIds: id ? [id] : [],
         selectedSystemIds: systemIds,
         templatePreselectedIds: preselected,
+        templateExcludedSystemIds: [],
         weightings: newWeightings
       };
     });
@@ -278,48 +295,96 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
   //                it is a known focus tile (user can pick another tile).
   //   * pack     → selected from template.pack_id and editable on Step 4.
   //
-  // Passing `null` clears the template and removes only the systems this template
-  // added (systems the user selected by hand are untouched).
+  // Selecting an already-active template removes only that template. Multiple
+  // registry templates can coexist, and their system/pack defaults are composed
+  // in selection order without changing the generic backend model.
   const applyTemplate = useCallback((template: TemplateListItem | null) => {
     setState(s => {
-      // Drop the previously template-added systems and any weighting that was
-      // only there because of them.
-      const keptSystemIds = s.selectedSystemIds.filter(
-        sid => !s.templatePreselectedIds.includes(sid),
-      );
-      const weightings: Record<string, SystemWeighting> = {};
-      Object.entries(s.weightings).forEach(([sid, w]) => {
-        if (keptSystemIds.includes(sid)) weightings[sid] = w;
-      });
-
       if (!template) {
+        const keptSystemIds = s.selectedSystemIds.filter(
+          sid => !s.templatePreselectedIds.includes(sid),
+        );
+        const weightings = Object.fromEntries(
+          Object.entries(s.weightings).filter(([sid]) => keptSystemIds.includes(sid)),
+        ) as Record<string, SystemWeighting>;
         return {
           ...s,
           templateId: null,
+          templateIds: [],
           packId: null,
+          packIds: [],
           templatePreselectedIds: [],
+          templateExcludedSystemIds: [],
+          templateContributions: {},
           selectedSystemIds: keptSystemIds,
           weightings,
         };
       }
 
-      const preselected = Array.from(new Set(template.suggested_systems ?? []));
-      const selectedSystemIds = Array.from(new Set([...keptSystemIds, ...preselected]));
+      const existingIds = s.templateIds?.length
+        ? s.templateIds
+        : (s.templateId ? [s.templateId] : []);
+      const existingContributions = { ...(s.templateContributions ?? {}) };
+      const isRemoving = existingIds.includes(template.template_id);
+      const templateIds = isRemoving
+        ? existingIds.filter(id => id !== template.template_id)
+        : [...existingIds, template.template_id];
 
-      preselected.forEach(sid => {
-        const base = s.weightings[sid] ?? defaultWeighting(sid);
-        const role = template.suggested_roles?.[sid];
-        weightings[sid] = role ? { ...base, role: role as SystemRole } : base;
+      if (isRemoving) {
+        delete existingContributions[template.template_id];
+      } else {
+        existingContributions[template.template_id] = {
+          systemIds: Array.from(new Set(template.suggested_systems ?? [])),
+          suggestedRoles: { ...(template.suggested_roles ?? {}) },
+          packId: template.pack_id,
+          focusId: template.focus_defaults?.focus_id ?? '',
+        };
+      }
+
+      const manualSystemIds = s.selectedSystemIds.filter(
+        sid => !s.templatePreselectedIds.includes(sid),
+      );
+      const templatePreselectedIds = Array.from(new Set(
+        templateIds.flatMap(id => existingContributions[id]?.systemIds ?? []),
+      ));
+      const activeTemplateSystems = new Set(templatePreselectedIds);
+      const templateExcludedSystemIds = (s.templateExcludedSystemIds ?? [])
+        .filter(id => activeTemplateSystems.has(id));
+      const excludedSystems = new Set(templateExcludedSystemIds);
+      const selectedSystemIds = Array.from(new Set([
+        ...manualSystemIds,
+        ...templatePreselectedIds.filter(id => !excludedSystems.has(id)),
+      ]));
+      const weightings = Object.fromEntries(
+        Object.entries(s.weightings).filter(([sid]) => selectedSystemIds.includes(sid)),
+      ) as Record<string, SystemWeighting>;
+
+      templateIds.forEach(id => {
+        const contribution = existingContributions[id];
+        contribution?.systemIds.forEach(sid => {
+          const base = weightings[sid] ?? defaultWeighting(sid);
+          const role = contribution.suggestedRoles[sid];
+          weightings[sid] = role && !s.templatePreselectedIds.includes(sid)
+            ? { ...base, role: role as SystemRole }
+            : base;
+        });
       });
 
+      const packIds = Array.from(new Set(
+        templateIds.map(id => existingContributions[id]?.packId).filter(Boolean),
+      )) as string[];
       const suggestedFocus = template.focus_defaults?.focus_id;
 
       return {
         ...s,
-        templateId: template.template_id,
-        packId: template.pack_id,
-        focusId: isFocusId(suggestedFocus) ? suggestedFocus : s.focusId,
-        templatePreselectedIds: preselected,
+        templateId: templateIds[0] ?? null,
+        templateIds,
+        packId: packIds[0] ?? null,
+        packIds,
+        focusId: !isRemoving && isFocusId(suggestedFocus) ? suggestedFocus : s.focusId,
+        templatePreselectedIds,
+        templateExcludedSystemIds,
+        templateContributions: existingContributions,
         selectedSystemIds,
         weightings,
       };
@@ -362,11 +427,24 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
         const next = s.selectedSystemIds.filter(id => id !== systemId);
         const w = { ...s.weightings };
         delete w[systemId];
-        return { ...s, selectedSystemIds: next, weightings: w };
+        const excluded = new Set(s.templateExcludedSystemIds ?? []);
+        if (s.templatePreselectedIds.includes(systemId)) excluded.add(systemId);
+        return {
+          ...s,
+          selectedSystemIds: next,
+          templateExcludedSystemIds: Array.from(excluded),
+          weightings: w,
+        };
       } else {
         const w = { ...s.weightings };
         if (!w[systemId]) w[systemId] = defaultWeighting(systemId);
-        return { ...s, selectedSystemIds: [...s.selectedSystemIds, systemId], weightings: w };
+        return {
+          ...s,
+          selectedSystemIds: [...s.selectedSystemIds, systemId],
+          templateExcludedSystemIds: (s.templateExcludedSystemIds ?? [])
+            .filter(id => id !== systemId),
+          weightings: w,
+        };
       }
     });
   }, []);
@@ -409,6 +487,7 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
   // before cloud picker adds 'salesforce' (not 'salesforce_pss' etc.)
   const PRIMARY_PLATFORM_IDS = [
     'sap', 'oracle_ebs', 'workday', 'dynamics365',
+    'servicenow',
     'salesforce',        // base ID — cloud picker adds salesforce_pss etc. separately
     'salesforce_pss', 'salesforce_sc', 'salesforce_ncino',
     'salesforce_fsc', 'salesforce_rc', 'salesforce_hc',
@@ -451,11 +530,28 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
 
       if (catalog && saved.selectedSystemIds) {
         const catalogIds = new Set(getCatalogSystemIds(catalog));
-        const filtered = saved.selectedSystemIds.filter(id => catalogIds.has(id));
-        return { ...s, ...restored, selectedSystemIds: filtered };
+        const templateIds = new Set(saved.templatePreselectedIds ?? []);
+        const filtered = saved.selectedSystemIds.filter(
+          id => catalogIds.has(id) || templateIds.has(id),
+        );
+        const migratedTemplateIds = saved.templateIds?.length
+          ? saved.templateIds
+          : (saved.templateId ? [saved.templateId] : []);
+        return {
+          ...s,
+          ...restored,
+          templateIds: migratedTemplateIds,
+          selectedSystemIds: filtered,
+        };
       }
 
-      return { ...s, ...restored };
+      return {
+        ...s,
+        ...restored,
+        templateIds: saved.templateIds?.length
+          ? saved.templateIds
+          : (saved.templateId ? [saved.templateId] : []),
+      };
     });
   }, [catalog]);
 
@@ -470,7 +566,10 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
       const catalogSystemIds = getCatalogSystemIds(c);
       const catalogIdSet = new Set(catalogSystemIds);
       const sfProducts = getCatalogSalesforceProducts(c);
-      const restoredSystemIds = s.selectedSystemIds.filter(id => catalogIdSet.has(id));
+      const templateSystemIds = new Set(s.templatePreselectedIds);
+      const restoredSystemIds = s.selectedSystemIds.filter(
+        id => catalogIdSet.has(id) || templateSystemIds.has(id),
+      );
       const systemIds = s.selectedSystemIds.length === 0 && s.currentStep === 1
         ? catalogSystemIds
         : restoredSystemIds;
