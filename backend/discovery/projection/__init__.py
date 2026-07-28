@@ -11,9 +11,37 @@ Public API (import from this package, not the submodules):
 `signal_registry` maps each detector to the real measured-signal field names it
 already emits (see each detector's ``SIGNAL_METRICS``) — the projection never
 invents a signal name.  `model` computes direction, band, horizon, the replaced
-manual step, and the movement signal deterministically.
+manual step, and the movement signal deterministically.  `band_width` owns HOW
+WIDE the band is — a deterministic function of four evidence inputs (sample
+size, recurrence stability, corroboration status, confidence cap status) and
+never a hand-set number — plus the projection-strength scalar and the AC4
+ordering rule that keeps a capped finding from out-ranking a corroborated one.
 """
 
+from .band_width import (
+    BAND_WIDTH_MODEL_VERSION,
+    AXIS_CONFIDENCE_CAP,
+    AXIS_CORROBORATION,
+    AXIS_RECURRENCE_STABILITY,
+    AXIS_SAMPLE_SIZE,
+    AXIS_WEIGHTS,
+    CAPPED_STRENGTH_CEILING,
+    CAPPED_STRENGTH_LABEL,
+    BandWidth,
+    BandWidthDriver,
+    BandWidthInputs,
+    band_width_inputs_from_opportunity,
+    classify_confidence_cap,
+    classify_corroboration_status,
+    classify_recurrence_stability,
+    classify_sample_tier,
+    compute_band_width,
+    demote_capped_projections,
+    order_by_projection_strength,
+    projection_is_capped,
+    projection_rank_key,
+    projection_strength_of,
+)
 from .model import (
     PROJECTION_SCHEMA_VERSION,
     DIRECTION_IMPROVES,
@@ -42,6 +70,28 @@ from .signal_registry import (
 
 __all__ = [
     "PROJECTION_SCHEMA_VERSION",
+    "BAND_WIDTH_MODEL_VERSION",
+    "AXIS_SAMPLE_SIZE",
+    "AXIS_RECURRENCE_STABILITY",
+    "AXIS_CORROBORATION",
+    "AXIS_CONFIDENCE_CAP",
+    "AXIS_WEIGHTS",
+    "CAPPED_STRENGTH_CEILING",
+    "CAPPED_STRENGTH_LABEL",
+    "BandWidth",
+    "BandWidthDriver",
+    "BandWidthInputs",
+    "band_width_inputs_from_opportunity",
+    "classify_confidence_cap",
+    "classify_corroboration_status",
+    "classify_recurrence_stability",
+    "classify_sample_tier",
+    "compute_band_width",
+    "demote_capped_projections",
+    "order_by_projection_strength",
+    "projection_is_capped",
+    "projection_rank_key",
+    "projection_strength_of",
     "DIRECTION_IMPROVES",
     "DIRECTION_NO_MATERIAL_CHANGE",
     "HORIZON_30",

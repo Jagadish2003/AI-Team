@@ -14,6 +14,7 @@ import {
 import { useRunContext } from "../../context/RunContext";
 import BaselineContextPanel from "./BaselineContextPanel";
 import ProjectionAssumptionLedger from "../projection/ProjectionAssumptionLedger";
+import ProjectionBandPanel from "../projection/ProjectionBand";
 import ProjectionBasisPanel from "../projection/ProjectionBasis";
 
 function BulletList({
@@ -791,6 +792,10 @@ export default function OpportunityDetail({
 
         {/* T7: LLM enrichment panel */}
         <EnrichmentPanel opp={opp} enrichment={enrichment} />
+
+        {/* 2.0-A1 T4: the resulting band and its evidence label, above the
+            basis — the band is the answer, the basis is the working. */}
+        <ProjectionBandPanel projection={projection} />
 
         {/* 2.0-A1 T3: every visible projection shows its computation basis. */}
         <ProjectionBasisPanel projection={projection} />

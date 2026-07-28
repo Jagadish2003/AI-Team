@@ -195,6 +195,15 @@ export interface InterventionProjection {
     /** strong | thin */
     evidenceStrength?: string;
     thinEvidence?: boolean;
+    /** 2.0-A1 T4 — the evidence label and band-width tier, mirrored onto the
+     *  basis so the basis panel can show a band and its reason side by side.
+     *  Absent on projections stored before T4. */
+    evidenceTier?: string;
+    evidenceLabel?: string;
+    bandTier?: string;
+    bandLabel?: string;
+    bandWidthRationale?: string;
+    bandWidthModelVersion?: string;
     packId?: string | null;
     packVersion?: string | null;
     evidenceIds: string[];
@@ -207,11 +216,90 @@ export interface InterventionProjection {
     /** steady | variable | bursty | unknown */
     recurrenceStability: string;
     corroborationStatus: string;
+    /** 2.0-A1 T4 — the fourth band-width input. Absent before T4. */
+    confidenceCapped?: boolean;
     /** True when the band is visibly wider because the evidence is thin. */
     thinEvidence: boolean;
   };
+  /**
+   * 2.0-A1 T4 — the full band-width derivation. null when the finding carries
+   * no band (direction "no_material_change"); absent on pre-T4 projections.
+   *
+   * Every number here is computed from the four evidence inputs and nothing
+   * else. Render `bandLabel` + `evidenceLabel` beside the band, and `drivers`
+   * when the analyst wants to know WHICH weakness widened it.
+   */
+  bandWidth?: ProjectionBandWidth | null;
+  /**
+   * 2.0-A1 T4 — the comparable projection-strength scalar.
+   *
+   * `capped` is load-bearing: a capped (single-source) projection must be
+   * labelled with `cappedLabel` wherever its strength is shown, and must never
+   * be ordered above an uncapped one on `value` alone.
+   */
+  projectionStrength?: ProjectionStrength | null;
   /** True when the finding's confidence is capped for want of corroboration. */
   confidenceCapped: boolean;
+}
+
+/** 2.0-A1 T4 — one band-width axis's contribution, for the audit trail. */
+export interface ProjectionBandWidthDriver {
+  /** sample_size | recurrence_stability | corroboration_status | confidence_cap */
+  axis: string;
+  label: string;
+  value: string;
+  penalty: number;
+  weight: number;
+  /** How many percentage points this axis added to the band's width. */
+  widensByPct: number;
+}
+
+/** 2.0-A1 T4 — how wide the band is, and why. */
+export interface ProjectionBandWidth {
+  modelVersion: string;
+  lowPct: number;
+  highPct: number;
+  /** highPct - lowPct, in percentage points. */
+  widthPct: number;
+  halfWidth: number;
+  evidencePenalty: number;
+  /** 0..1 — 1 is the strongest evidence on all four axes. */
+  evidenceQuality: number;
+  /** strong | adequate | limited | thin */
+  evidenceTier: string;
+  /** e.g. "Adequate evidence — band widened". */
+  evidenceLabel: string;
+  /** narrow | moderate | wide | very_wide */
+  bandTier: string;
+  /** e.g. "Wide band". */
+  bandLabel: string;
+  thinEvidence: boolean;
+  confidenceCapped: boolean;
+  /** Plain-language reason the band is as wide as it is. */
+  rationale: string;
+  drivers: ProjectionBandWidthDriver[];
+  inputs: {
+    sampleTier: string;
+    sampleSize: number | null;
+    recurrenceStability: string;
+    corroborationStatus: string;
+    confidenceCapped: boolean;
+  };
+}
+
+/** 2.0-A1 T4 — the comparable strength scalar and its cap label. */
+export interface ProjectionStrength {
+  /** 0..1, or null when the finding carries no band at all. */
+  value: number | null;
+  /** strong | moderate | weak, or null when there is no band. */
+  tier: string | null;
+  label: string;
+  /** True when confidence is capped for want of corroboration. */
+  capped: boolean;
+  /** The label that must accompany a capped strength. null when uncapped. */
+  cappedLabel: string | null;
+  /** False for capped projections — do not rank them against uncapped ones. */
+  comparableWithCapped: boolean;
 }
 
 export interface RunEnrichment {
