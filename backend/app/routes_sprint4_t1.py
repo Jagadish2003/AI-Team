@@ -277,6 +277,15 @@ def _run_trackb_and_persist(
             run_id, "CONNECT", f"GitHub connected — defaulting to the {_effective_pack} pack"
         )
 
+    # R191-P1: log the FULL multi-pack selection (selected_pack_ids, resolved
+    # above from the launch record + the compute request) for run-log visibility.
+    # The runner runs EVERY selected pack against the shared signal — without this,
+    # only the primary `pack` ran (e.g. Service Cloud but not nCino).
+    if selected_pack_ids:
+        _emit_event(
+            run_id, "CONNECT", f"Analysis packs: {', '.join(selected_pack_ids)}"
+        )
+
     per_system: Dict[str, str] = {
         s: "skipped" for s in ["salesforce", "servicenow", "jira"]
     }

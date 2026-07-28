@@ -135,7 +135,10 @@ function ContractHarness({
   );
 }
 
-function PlanHarness() {
+function PlanHarness(
+  { activePackIds, salesforcePacks }:
+  { activePackIds?: string[]; salesforcePacks?: string[] },
+) {
   const setupState = useSetupState();
   const activePackId = setupState.state.packId ?? LENDING.pack_id;
   return (
@@ -155,6 +158,8 @@ function PlanHarness() {
         industries={[FINANCIAL_SERVICES]}
         templates={[LENDING, INSURANCE_FIXTURE]}
         activePackId={activePackId}
+        activePackIds={activePackIds}
+        salesforcePacks={salesforcePacks}
         onLaunch={vi.fn()}
       />
       <output data-testid="selected-pack">{setupState.state.packId ?? ''}</output>
@@ -276,17 +281,29 @@ describe('R18-C1 T6 - combined registry and first-run guide contract', () => {
     expect(screen.getByText(/Focus Id, Selected System Ids, Roles/)).toBeInTheDocument();
   });
 
-  it('uses registry labels throughout the plan and keeps the template pack editable', () => {
+  it('offers an Analysis packs multi-select in the plan (no pack dropdown)', () => {
     render(<PlanHarness />);
     fireEvent.click(screen.getByRole('button', { name: 'Load registry plan' }));
 
     expect(screen.getByText(FINANCIAL_SERVICES.label)).toBeInTheDocument();
     expect(screen.getByText(LENDING.label)).toBeInTheDocument();
 
-    const packSelect = screen.getByRole('combobox', { name: 'Analysis pack' });
-    expect(packSelect).toHaveValue('ncino');
-    fireEvent.change(packSelect, { target: { value: 'service_cloud' } });
-    expect(packSelect).toHaveValue('service_cloud');
-    expect(screen.getByTestId('selected-pack')).toHaveTextContent('service_cloud');
+    // R191-P1: no editable single-pack dropdown; instead a multi-select of the
+    // non-Salesforce analysis packs (Salesforce packs are fixed in the Hub).
+    expect(
+      screen.queryByRole('combobox', { name: 'Analysis pack' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText('Analysis packs')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /Cloud Ops/i })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /GitHub Engineering/i })).toBeInTheDocument();
+  });
+
+  it('shows the fixed Salesforce packs read-only from the declaration', () => {
+    render(<PlanHarness salesforcePacks={['service_cloud', 'ncino']} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Load registry plan' }));
+
+    // The declared Salesforce products' packs are shown read-only (not selectable).
+    expect(screen.getByText('Salesforce packs')).toBeInTheDocument();
+    expect(screen.getByText('Service Cloud, nCino')).toBeInTheDocument();
   });
 });

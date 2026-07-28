@@ -119,11 +119,21 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
     if (productsData?.products) setSelected(new Set(productsData.products));
   }, [productsData]);
 
-  function selectProduct(id: string) {
-    // Radio behaviour: only one product can be selected at a time. Selecting a
-    // product replaces any previous selection; clicking the selected one clears it.
+  function toggleProduct(id: string) {
+    // Multi-select checkbox behaviour: a workspace can declare MORE THAN ONE
+    // Salesforce product. Toggling adds or removes the product; the others are
+    // left untouched. Each declared product maps to a discovery pack, so a
+    // multi-product declaration drives a multi-pack run (R191-P1).
     dirtyRef.current = true;
-    setSelected(prev => (prev.has(id) ? new Set() : new Set([id])));
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
   }
 
   const handleSave = useCallback(async () => {
@@ -190,7 +200,7 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
 
       {/* Product toggles */}
       <div
-        role="radiogroup"
+        role="group"
         aria-label="Salesforce products"
         className="space-y-1.5"
       >
@@ -200,9 +210,9 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
             <button
               key={product.id}
               type="button"
-              role="radio"
+              role="checkbox"
               aria-checked={isSelected}
-              onClick={() => selectProduct(product.id)}
+              onClick={() => toggleProduct(product.id)}
               disabled={isViewer}
               className={[
                 'w-full flex items-start gap-3 rounded-lg border px-3 py-2.5',
@@ -214,15 +224,26 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
                   : 'border-border bg-panel hover:border-accent/40',
               ].join(' ')}
             >
-              {/* Radio indicator */}
+              {/* Checkbox indicator */}
               <div className={[
-                'mt-0.5 h-3.5 w-3.5 flex-shrink-0 rounded-full border flex items-center justify-center',
+                'mt-0.5 h-3.5 w-3.5 flex-shrink-0 rounded border flex items-center justify-center',
                 isSelected
-                  ? 'border-accent'
+                  ? 'border-accent bg-accent/15'
                   : 'border-border',
               ].join(' ')}>
                 {isSelected && (
-                  <div className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden />
+                  <svg
+                    className="h-2.5 w-2.5 text-accent"
+                    viewBox="0 0 12 12"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <path d="M2.5 6.5l2.5 2.5 4.5-5" />
+                  </svg>
                 )}
               </div>
 

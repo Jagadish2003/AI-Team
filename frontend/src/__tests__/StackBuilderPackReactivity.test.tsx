@@ -62,9 +62,10 @@ describe('product declaration → workspace catalog reactivity', () => {
     // Catalog loaded once.
     await waitFor(() => expect(screen.getByTestId('catalog-count').textContent).toBe('1'));
 
-    // Declare Service Cloud and save.
-    const scRadio = await screen.findByRole('radio', { name: /Service Cloud/i });
-    fireEvent.click(scRadio);
+    // Declare Service Cloud and save. The product declaration is a multi-select
+    // (checkbox) picker (R191-P1) — one product is enough for this reactivity check.
+    const scCheckbox = await screen.findByRole('checkbox', { name: /Service Cloud/i });
+    fireEvent.click(scCheckbox);
     fireEvent.click(screen.getByRole('button', { name: /save product declaration/i }));
 
     // The save invalidated the catalog key → the probe refetched with no reload.

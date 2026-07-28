@@ -53,7 +53,7 @@ import LicenseLimitBanner, { systemLimitMessage } from '../components/integratio
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import { useToast } from '../components/common/Toast';
 import { ApiError } from '../lib/apiClient';
-import { useResource } from '../lib/dataCache';
+import { useResource, useDataCache } from '../lib/dataCache';
 import { cacheKeys } from '../lib/cacheKeys';
 import { useConnectorContext } from '../context/ConnectorContext';
 import { useAuthOptional } from '../context/AuthContext';
@@ -197,6 +197,24 @@ export default function IntegrationHubPage() {
     () => [...recommended, ...standard],
     [recommended, standard],
   );
+
+  // Regularly re-check connector token expiry so a token that lapses WHILE the
+  // user is on this page surfaces as "Token expired" / Reconnect without a manual
+  // reload. Invalidating each connected connector's token-status cache key makes
+  // that tile's useResource refetch and re-render its action. Only connected
+  // connectors hold a token worth checking.
+  const cache = useDataCache();
+  useEffect(() => {
+    const REVALIDATE_MS = 120_000; // 2 minutes
+    const timer = setInterval(() => {
+      for (const c of allConnectors) {
+        if (c.status === 'connected') {
+          cache.invalidate(cacheKeys.connectorTokenStatus(c.id));
+        }
+      }
+    }, REVALIDATE_MS);
+    return () => clearInterval(timer);
+  }, [allConnectors, cache]);
 
   // Auto-configure connected-but-unconfigured connectors (Connect → View data).
   // See autoConfiguredRef above for the rationale. Runs whenever the connector

@@ -11,7 +11,7 @@ server. Two interchangeable paths are provided (pick one):
   into a single [`provision.sql`](provision.sql) — regenerate it whenever
   migrations change (see *Regenerating the SQL bundle*).
 
-Both produce the **same 26-table schema** plus the core reference seed
+Both produce the **same 28-table schema** plus the core reference seed
 (connectors, mappings, permissions, uploads).
 
 ## Why the schema comes from more than just migrations
@@ -22,7 +22,7 @@ defect this bundle fixes. The three sources:
 
 | Source | Tables |
 |---|---|
-| Alembic migrations (`backend/migrations`) | `telemetry_events`, `signal_snapshots`, `entities`, `users`, `login_attempts`, `orgs`, `entity_relationships`, `causal_hypotheses`, `audit_log`, `workspace_members`, `org_licenses` (+ `alembic_version`) |
+| Alembic migrations (`backend/migrations`) | `telemetry_events`, `signal_snapshots`, `entities`, `users`, `login_attempts`, `orgs`, `entity_relationships`, `causal_hypotheses`, `audit_log`, `workspace_members`, `org_licenses`, `license_registry`, `issuance_audit` (+ `alembic_version`) |
 | `seed_loader.py` (`{id,payload}` tables) | `connectors`, `uploads`, `runs`, `evidence`, `mappings`, `permissions`, `opportunities`, `audit_events`, `executive_reports`, `run_events`, `kv` |
 | Lazy runtime creators (materialised up front by these scripts) | `credentials`, `nonces`, `oauth_nonces` |
 
@@ -107,7 +107,8 @@ psql -h <DB_HOST> -p 5432 -U postgres -d <DB_NAME> -v ON_ERROR_STOP=1 -f provisi
 ```
 
 - [`provision.sql`](provision.sql) — creates the `agentiq` role + schema grants,
-  then all 26 tables (including `org_licenses`), indexes, sequences, the core
+  then all 28 tables (including `org_licenses`, `license_registry`,
+  `issuance_audit`), indexes, sequences, the core
   reference seed (connectors, mappings, permissions, uploads) as idempotent
   `INSERT … ON CONFLICT DO NOTHING`, and the `alembic_version` stamp (so a later
   `alembic upgrade head` applies only *new* migrations). No run/telemetry/audit
@@ -123,7 +124,7 @@ psql -h <DB_HOST> -p 5432 -U postgres -d <DB_NAME> -v ON_ERROR_STOP=1 -f provisi
 ## Verification (either path)
 
 ```sql
-SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';  -- 26
+SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';  -- 28
 SELECT version_num FROM alembic_version;                                       -- current head
 SELECT count(*) FROM connectors;                                               -- > 0 if seeded
 ```
