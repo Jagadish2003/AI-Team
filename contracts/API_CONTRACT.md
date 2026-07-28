@@ -2,6 +2,22 @@
 Version: v1.14
 Date: 2026-07-23
 
+> v1.11 — R191-P1 T3 (Multi-Pack Discovery Runs — provenance tagging, AC1/AC6):
+> documents the `packId` (`string`, optional) and `packVersion` (`string`,
+> optional) fields on `OpportunityCandidate` (`GET /api/runs/{runId}/opportunities`)
+> and the `packId` (`string`, optional) field on `EvidenceReview`
+> (`GET /api/runs/{runId}/evidence`) — the backend already stamped `packId`/
+> `packVersion` on stored opportunities (R16-B1 §4); this bump documents that
+> existing field and newly extends the same stamp to every evidence item
+> (previously undocumented and, for evidence, unstamped). Because
+> `RoadmapStage.opportunities` (`src/types/pilotRoadmap.ts`) reuses
+> `OpportunityCandidate`, every roadmap entry carries `packId`/`packVersion` too
+> with no separate type change. All additive/optional — existing consumers are
+> unaffected; absent on runs materialized before this field existed. The run
+> record's `packIds` (`string[]`) / `packVersions` (`Record<string, string>`) /
+> `packs` (per-pack execution metadata) fields were already added by R191-P1 T2
+> and are unchanged here.
+
 > v1.14 — R-1.9.1-L2 / T5 (AT-697): added the Owner-only pre-invoice usage-summary
 > endpoint `GET /api/usage/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`, returning the
 > Owner-facing usage summary for the caller's org over the inclusive period:

@@ -281,6 +281,45 @@ def list_packs() -> List[str]:
     return list(PACK_REGISTRY.keys())
 
 
+def normalize_pack_ids(
+    pack_ids: Optional[Any] = None,
+) -> List[str]:
+    """Normalise a multi-pack selection to an order-preserving, de-duplicated list.
+
+    R191-P1 T1 groundwork: run configuration now accepts ``pack_ids: list[str]``
+    in place of a singular ``pack_id``. This is the single normalisation primitive
+    every config entry point (LaunchRequest, ComputeRequest, run record) routes
+    through so the rules cannot drift between callers:
+
+      * order-preserving — the caller's ordering is kept (the first id is the
+        primary pack, which single-pack execution continues to run against, so a
+        single-element list stays byte-identical to today);
+      * de-duplicated — a repeated id keeps its first occurrence only;
+      * empty/whitespace/non-string entries are dropped;
+      * ``None`` (or a bare string, for caller convenience) is accepted.
+
+    Unknown pack ids are intentionally NOT filtered here — validation/fallback of
+    an individual id stays the job of ``get_pack()`` (which warns + falls back),
+    exactly as for the singular path, so behaviour is unchanged for a single id.
+    """
+    if pack_ids is None:
+        return []
+    if isinstance(pack_ids, str):
+        pack_ids = [pack_ids]
+
+    seen: set[str] = set()
+    normalized: List[str] = []
+    for raw in pack_ids:
+        if not isinstance(raw, str):
+            continue
+        pid = raw.strip()
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        normalized.append(pid)
+    return normalized
+
+
 def is_ncino_pack(pack_id: Optional[str] = None) -> bool:
     """
     Convenience helper — replaces the temporary is_ncino_pack conditional.

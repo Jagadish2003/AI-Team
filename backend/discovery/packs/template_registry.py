@@ -77,6 +77,14 @@ class TemplateDefinition:
     suggested_roles: Dict[str, str]          # system_id -> SystemRole
     focus_defaults: FocusDefaults
     pack_id: str
+    # R191-P1 T5: a template may activate MORE THAN ONE pack. `packs` is the full
+    # ordered, de-duplicated pack selection; `pack_id` stays the PRIMARY (first)
+    # pack for backward compatibility. Declaring only `pack_id` makes
+    # packs == [pack_id]; declaring `packs` re-derives pack_id as its first entry
+    # (see __post_init__). A multi-pack template (e.g. combined operations) runs
+    # every listed pack on run creation — honored end to end via
+    # resolve_launch_config → the launch endpoint's pack_ids.
+    packs: List[str] = field(default_factory=list)
     # Detector IDs this template emphasises — provenance/documentation of what
     # the template's pack surfaces. The REAL scoring is already wired: pack_id
     # activates the pack's detectors + scorer, and focus_defaults.focus_id drives
@@ -85,6 +93,21 @@ class TemplateDefinition:
     detector_emphasis: List[str] = field(default_factory=list)
     terminology: Dict[str, str] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Reconcile the singular pack_id with the packs list into ONE
+        # order-preserving, de-duplicated selection (the shared primitive), then
+        # re-derive pack_id as the primary (first) pack. So a template author may
+        # set either field and both stay consistent; a single-pack template is
+        # unchanged (packs == [pack_id]).
+        from discovery.packs.pack_config import normalize_pack_ids
+
+        combined = normalize_pack_ids(
+            list(self.packs or []) + ([self.pack_id] if self.pack_id else [])
+        )
+        self.packs = combined
+        if combined:
+            self.pack_id = combined[0]
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
@@ -225,11 +248,16 @@ def register_template(defn: TemplateDefinition, *, validate_pack: bool = True) -
     if validate_pack:
         from discovery.packs.pack_config import list_packs
 
-        if defn.pack_id not in list_packs():
-            raise ValueError(
-                f"Template '{defn.template_id}' references unknown pack "
-                f"'{defn.pack_id}'. Known packs: {sorted(list_packs())}"
-            )
+        known = list_packs()
+        # R191-P1 T5: validate EVERY declared pack (a template may activate more
+        # than one), not just the primary — a template cannot point at a pack that
+        # does not exist.
+        for pid in (defn.packs or [defn.pack_id]):
+            if pid not in known:
+                raise ValueError(
+                    f"Template '{defn.template_id}' references unknown pack "
+                    f"'{pid}'. Known packs: {sorted(known)}"
+                )
     TEMPLATE_REGISTRY[defn.template_id] = defn
 
 
@@ -245,6 +273,7 @@ def template_defaults_snapshot(defn: TemplateDefinition) -> Dict[str, Any]:
     return {
         "template_id": defn.template_id,
         "pack_id": defn.pack_id,
+        "packs": list(defn.packs),
         "focus_id": defn.focus_defaults.focus_id,
         "focus_emphasis": list(defn.focus_defaults.emphasis),
         "suggested_systems": list(defn.suggested_systems),
@@ -258,6 +287,7 @@ def resolve_launch_config(
     template_id: Optional[str],
     *,
     pack_id: Optional[str] = None,
+    pack_ids: Optional[List[str]] = None,
     focus_id: Optional[str] = None,
     selected_system_ids: Optional[List[str]] = None,
     weightings: Optional[Dict[str, Any]] = None,
@@ -288,15 +318,26 @@ def resolve_launch_config(
     When template_id is None/unknown, `effective` echoes the submitted values and
     provenance records that no template was applied (fully backward compatible).
     """
+    from discovery.packs.pack_config import normalize_pack_ids
+
     submitted_systems = list(selected_system_ids or [])
     submitted_weightings = dict(weightings or {})
+    # R191-P1 T5: the caller's explicit pack selection (multi-select UI or an
+    # explicit pack_ids/pack_id on the request), folded into ONE order-preserving,
+    # de-duplicated list. Non-empty => the caller is authoritative over the
+    # template's packs (an edit); empty => the template's packs apply.
+    submitted_pack_ids = normalize_pack_ids(
+        list(pack_ids or []) + ([pack_id] if pack_id else [])
+    )
 
     defn = get_template(template_id) if template_id else None
 
     if defn is None:
+        eff_pack_ids = submitted_pack_ids
         return {
             "effective": {
-                "pack_id": pack_id,
+                "pack_id": pack_id or (eff_pack_ids[0] if eff_pack_ids else None),
+                "pack_ids": eff_pack_ids,
                 "focus_id": focus_id,
                 "selected_system_ids": submitted_systems,
                 "roles": _roles_from_weightings(submitted_weightings),
@@ -313,10 +354,20 @@ def resolve_launch_config(
     defaults = template_defaults_snapshot(defn)
     edited_fields: List[str] = []
 
-    # pack_id — template default fills an empty submission; otherwise the caller
-    # value wins and, if it diverges, is an edit.
-    eff_pack = pack_id or defn.pack_id
-    if pack_id and pack_id != defn.pack_id:
+    # pack selection (R191-P1 T5) — the template's full `packs` list is honored
+    # end to end. An explicit caller submission (singular pack_id or plural
+    # pack_ids) is authoritative and overrides the template; an empty submission
+    # inherits the template's packs, so an UNTOUCHED multi-pack template activates
+    # every one of its packs on run creation (AC5). `eff_pack` is always the
+    # primary (first) of the effective list, consistent with the singular pack_id.
+    if submitted_pack_ids:
+        eff_pack_ids = submitted_pack_ids
+    else:
+        eff_pack_ids = normalize_pack_ids(list(defn.packs))
+    eff_pack = eff_pack_ids[0] if eff_pack_ids else defn.pack_id
+    # An explicit selection whose primary diverges from the template's primary is
+    # recorded as a pack edit (provenance / AC5 of R18-C1).
+    if submitted_pack_ids and eff_pack != defn.pack_id:
         edited_fields.append("pack_id")
 
     # focus_id — same rule.
@@ -348,6 +399,7 @@ def resolve_launch_config(
     return {
         "effective": {
             "pack_id": eff_pack,
+            "pack_ids": eff_pack_ids,
             "focus_id": eff_focus,
             "selected_system_ids": eff_systems,
             "roles": eff_roles,

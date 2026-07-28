@@ -36,6 +36,26 @@ def _pack_id_for_run(run: Dict[str, Any] | None) -> str | None:
     return input_pack_id or run.get("packId") or None
 
 
+def _pack_ids_for_run(run: Dict[str, Any] | None) -> List[str] | None:
+    """R191-P1 T2: the multi-pack selection for a run, if one was configured.
+
+    Reads the plural ``packIds`` (R191-P1 T1) from the run inputs first, then the
+    run record. Returns ``None`` when no multi-pack selection is present — the
+    runner then falls back to the singular ``pack`` (byte-identical single-pack
+    behaviour for every pre-multi-pack run).
+    """
+    if not run:
+        return None
+    inputs = run.get("inputs") or {}
+    input_pack_ids = inputs.get("packIds") if isinstance(inputs, dict) else None
+    ids = input_pack_ids or run.get("packIds")
+    if isinstance(ids, list):
+        cleaned = [str(p) for p in ids if str(p).strip()]
+        if cleaned:
+            return cleaned
+    return None
+
+
 def resolve_effective_pack(
     explicit_pack_id: str | None, live_systems: List[str] | None
 ) -> str | None:
@@ -239,9 +259,19 @@ def run_trackb_and_persist(
             run_id, "EXTRACT", "Extracting entities and identifying patterns..."
         )
         pack_id = _pack_id_for_run(run)
+        # R191-P1 T2: pass the full multi-pack selection when the run configured
+        # one (T1). The runner runs each selected pack's detectors against the ONE
+        # shared normalised signal with per-pack calibration; `pack` stays the
+        # primary alias so a single-pack run is unchanged.
+        pack_ids = _pack_ids_for_run(run)
         run_org_id = _org_id_for_run(run, "demo-org")
         payload = trackb_run(
-            mode=mode, systems=systems, run_id=run_id, org_id=run_org_id, pack=pack_id
+            mode=mode,
+            systems=systems,
+            run_id=run_id,
+            org_id=run_org_id,
+            pack=pack_id,
+            pack_ids=pack_ids,
         )
 
         # R18-C2 T2: preserve the exact pack execution snapshot returned by the
@@ -259,6 +289,19 @@ def run_trackb_and_persist(
                 if str(detector_id).strip()
             ]
             run["packExecutedAt"] = payload.get("packExecutedAt")
+            # R191-P1 T2: preserve the full multi-pack execution snapshot the
+            # runner returns (each selected pack with its version stamp + the
+            # per-pack execution metadata). Scalar fields above stay the PRIMARY
+            # pack for backward compatibility; a single-pack run lists one entry.
+            payload_pack_ids = payload.get("packIds")
+            if isinstance(payload_pack_ids, list) and payload_pack_ids:
+                run["packIds"] = [str(p) for p in payload_pack_ids if str(p).strip()]
+                payload_pack_versions = payload.get("packVersions")
+                if isinstance(payload_pack_versions, dict):
+                    run["packVersions"] = payload_pack_versions
+                payload_packs = payload.get("packs")
+                if isinstance(payload_packs, list):
+                    run["packs"] = payload_packs
 
         per_system, succeeded, ingest_errors = _ingest_summary_from_payload(
             payload, systems

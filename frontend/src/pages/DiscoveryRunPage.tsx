@@ -27,6 +27,12 @@ interface DiscoveryStep {
   // CS-4 T6 (AT-314): approved explanation shown via an info tooltip on the
   // two Salesforce steps so the customer understands why both passes occur.
   infoTooltip?: string;
+  // R191-P1: the backend step id that drives this row's progress/failed state.
+  // Multi-pack runs render ONE pack step per declared Salesforce product, all of
+  // which reflect the single backend "sf_ncino" (second Salesforce pass) step —
+  // so each carries progressStepId="sf_ncino" while keeping a unique row id.
+  // Defaults to `id` when unset.
+  progressStepId?: string;
 }
 
 // CS-4 T6 (AT-314 / Section 4): approved wording — must match exactly.
@@ -368,6 +374,39 @@ function resolveDiscoverySteps(salesforceProduct?: string): DiscoveryStep[] {
   });
 }
 
+// R191-P1: a Salesforce workspace can declare MULTIPLE products, each mapping to
+// a discovery pack that runs in one discovery run. Build one "second Salesforce
+// pass" step PER declared product (e.g. Service Cloud AND nCino Lending), so the
+// Discovery Progress reflects every pack the run activates — not just the first.
+// Every such row reflects the single backend "sf_ncino" step (progressStepId),
+// but keeps a unique row id. An empty declaration falls back to the nCino default
+// (unchanged single-pack behaviour + existing tests).
+function buildPackSteps(products: string[]): DiscoveryStep[] {
+  const declared = products.length > 0 ? products : ["salesforce_ncino"];
+  const seen = new Set<string>();
+  const out: DiscoveryStep[] = [];
+  for (const product of declared) {
+    const productId = SF_SECOND_PASS_BY_PRODUCT[product]
+      ? product
+      : "salesforce_ncino";
+    if (seen.has(productId)) continue; // one row per distinct product
+    seen.add(productId);
+    const meta = SF_SECOND_PASS_BY_PRODUCT[productId];
+    const tooltip =
+      productId === "salesforce_ncino"
+        ? SALESFORCE_DUAL_EXTRACTION_TOOLTIP
+        : buildDualExtractionTooltip(meta.tooltipDataset);
+    out.push({
+      id: `sf_pack:${productId}`,
+      label: meta.label,
+      subLabel: meta.subLabel,
+      infoTooltip: tooltip,
+      progressStepId: "sf_ncino",
+    });
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // StepInfoTooltip — accessible info tooltip for a discovery step (CS-4 T6).
 // Renders a keyboard-focusable info icon. The explanation shows on hover and
@@ -407,6 +446,7 @@ export function DiscoveryStepList({
   currentStep,
   runComplete = false,
   salesforceProduct,
+  salesforceProducts,
   failedSteps = [],
   connectedSources,
 }: {
@@ -418,6 +458,10 @@ export function DiscoveryStepList({
   // Declared Salesforce product id (e.g. "salesforce_sc"). Drives the label of
   // the second Salesforce pass so the run reflects the workspace's declaration.
   salesforceProduct?: string;
+  // R191-P1: the FULL declared Salesforce product list. When the workspace
+  // declares several products (a multi-pack run), each gets its own pack step in
+  // the progress list. Falls back to `salesforceProduct` (single) when absent.
+  salesforceProducts?: string[];
   // Step ids whose ingest failed (from the run status' failed_steps). A failed
   // step is rendered with an error icon, never as a completed green check — so
   // a failed stage is not misrepresented as successful (CS-4 / AT-313).
@@ -436,7 +480,15 @@ export function DiscoveryStepList({
   // reached detection.
   const detectIdx = STEP_INDEX["detect"];
 
-  const canonical = resolveDiscoverySteps(salesforceProduct);
+  // The declared Salesforce products driving the per-pack progress steps: the
+  // full list when provided, else the single legacy prop.
+  const declaredProducts =
+    salesforceProducts && salesforceProducts.length > 0
+      ? salesforceProducts
+      : salesforceProduct
+      ? [salesforceProduct]
+      : [];
+  const canonical = resolveDiscoverySteps(declaredProducts[0] ?? salesforceProduct);
   const connectedProvided = connectedSources !== undefined;
 
   const byId: Record<string, DiscoveryStep> = Object.fromEntries(
@@ -490,12 +542,11 @@ export function DiscoveryStepList({
     salesforceConnected = true; // legacy always shows the pack stage
   }
 
-  // 2. Pack-specific second Salesforce pass — appended AFTER every connected
-  //    source ("all connected sources → selected pack"). Shown only when
-  //    Salesforce is connected (or in the legacy all-stages mode).
-  const packSteps = canonical.filter(
-    (s) => PACK_STEP_IDS.has(s.id) && salesforceConnected
-  );
+  // 2. Pack-specific second Salesforce pass(es) — appended AFTER every connected
+  //    source ("all connected sources → selected packs"). One row per declared
+  //    Salesforce product (a multi-pack run shows Service Cloud AND nCino, etc.).
+  //    Shown only when Salesforce is connected (or in the legacy all-stages mode).
+  const packSteps = salesforceConnected ? buildPackSteps(declaredProducts) : [];
 
   // 3. Processing stages — always shown, in canonical order.
   const processingSteps = canonical.filter((s) => !SOURCE_STEP_IDS.has(s.id));
@@ -506,14 +557,18 @@ export function DiscoveryStepList({
     <ol className="space-y-3">
       {steps.map((step) => {
         const isGeneric = step.id.startsWith("src:");
+        // The backend step id that drives this row's state — pack rows share the
+        // single "sf_ncino" step via progressStepId (R191-P1), other rows use
+        // their own id.
+        const stateId = step.progressStepId ?? step.id;
         // Known/processing stages map to a canonical backend index; generic
         // source stages do not (no backend step), so their state comes from the
         // detection boundary instead.
-        const canonicalIdx = isGeneric ? -1 : (STEP_INDEX[step.id] ?? -1);
+        const canonicalIdx = isGeneric ? -1 : (STEP_INDEX[stateId] ?? -1);
 
         // A failed ingest takes precedence over every other state: it must never
         // show the completed green check, even after the run advances past it.
-        const isFailed = failedSteps.includes(step.id);
+        const isFailed = failedSteps.includes(stateId);
         // "complete" is the terminal step. It earns the green check only when the
         // run has actually finished (runComplete). While the run is still running
         // — even if the backend already emitted "complete" — it shows the spinner.
@@ -719,6 +774,9 @@ export default function DiscoveryRunPage() {
   const [salesforceProduct, setSalesforceProduct] = useState<string | undefined>(
     undefined
   );
+  // R191-P1: the FULL declared Salesforce product list — each drives its own pack
+  // step so a multi-pack run (e.g. Service Cloud + nCino) shows both in progress.
+  const [salesforceProducts, setSalesforceProducts] = useState<string[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -726,7 +784,10 @@ export default function DiscoveryRunPage() {
       "/api/connectors/salesforce/products"
     )
       .then((data) => {
-        if (!cancelled) setSalesforceProduct(data?.products?.[0]);
+        if (cancelled) return;
+        const products = Array.isArray(data?.products) ? data.products : [];
+        setSalesforceProducts(products);
+        setSalesforceProduct(products[0]); // primary, for backward-compat labels
       })
       .catch(() => {
         // Non-blocking: with no declaration the default nCino copy is used.
@@ -995,6 +1056,7 @@ export default function DiscoveryRunPage() {
               currentStep={currentStep}
               runComplete={isMaterialized}
               salesforceProduct={salesforceProduct}
+              salesforceProducts={salesforceProducts}
               failedSteps={failedSteps}
               connectedSources={progressConnectedSources}
             />

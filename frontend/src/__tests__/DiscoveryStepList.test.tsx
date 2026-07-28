@@ -93,6 +93,27 @@ describe("DiscoveryStepList Salesforce product labelling (CS-4)", () => {
     expect(screen.queryByText("nCino Lending")).not.toBeInTheDocument();
   });
 
+  it("shows a pack step per declared product for a multi-pack run", () => {
+    // R191-P1: a Salesforce workspace declaring Service Cloud + nCino runs both
+    // packs, so BOTH pack steps appear in the Discovery Progress list.
+    render(
+      <DiscoveryStepList
+        currentStep="sf_crm"
+        salesforceProducts={["salesforce_sc", "salesforce_ncino"]}
+      />
+    );
+    expect(screen.getByText("Service Cloud")).toBeInTheDocument();
+    expect(screen.getByText("nCino Lending")).toBeInTheDocument();
+    expect(
+      screen.getByText("Ingesting nCino loan origination signals")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Ingesting case management, service request, and SLA signals"
+      )
+    ).toBeInTheDocument();
+  });
+
   it("places the Service Cloud (pack) pass after all connected sources", () => {
     render(
       <DiscoveryStepList

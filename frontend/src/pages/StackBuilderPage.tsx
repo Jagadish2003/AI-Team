@@ -15,6 +15,9 @@ import { isViewerRole } from '../utils/roles';
 // Import components and types
 import { CheckCircle2, Database, Layers3, Target } from 'lucide-react';
 import type { WorkspaceCatalogResponse } from '../types/workspace_catalog';
+import { getCatalogSystemIds } from '../types/workspace_catalog';
+import { fetchTokenStatus, type TokenStatus } from '../services/staticApi';
+import { useToast } from '../components/common/Toast';
 import { useResource } from '../lib/dataCache';
 import { Skeleton } from '../components/common/Skeleton';
 import { cacheKeys } from '../lib/cacheKeys';
@@ -172,6 +175,50 @@ export function resolvePackId(
   return 'service_cloud';
 }
 
+// R191-P1 T5 — resolve the full MULTI-pack selection for a run. Run configuration
+// can now activate more than one pack: a template declaring several packs runs
+// them all. Returns an order-preserving, de-duplicated list whose FIRST entry is
+// the primary pack (kept in sync with resolvePackId for backward compatibility).
+export function resolvePackIds(
+  state: ReturnType<typeof useSetupState>['state'],
+  catalog: WorkspaceCatalogResponse | null,
+  industries: IndustryListItem[],
+  templates: TemplateListItem[],
+): string[] {
+  // An explicit Step 4 pack choice is a single, authoritative selection.
+  if (state.packId) return [state.packId];
+
+  // A selected template may declare MULTIPLE packs — honor the whole list so an
+  // untouched multi-pack template activates every one of its packs on launch.
+  const selectedTemplate = templates.find(
+    template => template.template_id === state.templateId,
+  );
+  const templatePacks = selectedTemplate?.packs;
+  if (templatePacks && templatePacks.length > 0) {
+    const deduped = Array.from(
+      new Set(templatePacks.filter(packId => typeof packId === 'string' && packId)),
+    );
+    if (deduped.length > 0) return deduped;
+  }
+
+  // The workspace may declare MULTIPLE Salesforce products (Integration Hub →
+  // "Salesforce products in use" is a multi-select). Each declared product maps
+  // to a discovery pack, so a multi-product declaration drives a multi-pack run.
+  // Map every declared product to its pack, order-preserving and de-duplicated
+  // (several products share a pack — Service/Financial/Revenue/Health Cloud all
+  // map to service_cloud). The first entry matches resolvePackId's single result.
+  const declaredPacks = getCatalogSalesforceProducts(catalog)
+    .map(productId => CLOUD_PACK_REGISTRY[productId])
+    .filter((packId): packId is string => Boolean(packId));
+  if (declaredPacks.length > 0) {
+    return Array.from(new Set(declaredPacks));
+  }
+
+  // Otherwise fall back to the single resolved pack (industry hint / safe
+  // default), as a one-element list.
+  return [resolvePackId(state, catalog, industries, templates)];
+}
+
 // ── Launch payload builder ─────────────────────────────────────────────────────
 //
 // R16-C1 T5 — the configuration the customer selected is the configuration that
@@ -189,6 +236,10 @@ export interface StackBuilderLaunchPayload {
   template_id: SetupState['templateId'];
   selected_system_ids: string[];
   pack_id: string;
+  // R191-P1 T5: the full multi-pack selection (order-preserving; first = primary).
+  // The backend also accepts the singular pack_id for backward compatibility, and
+  // reconciles the two — a single-pack launch sends a one-element pack_ids.
+  pack_ids: string[];
   weightings: Record<string, SystemWeighting>;
 }
 
@@ -196,6 +247,7 @@ export function buildStackBuilderLaunchPayload(
   state: SetupState,
   packId: string,
   orgId: string,
+  packIds: string[] = [packId],
 ): StackBuilderLaunchPayload {
   // Surface the silent-mismatch case: every selected system should carry a
   // confirmed weighting. If one is missing (e.g. a system was selected but its
@@ -226,6 +278,7 @@ export function buildStackBuilderLaunchPayload(
     template_id: state.templateId,
     selected_system_ids: state.selectedSystemIds,
     pack_id: packId,
+    pack_ids: packIds.length > 0 ? packIds : [packId],
     weightings: state.weightings,
   };
 }
@@ -237,6 +290,56 @@ function normaliseSystems(selectedIds: string[]): string[] {
     return id;
   });
   return [...new Set(normalised)];
+}
+
+// ── Pre-launch connector token-expiry guard ─────────────────────────────────────
+//
+// A discovery run against a connector whose OAuth token has expired silently
+// produces no data from it. Before launching, we check the token status of every
+// connector the run will use and refuse to start if any are expired — telling the
+// user exactly which ones to reconnect (mirrors the "Token expired" / "Reconnect"
+// state the Integration Hub tiles already show).
+
+const CONNECTOR_DISPLAY_NAMES: Record<string, string> = {
+  salesforce: 'Salesforce',
+  servicenow: 'ServiceNow',
+  jira: 'Jira',
+  confluence: 'Confluence',
+  sharepoint: 'SharePoint',
+  github: 'GitHub',
+  slack: 'Slack',
+  teams: 'Microsoft Teams',
+};
+
+export function connectorDisplayName(id: string): string {
+  return (
+    CONNECTOR_DISPLAY_NAMES[id] ??
+    id.replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase())
+  );
+}
+
+// The run-used connectors worth an expiry check: only those the workspace has
+// actually engaged (connected or needs_auth per the catalog). A never-configured
+// or unknown system is ignored here — the run degrades gracefully for those, and
+// checking them would false-positive (e.g. a not-connected system reads needs_auth).
+export function connectorsToCheckForExpiry(
+  systems: string[],
+  catalog: WorkspaceCatalogResponse | null,
+): string[] {
+  const engaged = new Set(catalog ? getCatalogSystemIds(catalog) : []);
+  return systems.filter(id => engaged.has(id));
+}
+
+// Given each checked connector's live token status, the ones that need a reconnect
+// before a run can use them — the same condition the Integration Hub tile uses to
+// show "Token expired": needs_auth (token gone/expired, no self-refresh) or
+// refresh_failed (a live call was rejected 401 and the refresh could not recover).
+export function expiredConnectors(
+  statuses: Array<{ id: string; status: TokenStatus | null }>,
+): string[] {
+  return statuses
+    .filter(s => s.status === 'needs_auth' || s.status === 'refresh_failed')
+    .map(s => s.id);
 }
 
 // ── Session Persistence Hook ─────────────────────────────────────────────────
@@ -416,6 +519,7 @@ export default function StackBuilderPage({
   const orgId = auth?.user?.org_id ?? ORG_ID_HEADER ?? 'default';
 
   const setupState = useSetupState();
+  const { push } = useToast();
 
   const [launchState, setLaunchState] = useState<LendingGuideLaunchState>('setup');
 
@@ -511,10 +615,45 @@ export default function StackBuilderPage({
   const handleLaunch = useCallback(async () => {
     if (launchState === 'launching') return;
     setLaunchState('launching');
-    const packId = resolvePackId(state, catalog, industries, templates);
-    console.log(`packId:`, packId);
+    // R191-P1 T5: resolve the full multi-pack selection; the primary (first) pack
+    // stays the singular value for backward-compatible callers.
+    const packIds = resolvePackIds(state, catalog, industries, templates);
+    const packId = packIds[0] ?? resolvePackId(state, catalog, industries, templates);
     const systems = normaliseSystems(state.selectedSystemIds);
     const headers = buildAuthHeaders(token);
+
+    // Guard: refuse to start a run that uses a connector whose token has expired —
+    // it would silently return no data. Name the offenders and send the user to
+    // reconnect them in the Integration Hub. The check itself is non-fatal: if
+    // token-status can't be read, we let the launch proceed rather than block it.
+    const toCheck = connectorsToCheckForExpiry(systems, catalog);
+    if (toCheck.length > 0) {
+      try {
+        const statuses = await Promise.all(
+          toCheck.map(async id => {
+            try {
+              return { id, status: (await fetchTokenStatus(id)).status };
+            } catch {
+              return { id, status: null as TokenStatus | null };
+            }
+          }),
+        );
+        const expired = expiredConnectors(statuses);
+        if (expired.length > 0) {
+          const names = expired.map(connectorDisplayName).join(', ');
+          const many = expired.length > 1;
+          push(
+            `Can't start discovery — ${many ? 'these connectors have' : 'this connector has'} ` +
+              `an expired token: ${names}. Reconnect ${many ? 'them' : 'it'} in the ` +
+              `Integration Hub, then try again.`,
+          );
+          setLaunchState('setup');
+          return;
+        }
+      } catch {
+        // Whole check failed (e.g. network) — do not block the launch on it.
+      }
+    }
 
     let runId: string;
     try {
@@ -522,7 +661,7 @@ export default function StackBuilderPage({
         method: 'POST',
         credentials: 'omit',
         headers,
-        body: JSON.stringify(buildStackBuilderLaunchPayload(state, packId, orgId)),
+        body: JSON.stringify(buildStackBuilderLaunchPayload(state, packId, orgId, packIds)),
       });
       if (!launchResp.ok) {
         throw new Error(`Launch failed: ${launchResp.status}`);
@@ -544,6 +683,8 @@ export default function StackBuilderPage({
           mode: 'live',
           systems,
           pack: packId,
+          // R191-P1 T5: run every selected pack; backend reconciles with `pack`.
+          pack_ids: packIds,
         }),
       }).catch((err) => {
         console.error('[StackBuilderPage] Compute trigger failed:', err);
@@ -555,7 +696,7 @@ export default function StackBuilderPage({
     setRunId(runId);
     navigate(`/discovery-run?runId=${runId}`);
 
-  }, [state, catalog, industries, templates, orgId, apiBase, clearSession, navigate, setRunId, token, launchState]);
+  }, [state, catalog, industries, templates, orgId, apiBase, clearSession, navigate, setRunId, token, launchState, push]);
 
   // Viewers cannot configure or launch discovery (analyst+ only). The nav hides
   // this destination for them, but a viewer can still reach it via a direct URL
@@ -663,6 +804,7 @@ export default function StackBuilderPage({
               industries={industries}
               templates={templates}
               activePackId={resolvePackId(state, catalog, industries, templates)}
+              activePackIds={resolvePackIds(state, catalog, industries, templates)}
               onLaunch={handleLaunch}
               launchState={launchState}
             />

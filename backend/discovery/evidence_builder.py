@@ -703,8 +703,14 @@ def build_evidence(
         # R16-C1 T4: stamp provenance_type on every evidence object so consumers
         # (Source Intelligence, audit views) can identify observed vs inferred.
         provenance = getattr(detector_result, "provenance_type", "observed")
+        # R191-P1 T3: stamp packId on every evidence object so a multi-pack run's
+        # evidence bundle can be traced back to the pack that produced it — the
+        # same provenance guarantee findings and the run record already carry.
+        # Absent when the caller doesn't pass one (opportunity.get default "").
         for ev in result:
             ev["provenanceType"] = provenance
+            if pack_id:
+                ev["packId"] = pack_id
 
         return result
     except ValueError:

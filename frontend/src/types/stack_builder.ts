@@ -128,6 +128,11 @@ export interface TemplateListItem {
   suggested_roles: Record<string, string>;
   focus_defaults: TemplateFocusDefaults;
   pack_id: string;
+  // R191-P1 T5: full ordered pack selection the template activates. `pack_id`
+  // stays the primary (first) pack; `packs` carries every pack (a multi-pack
+  // template runs them all). Optional/additive — pre-v1.11 templates omit it,
+  // so consumers fall back to `[pack_id]`.
+  packs?: string[];
   detector_emphasis: string[];
   terminology: Record<string, string>;
   metadata: Record<string, unknown>;

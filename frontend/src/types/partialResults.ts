@@ -22,4 +22,8 @@ export interface EvidenceReview {
   entities: string[];      // entity ids
   confidence: Confidence;
   decision: ReviewDecision;
+  // R191-P1 T3 — the pack that produced this evidence item, so a multi-pack
+  // run's evidence bundle can be traced back to its pack. Optional/additive:
+  // absent on runs materialized before this field existed.
+  packId?: string;
 }

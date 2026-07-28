@@ -13,7 +13,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, HTTPException, FastAPI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .security import require_auth
 from .rbac import require_role
@@ -28,7 +28,37 @@ logger = logging.getLogger(__name__)
 class ComputeRequest(BaseModel):
     mode: str = Field(default="offline", pattern="^(offline|live)$")
     systems: List[str] = Field(default_factory=lambda: ["salesforce", "servicenow", "jira"])
-    pack: Optional[str] = Field(default=None, description="Pack ID: service_cloud or ncino")
+    pack: Optional[str] = Field(
+        default=None,
+        description=(
+            "Primary pack ID (backward-compatible singular alias for pack_ids). "
+            "e.g. service_cloud or ncino."
+        ),
+    )
+    pack_ids: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "R191-P1 T1: multi-pack selection (order-preserving, de-duplicated). "
+            "Supersedes the singular pack; a single-element list behaves exactly "
+            "as pack. Reconciled with pack in the validator — both stay in sync, "
+            "pack being the primary (first) pack."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _reconcile_packs(self) -> "ComputeRequest":
+        # R191-P1 T1: fold the singular pack and the pack_ids list into ONE
+        # order-preserving, de-duplicated selection via the shared primitive, then
+        # re-derive pack as the primary (first). Single-pack callers — the current
+        # frontend sends only `pack` — are unaffected: [pack] normalises to pack.
+        from discovery.packs.pack_config import normalize_pack_ids
+
+        combined = normalize_pack_ids(
+            list(self.pack_ids or []) + ([self.pack] if self.pack else [])
+        )
+        self.pack_ids = combined
+        self.pack = combined[0] if combined else None
+        return self
 
 
 class ComputeResponse(BaseModel):
@@ -103,6 +133,7 @@ from .materialize_t2 import (
     _ingest_summary_from_payload,
     _org_id_for_run,
     _pack_id_for_run,
+    _pack_ids_for_run,
     _selected_system_ids_for_report,
     resolve_effective_pack,
 )
@@ -170,7 +201,13 @@ def _apply_temporal_enrichment(
     return opps
 
 
-def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Optional[str] = None) -> None:
+def _run_trackb_and_persist(
+    run_id: str,
+    mode: str,
+    systems: List[str],
+    pack: Optional[str] = None,
+    pack_ids: Optional[List[str]] = None,
+) -> None:
     """Background task: execute Track B and persist Track A-shaped artifacts."""
     import logging
     logger = logging.getLogger(__name__)
@@ -221,6 +258,17 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
             run_id, "CONNECT", f"GitHub connected — defaulting to the {_effective_pack} pack"
         )
 
+    # R191-P1: the FULL multi-pack selection. The launch stored it on the run
+    # record (packIds), resolved from the template packs + the Salesforce product
+    # declaration; the compute request also carries it. Prefer the run record, then
+    # the request. The runner runs EVERY selected pack against the shared signal —
+    # without this, only the primary `pack` ran (e.g. Service Cloud but not nCino).
+    effective_pack_ids = _pack_ids_for_run(run) or pack_ids
+    if effective_pack_ids:
+        _emit_event(
+            run_id, "CONNECT", f"Analysis packs: {', '.join(effective_pack_ids)}"
+        )
+
     per_system: Dict[str, str] = {
         s: "skipped" for s in ["salesforce", "servicenow", "jira"]
     }
@@ -245,7 +293,12 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
         # the temporal read uses; without it the runner falls back to its own
         # "demo-org" default, which hides the Baseline Context panel.
         payload = trackb_run(
-            mode=mode, systems=systems, run_id=run_id, org_id=run_org_id, pack=pack
+            mode=mode,
+            systems=systems,
+            run_id=run_id,
+            org_id=run_org_id,
+            pack=pack,
+            pack_ids=effective_pack_ids,
         )
 
         per_system, succeeded, ingest_errors = _ingest_summary_from_payload(
@@ -488,7 +541,9 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
         # Mark status running and return immediately.
         _set_status(run_id, "running", counts={"opportunities": 0, "evidence": 0})
         _append_event(run_id, "QUEUED", "Discovery run queued.")
-        background_tasks.add_task(_run_trackb_and_persist, run_id, body.mode, body.systems, body.pack)
+        background_tasks.add_task(
+            _run_trackb_and_persist, run_id, body.mode, body.systems, body.pack, body.pack_ids
+        )
 
         return ComputeResponse(
             ok=True,

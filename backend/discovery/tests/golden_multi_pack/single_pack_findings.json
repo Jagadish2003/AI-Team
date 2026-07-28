@@ -1,0 +1,371 @@
+{
+  "ncino": [
+    {
+      "category": "Credit Approval",
+      "detector_id": "APPROVAL_BOTTLENECK",
+      "effort": 4,
+      "evidence": [
+        [
+          "Salesforce",
+          null,
+          "Metric",
+          "Approval bottleneck \u2014 1 pending loan approval(s)",
+          "1 loan approval(s) currently pending out of 1 total. Approval cycle: avg 112 days, max 112 days. Proactive escalation to credit committee can reduce approval backlog."
+        ],
+        [
+          "ServiceNow",
+          "APPROVAL_BOTTLENECK",
+          "Metric",
+          "ServiceNow corroboration: APPROVAL_BOTTLENECK",
+          "Loan approval: Loan approval stuck \u2014 no approval notifications sent. Priority: 1 - Critical. State: New."
+        ]
+      ],
+      "evidence_count": 2,
+      "impact": 8,
+      "metric_value": 1.0,
+      "opportunity_identity": "opp_29dc8aa266431fdb61e8a83d",
+      "packId": "ncino",
+      "packVersion": "1.0.1",
+      "signal_source": "salesforce",
+      "threshold": 1.0,
+      "tier": "Strategic",
+      "title": "Accelerate credit approvals with intelligent workflow automation"
+    },
+    {
+      "category": "Credit Analysis",
+      "detector_id": "SPREADING_BOTTLENECK",
+      "effort": 4,
+      "evidence": [
+        [
+          "Salesforce",
+          null,
+          "Metric",
+          "Spreading bottleneck \u2014 1 unlocked periods (max 112 days)",
+          "1 spread periods remain unlocked (max: 112 days). 0 analyst(s) have 2+ unlocked periods. Financial spreading backlog is delaying credit decisions."
+        ],
+        [
+          "ServiceNow",
+          "SPREADING_BOTTLENECK",
+          "Metric",
+          "ServiceNow corroboration: SPREADING_BOTTLENECK",
+          "Financial spreading: nCino spreading module slow \u2014 analysts reporting delays. Priority: 2 - High. State: New."
+        ]
+      ],
+      "evidence_count": 2,
+      "impact": 7,
+      "metric_value": 1.0,
+      "opportunity_identity": "opp_882bb2f388308e6653d45811",
+      "packId": "ncino",
+      "packVersion": "1.0.1",
+      "signal_source": "salesforce",
+      "threshold": 1.0,
+      "tier": "Strategic",
+      "title": "Reduce financial spreading time with intelligent automation"
+    },
+    {
+      "category": "Covenant Compliance",
+      "detector_id": "COVENANT_TRACKING_GAP",
+      "effort": 4,
+      "evidence": [
+        [
+          "Jira",
+          "COVENANT_TRACKING_GAP",
+          "Metric",
+          "Jira corroboration: COVENANT_TRACKING_GAP",
+          "Covenant compliance: Covenant review reminders not triggering in nCino \u2014 compliance risk. Priority: High. Status: Open."
+        ],
+        [
+          "Jira",
+          "COVENANT_TRACKING_GAP",
+          "Metric",
+          "Jira corroboration: COVENANT_TRACKING_GAP",
+          "Covenant compliance: Pre-close document checklist delays blocking loan closings. Priority: Medium. Status: Open."
+        ],
+        [
+          "Salesforce",
+          null,
+          "Metric",
+          "Covenant compliance gap \u2014 1 overdue, 1 breached",
+          "\u26a0 COMPLIANCE OVERRIDE \u2014 1 overdue covenants detected. 1 covenant(s) breached. Max days past evaluation: 21. Immediate escalation to relationship manager required."
+        ],
+        [
+          "ServiceNow",
+          "COVENANT_TRACKING_GAP",
+          "Metric",
+          "ServiceNow corroboration: COVENANT_TRACKING_GAP",
+          "Covenant compliance: Compliance team cannot update covenant status in nCino. Priority: 1 - Critical. State: New."
+        ]
+      ],
+      "evidence_count": 4,
+      "impact": 9,
+      "metric_value": 1.0,
+      "opportunity_identity": "opp_88b41d1747528dc8b25d913c",
+      "packId": "ncino",
+      "packVersion": "1.0.1",
+      "signal_source": "salesforce",
+      "threshold": 1.0,
+      "tier": "Strategic",
+      "title": "Automate covenant monitoring to eliminate compliance risk"
+    },
+    {
+      "category": "Loan Closing",
+      "detector_id": "CHECKLIST_BOTTLENECK",
+      "effort": 2,
+      "evidence": [
+        [
+          "Salesforce",
+          null,
+          "Metric",
+          "Checklist bottleneck \u2014 1 overruns detected (max 15 days)",
+          "1 of 1 loan checklists overrunning expected duration (max: 15 days, avg: 15 days). 1 checklist(s) stalled. Closing delays are impacting borrower experience."
+        ],
+        [
+          "ServiceNow",
+          "CHECKLIST_BOTTLENECK",
+          "Metric",
+          "ServiceNow corroboration: CHECKLIST_BOTTLENECK",
+          "Document checklist: Document exception approval workflow not routing for loan closings. Priority: 2 - High. State: In Progress."
+        ]
+      ],
+      "evidence_count": 2,
+      "impact": 7,
+      "metric_value": 15.0,
+      "opportunity_identity": "opp_e7410c2fc51e60e8e8a402a7",
+      "packId": "ncino",
+      "packVersion": "1.0.1",
+      "signal_source": "salesforce",
+      "threshold": 1.0,
+      "tier": "Quick Win",
+      "title": "Accelerate loan closing by resolving checklist bottlenecks"
+    },
+    {
+      "category": "Loan Origination",
+      "detector_id": "LOAN_ORIGINATION_ROUTING_FRICTION",
+      "effort": 2,
+      "evidence": [
+        [
+          "Jira",
+          "LOAN_ORIGINATION_ROUTING_FRICTION",
+          "Metric",
+          "Jira corroboration: LOAN_ORIGINATION_ROUTING_FRICTION",
+          "Loan origination routing: Credit analyst spreading queue 3 weeks behind \u2014 deals stalled. Priority: High. Status: Open."
+        ],
+        [
+          "Jira",
+          "LOAN_ORIGINATION_ROUTING_FRICTION",
+          "Metric",
+          "Jira corroboration: LOAN_ORIGINATION_ROUTING_FRICTION",
+          "Loan origination routing: Loan approval stuck \u2014 credit committee not receiving notifications. Priority: High. Status: Open."
+        ],
+        [
+          "Jira",
+          "LOAN_ORIGINATION_ROUTING_FRICTION",
+          "Metric",
+          "Jira corroboration: LOAN_ORIGINATION_ROUTING_FRICTION",
+          "Loan origination routing: Underwriting assignment process broken for CRE loans. Priority: High. Status: Open."
+        ],
+        [
+          "Salesforce",
+          null,
+          "Metric",
+          "Loan origination routing friction \u2014 1 loans above threshold",
+          "1 of 1 loans show 4+ stage transitions (threshold: 2). Excessive routing handoffs are extending the origination cycle."
+        ],
+        [
+          "ServiceNow",
+          "LOAN_ORIGINATION_ROUTING_FRICTION",
+          "Metric",
+          "ServiceNow corroboration: LOAN_ORIGINATION_ROUTING_FRICTION",
+          "Loan origination routing: nCino loan routing \u2014 multiple reassignments causing origination delays. Priority: 2 - High. State: New."
+        ]
+      ],
+      "evidence_count": 5,
+      "impact": 7,
+      "metric_value": 3.0,
+      "opportunity_identity": "opp_f27fb27899b1fb40eff8a24e",
+      "packId": "ncino",
+      "packVersion": "1.0.1",
+      "signal_source": "salesforce",
+      "threshold": 2.0,
+      "tier": "Quick Win",
+      "title": "Reduce loan origination delays with intelligent routing"
+    }
+  ],
+  "service_cloud": [
+    {
+      "category": null,
+      "detector_id": "HANDOFF_FRICTION",
+      "effort": 2,
+      "evidence": [
+        [
+          "Salesforce",
+          null,
+          "Metric",
+          "Elevated case owner reassignment rate detected",
+          "480 owner changes recorded across 300 Cases in the last 90 days. Avg 1.6 owner changes per Case (threshold: 1.5). Top categories: Technical Issue (avg 4.0/case), Billing Inquiry (avg 3.8/case), Account Management (avg 3.5/case)."
+        ]
+      ],
+      "evidence_count": 1,
+      "impact": 4,
+      "metric_value": 1.6,
+      "opportunity_identity": "opp_18ccff4f52c1b801045986bc",
+      "packId": "service_cloud",
+      "packVersion": "1.0.0",
+      "signal_source": "salesforce",
+      "threshold": 1.5,
+      "tier": "Quick Win",
+      "title": null
+    },
+    {
+      "category": null,
+      "detector_id": "CROSS_SYSTEM_ECHO",
+      "effort": 3,
+      "evidence": [
+        [
+          "Jira",
+          null,
+          "Log",
+          "Jira cross-system echo: 62 issues reference Salesforce cases",
+          "62 of 280 Jira issues reference Salesforce case IDs (Jira echo score: 0.22). Corroborates cross-system duplication signal from 280 issues in 90 days."
+        ],
+        [
+          "Salesforce",
+          null,
+          "Log",
+          "Cross-system ticket duplication detected across Salesforce and external systems",
+          "75 of 300 Salesforce Cases reference external ticket IDs (SF echo score: 0.25, threshold: 0.15). 80 of 500 ServiceNow incidents reference Salesforce case IDs (SN echo score: 0.16). 62 of 280 Jira CRM issues reference Salesforce cases (Jira echo score: 0.22). Patterns matched: CS-, INC-, JIRA-."
+        ]
+      ],
+      "evidence_count": 2,
+      "impact": 4,
+      "metric_value": 0.25,
+      "opportunity_identity": "opp_70d2ff9b6c2f6d7ad1d5ae91",
+      "packId": "service_cloud",
+      "packVersion": "1.0.0",
+      "signal_source": "salesforce",
+      "threshold": 0.15,
+      "tier": "Quick Win",
+      "title": null
+    },
+    {
+      "category": null,
+      "detector_id": "PERMISSION_BOTTLENECK",
+      "effort": 3,
+      "evidence": [
+        [
+          "Salesforce",
+          null,
+          "Metric",
+          "Approval queue overloaded with limited approver capacity in 'Discount Approval'",
+          "60 pending 'Discount Approval' records. Only 2 active approver(s) identified via ProcessInstanceWorkitem. Bottleneck score: 30.0 pending per approver (threshold: 10.0)."
+        ]
+      ],
+      "evidence_count": 1,
+      "impact": 5,
+      "metric_value": 30.0,
+      "opportunity_identity": "opp_813164fb8bcbf1cb2ba27725",
+      "packId": "service_cloud",
+      "packVersion": "1.0.0",
+      "signal_source": "salesforce",
+      "threshold": 10.0,
+      "tier": "Quick Win",
+      "title": null
+    },
+    {
+      "category": null,
+      "detector_id": "REPETITIVE_AUTOMATION",
+      "effort": 2,
+      "evidence": [
+        [
+          "Salesforce",
+          null,
+          "Metric",
+          "Multiple low-complexity AutoLaunchedFlows running on high-volume Case object",
+          "4 active AutoLaunchedFlow(s) on the Case object. Avg element count: 5 (LOW complexity). 300 Case records processed in last 90 days (3.3/day). Flow activity score: 2.128 (threshold: 0.6)."
+        ]
+      ],
+      "evidence_count": 1,
+      "impact": 5,
+      "metric_value": 2.128,
+      "opportunity_identity": "opp_94acda890e4a967eef4778ef",
+      "packId": "service_cloud",
+      "packVersion": "1.0.0",
+      "signal_source": "salesforce",
+      "threshold": 0.6,
+      "tier": "Quick Win",
+      "title": null
+    },
+    {
+      "category": null,
+      "detector_id": "KNOWLEDGE_GAP",
+      "effort": 2,
+      "evidence": [
+        [
+          "Salesforce",
+          null,
+          "Metric",
+          "Significant knowledge gap in Case resolution \u2014 low KB article linkage",
+          "30 of 60 closed Cases in the last 90 days have a linked Knowledge Article. Knowledge gap score: 0.5 (threshold: 0.4). 50.0% of Cases closed with KB reuse \u2014 30 resolved without KB linkage."
+        ]
+      ],
+      "evidence_count": 1,
+      "impact": 4,
+      "metric_value": 0.5,
+      "opportunity_identity": "opp_964281c21a455cfeb390aef1",
+      "packId": "service_cloud",
+      "packVersion": "1.0.0",
+      "signal_source": "salesforce",
+      "threshold": 0.4,
+      "tier": "Quick Win",
+      "title": null
+    },
+    {
+      "category": null,
+      "detector_id": "INTEGRATION_CONCENTRATION",
+      "effort": 3,
+      "evidence": [
+        [
+          "Salesforce",
+          null,
+          "Metric",
+          "Multiple Flows referencing the same Named Credential 'ServiceNow Integration'",
+          "3 active Flow(s) reference the 'ServiceNow Integration' Named Credential (threshold: 3 distinct flows). Match type: name. Referencing flow IDs: 301xx000001ABC2, 301xx000001ABC3, 301xx000001ABC4."
+        ]
+      ],
+      "evidence_count": 1,
+      "impact": 1,
+      "metric_value": 3.0,
+      "opportunity_identity": "opp_ab2932586fcaf5b8e46556c5",
+      "packId": "service_cloud",
+      "packVersion": "1.0.0",
+      "signal_source": "salesforce",
+      "threshold": 3.0,
+      "tier": "Quick Win",
+      "title": null
+    },
+    {
+      "category": null,
+      "detector_id": "APPROVAL_BOTTLENECK",
+      "effort": 3,
+      "evidence": [
+        [
+          "Salesforce",
+          null,
+          "Metric",
+          "Approval records exceeding SLA due to high delay in 'Discount Approval'",
+          "60 pending 'Discount Approval' records with average delay of 5.0 days (threshold: 3.0 days). Bottleneck score: 30.0 (threshold: 10). 2 approver(s) handling all pending items."
+        ]
+      ],
+      "evidence_count": 1,
+      "impact": 5,
+      "metric_value": 5.0,
+      "opportunity_identity": "opp_e8b1e939d3d060935cf6d586",
+      "packId": "service_cloud",
+      "packVersion": "1.0.0",
+      "signal_source": "salesforce",
+      "threshold": 3.0,
+      "tier": "Quick Win",
+      "title": null
+    }
+  ]
+}

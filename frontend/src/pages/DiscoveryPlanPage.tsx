@@ -256,6 +256,11 @@ interface Props {
   industries: IndustryListItem[];
   templates: TemplateListItem[];
   activePackId: string;
+  // R191-P1: the FULL set of packs this run will activate (order-preserving). A
+  // Salesforce workspace declaring multiple products runs multiple packs, so the
+  // Analysis pack summary is now read-only and lists them all. Falls back to
+  // [activePackId] for callers that only pass the singular primary pack.
+  activePackIds?: string[];
   onLaunch: () => void;
   launchState?: LendingGuideLaunchState;
 }
@@ -265,6 +270,7 @@ export default function DiscoveryPlanPage({
   industries,
   templates,
   activePackId,
+  activePackIds,
   onLaunch,
   launchState = 'ready',
 }: Props) {
@@ -304,11 +310,14 @@ export default function DiscoveryPlanPage({
     ? templates.find(item => item.template_id === state.templateId)?.label
       ?? state.templateId
     : '-';
-  const packOptions = Array.from(new Set([
-    activePackId,
-    ...industries.flatMap(item => item.pack_hints),
-    ...templates.map(item => item.pack_id),
-  ].filter(Boolean)));
+  // The packs this run will activate, as a read-only, comma-separated label. A
+  // multi-product Salesforce declaration (or a multi-pack template) runs more
+  // than one pack, so this is derived — not a user-editable single choice.
+  const runPackIds = (activePackIds && activePackIds.length > 0
+    ? activePackIds
+    : [activePackId]
+  ).filter(Boolean);
+  const analysisPackLabel = runPackIds.map(packLabel).join(', ') || '-';
 
   return (
     <div className="space-y-5">
@@ -332,22 +341,10 @@ export default function DiscoveryPlanPage({
               label="Template"
               value={templateLabel}
             />
-            <div className="flex items-center justify-between gap-4 border-b border-border/70 py-2">
-              <label htmlFor="analysis-pack" className="text-xs text-muted">
-                Analysis pack
-              </label>
-              <select
-                id="analysis-pack"
-                aria-label="Analysis pack"
-                value={activePackId}
-                onChange={event => setupState.setPack(event.target.value)}
-                className="max-w-[220px] rounded-md border border-border bg-panel px-2 py-1 text-right text-xs font-medium text-text"
-              >
-                {packOptions.map(packId => (
-                  <option key={packId} value={packId}>{packLabel(packId)}</option>
-                ))}
-              </select>
-            </div>
+            <SummaryRow
+              label="Analysis pack"
+              value={analysisPackLabel}
+            />
             <SummaryRow
               label="Total systems"
               value={String(state.selectedSystemIds.length)}

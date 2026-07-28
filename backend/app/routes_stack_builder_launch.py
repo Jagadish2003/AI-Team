@@ -50,6 +50,7 @@ from .middleware.tenancy import get_current_org_id
 from .security import require_auth
 from .rbac import require_role
 
+from discovery.packs.pack_config import normalize_pack_ids
 from discovery.packs.template_registry import resolve_launch_config
 
 
@@ -74,7 +75,18 @@ class LaunchRequest(BaseModel):
             "Pack resolved by frontend from industry pack hints. "
             "Falls back to 'service_cloud' if no industry or hints. "
             "Optional when template_id is set — the template supplies its pack "
-            "for an untouched launch (R18-C1 T2)."
+            "for an untouched launch (R18-C1 T2). Backward-compatible singular "
+            "alias for pack_ids — see pack_ids (R191-P1 T1)."
+        ),
+    )
+    pack_ids: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "R191-P1 T1: multi-pack selection (order-preserving, de-duplicated). "
+            "Supersedes the singular pack_id, which stays accepted as the "
+            "primary-pack alias. A single-element list behaves exactly as a "
+            "singular pack_id — the first id is the primary pack. Reconciled with "
+            "pack_id in the validator; both are always kept in sync."
         ),
     )
     weightings: Dict[str, Any] = Field(
@@ -83,7 +95,21 @@ class LaunchRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _require_pack_or_template(self) -> "LaunchRequest":
+    def _reconcile_and_require_pack(self) -> "LaunchRequest":
+        # R191-P1 T1: reconcile the singular pack_id with the pack_ids list into
+        # ONE order-preserving, de-duplicated selection. The list wins ordering;
+        # the singular alias is appended (dedup collapses the common case where a
+        # caller sends the same id both ways). pack_id is then re-derived as the
+        # primary (first) pack, so every existing single-pack caller — and all
+        # backward-compatible reads of pack_id — see exactly today's value.
+        from discovery.packs.pack_config import normalize_pack_ids
+
+        combined = normalize_pack_ids(
+            list(self.pack_ids or []) + ([self.pack_id] if self.pack_id else [])
+        )
+        self.pack_ids = combined
+        self.pack_id = combined[0] if combined else None
+
         # A pack is mandatory unless a REGISTERED template is selected to supply
         # one — this keeps the pre-T2 contract (no pack, and no template that can
         # provide a pack → 422) intact while letting an untouched template drive
@@ -103,6 +129,10 @@ class LaunchResponse(BaseModel):
     ok: bool = True
     runId: str
     packId: str
+    # R191-P1 T1: the full order-preserving, de-duplicated pack selection. packId
+    # stays the primary (first) pack for backward compatibility; packIds carries
+    # the whole list so multi-pack execution (a later P1 task) has its config.
+    packIds: List[str] = Field(default_factory=list)
     focusId: Optional[str] = None
     industryId: Optional[str] = None
     systemCount: int
@@ -152,6 +182,10 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         resolved = resolve_launch_config(
             body.template_id,
             pack_id=body.pack_id,
+            # R191-P1 T5: pass the full multi-pack selection so a template's own
+            # packs list is honored end to end — an untouched multi-pack template
+            # activates every one of its packs; an explicit selection overrides it.
+            pack_ids=body.pack_ids,
             focus_id=body.focus_id,
             selected_system_ids=body.selected_system_ids,
             weightings=body.weightings,
@@ -175,6 +209,16 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
                 status_code=400,
                 detail="pack_id is required",
             )
+
+        # R191-P1 T1/T5: the effective multi-pack selection. resolve_launch_config
+        # now returns the template-aware pack list (an untouched multi-pack
+        # template contributes all of its packs; an explicit caller selection
+        # overrides it). The resolved primary pack always leads. A single-pack
+        # launch yields exactly [eff_pack], so packId and every existing
+        # single-pack read below are byte-identical to today.
+        eff_pack_ids = normalize_pack_ids(
+            [eff_pack] + list(effective.get("pack_ids") or []) + list(body.pack_ids or [])
+        )
 
         # Generate run ID
         run_id = next_run_id()
@@ -213,6 +257,7 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             "updatedAt": now,
             "orgId": org_id,
             "packId": eff_pack,
+            "packIds": eff_pack_ids,
             "focusId": eff_focus,
             "industryId": body.industry_id,
             "templateId": body.template_id,
@@ -227,6 +272,10 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         # Store run-scoped context entries
         # pack_id is used by normalization and evidence_builder for pack routing
         run_kv_set("pack_id", run_id, eff_pack)
+        # R191-P1 T1: the full multi-pack selection, alongside the singular
+        # pack_id (kept as the primary-pack alias) so nothing reading pack_id
+        # changes and downstream multi-pack execution can read pack_ids.
+        run_kv_set("pack_ids", run_id, eff_pack_ids)
 
         # focus_id and industry_id used by LLM enrichment (Sprint 8)
         # for industry-aware prompt injection
@@ -246,6 +295,7 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             "template_id":         body.template_id,
             "selected_system_ids": eff_systems,
             "pack_id":             eff_pack,
+            "pack_ids":            eff_pack_ids,
             "weightings":          effective_weightings,
             "template_provenance": provenance,
         })
@@ -253,6 +303,7 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         return LaunchResponse(
             runId=run_id,
             packId=eff_pack,
+            packIds=eff_pack_ids,
             focusId=eff_focus,
             industryId=body.industry_id,
             systemCount=len(eff_systems),
