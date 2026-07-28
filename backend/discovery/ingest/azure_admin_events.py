@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Callable, Dict, List, Optional, Protocol
 
 try:
     from . import is_live
@@ -43,6 +44,15 @@ SERVICE_HEALTH_API_VERSION = "2018-07-01"
 
 _ACTIVITY_LOG_PATH = "providers/Microsoft.Insights/eventtypes/management/values"
 _SERVICE_HEALTH_PATH = "providers/Microsoft.ResourceHealth/events"
+
+#: Activity Log ``$filter`` window. The Activity Log List operation REQUIRES a
+#: ``$filter`` carrying at least a start ``eventTimestamp`` — a request without one
+#: is answered HTTP 400 by ARM, not an empty page. A first poll (no checkpoint yet)
+#: therefore still needs an explicit start bound.
+ACTIVITY_LOG_DEFAULT_LOOKBACK_DAYS = 7
+#: Azure retains Activity Log events for 90 days; ARM rejects a start bound older
+#: than that, so a stale checkpoint is clamped to the retention floor.
+ACTIVITY_LOG_MAX_LOOKBACK_DAYS = 90
 
 #: The ONLY Activity Log category this connector ingests (scope defence / AC4).
 ADMINISTRATIVE_CATEGORY = "Administrative"
@@ -108,6 +118,82 @@ def is_administrative(raw: Dict[str, Any]) -> bool:
     """
     cat = activity_category(raw).strip().lower()
     return cat == "" or cat == ADMINISTRATIVE_CATEGORY.lower()
+
+
+# ── Activity Log $filter construction (REQUIRED by ARM) ─────────────────────────
+
+
+def _parse_iso(value: Any) -> Optional[datetime]:
+    """Parse an ISO-8601 timestamp to an aware UTC datetime, or None."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _iso_z(moment: datetime) -> str:
+    """Render an aware datetime in the form ARM accepts (UTC, trailing ``Z``)."""
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def build_activity_log_filter(
+    since_iso: Optional[str],
+    *,
+    now: Optional[datetime] = None,
+    lookback_days: int = ACTIVITY_LOG_DEFAULT_LOOKBACK_DAYS,
+) -> str:
+    """Build the ``$filter`` the Activity Log List operation REQUIRES.
+
+    ``$filter`` is a *required* query parameter on
+    ``GET /subscriptions/{id}/providers/Microsoft.Insights/eventtypes/management/values``
+    and must carry at least a start ``eventTimestamp``; without it ARM answers
+    HTTP 400 (Azure Monitor "Activity Logs - List", api-version 2015-04-01). ARM
+    also accepts only a fixed set of filter shapes — this emits the documented
+    *"list events for a subscription in a time range"* form::
+
+        eventTimestamp ge '<start>' and eventTimestamp le '<end>'
+
+    Start bound: the subscription's checkpoint (``since_iso``) when there is one,
+    otherwise ``now - lookback_days``. Either way it is clamped to the 90-day
+    Activity Log retention floor, because ARM also rejects a start bound older
+    than retention — which would otherwise reintroduce the same 400 once a
+    checkpoint aged out.
+
+    ``ge`` is inclusive, so the boundary record can be returned again; the
+    connector's strictly-newer ``_filter_new`` drops it, leaving incremental
+    semantics identical to the offline path.
+    """
+    end = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    floor = end - timedelta(days=ACTIVITY_LOG_MAX_LOOKBACK_DAYS)
+
+    start = _parse_iso(since_iso)
+    if start is None:
+        if since_iso:
+            logger.warning(
+                "azure_admin_events: unparseable activity-log checkpoint %r — "
+                "falling back to a %d-day window",
+                since_iso, lookback_days,
+            )
+        start = end - timedelta(days=max(1, lookback_days))
+    if start < floor:
+        start = floor
+    if start > end:  # checkpoint ahead of our clock — keep the window valid
+        start = end
+
+    return f"eventTimestamp ge '{_iso_z(start)}' and eventTimestamp le '{_iso_z(end)}'"
+
+
+def activity_log_params(since_iso: Optional[str]) -> Dict[str, str]:
+    """The Activity-Log-specific query parameters (the required ``$filter``)."""
+    return {"$filter": build_activity_log_filter(since_iso)}
 
 
 # ── Service Health accessors ────────────────────────────────────────────────────
@@ -181,11 +267,23 @@ class _FixtureStreamClient:
 class _HttpStreamClient:
     """Live client: a single outbound ARM GET (Reader-only, no listener)."""
 
-    def __init__(self, *, path: str, api_version: str, timeout_seconds: int = 30, transport: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        path: str,
+        api_version: str,
+        timeout_seconds: int = 30,
+        transport: Any = None,
+        params_builder: Optional[Callable[[Optional[str]], Dict[str, str]]] = None,
+    ) -> None:
         self._path = path
         self._api_version = api_version
         self._timeout = timeout_seconds
         self._transport = transport
+        # Per-stream extra query parameters. Only the Activity Log supplies one
+        # (its REQUIRED $filter); Alerts and Service Health pass none, so their
+        # requests are unchanged.
+        self._params_builder = params_builder
 
     def fetch(self, *, token, subscription_id, environment, since_iso):
         import httpx  # local import so offline runs never require httpx at import
@@ -195,6 +293,8 @@ class _HttpStreamClient:
             f"{subscription_id}/{self._path}"
         )
         params = {"api-version": self._api_version}
+        if self._params_builder is not None:
+            params.update(self._params_builder(since_iso))
         with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
             resp = client.get(
                 url,
@@ -209,7 +309,11 @@ class _HttpStreamClient:
 def default_activity_log_client() -> AzureEventStreamClient:
     """Offline fixture client, or the live Activity Log HTTP client when live."""
     if is_live():
-        return _HttpStreamClient(path=_ACTIVITY_LOG_PATH, api_version=ACTIVITY_LOG_API_VERSION)
+        return _HttpStreamClient(
+            path=_ACTIVITY_LOG_PATH,
+            api_version=ACTIVITY_LOG_API_VERSION,
+            params_builder=activity_log_params,  # $filter is REQUIRED by this operation
+        )
     return _FixtureStreamClient(ACTIVITY_LOG_FIXTURE, activity_subscription_id)
 
 

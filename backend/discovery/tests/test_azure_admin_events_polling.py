@@ -364,3 +364,132 @@ class FakeAlertsClient:
         if subscription_id in self.fail_subs:
             raise RuntimeError("throttled")
         return list(self.by_sub.get(subscription_id, []))
+
+
+# ── Activity Log $filter — REQUIRED by ARM (regression cover) ────────────────────
+# The Activity Log List operation rejects a request with no $filter as HTTP 400.
+# The connector previously sent only api-version, so every poll failed and Azure
+# ingested 0 events while Alerts and Service Health (which do NOT require it)
+# returned 200. These tests pin the query string, not just the parsed result.
+
+import re as _re
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+import pytest as _pytest
+
+from discovery.ingest import azure_admin_events as _admin
+from discovery.ingest import azure_events_config as _cfg
+
+_SUB = "11111111-2222-3333-4444-555555555555"
+_NOW = _dt(2026, 7, 27, 12, 0, 0, tzinfo=_tz.utc)
+
+
+def _bounds(flt: str):
+    """Extract the (ge, le) bounds from the documented filter form."""
+    found = dict(
+        (op, val) for op, val in _re.findall(r"eventTimestamp (ge|le) '([^']+)'", flt)
+    )
+    return found.get("ge"), found.get("le")
+
+
+def test_filter_contains_both_eventtimestamp_bounds():
+    flt = _admin.build_activity_log_filter(None, now=_NOW, lookback_days=7)
+    ge, le = _bounds(flt)
+    assert ge and le, f"both bounds required, got {flt!r}"
+    assert flt == (
+        "eventTimestamp ge '2026-07-20T12:00:00.000000Z' "
+        "and eventTimestamp le '2026-07-27T12:00:00.000000Z'"
+    )
+
+
+def test_first_sync_uses_the_default_lookback_as_lower_bound():
+    ge, le = _bounds(_admin.build_activity_log_filter(None, now=_NOW))
+    expected = _NOW - _td(days=_admin.ACTIVITY_LOG_DEFAULT_LOOKBACK_DAYS)
+    assert _admin._parse_iso(ge) == expected
+    assert _admin._parse_iso(le) == _NOW
+
+
+def test_incremental_sync_uses_the_checkpoint_as_lower_bound():
+    checkpoint = "2026-07-26T09:30:00.123456Z"
+    ge, le = _bounds(_admin.build_activity_log_filter(checkpoint, now=_NOW))
+    assert _admin._parse_iso(ge) == _admin._parse_iso(checkpoint)
+    assert _admin._parse_iso(le) == _NOW
+
+
+def test_checkpoint_older_than_90_days_is_clamped_to_retention():
+    # ARM rejects a start bound beyond the 90-day Activity Log retention window,
+    # so an aged checkpoint must not reintroduce the 400.
+    ge, _ = _bounds(_admin.build_activity_log_filter("2019-01-01T00:00:00Z", now=_NOW))
+    assert _admin._parse_iso(ge) == _NOW - _td(days=_admin.ACTIVITY_LOG_MAX_LOOKBACK_DAYS)
+
+
+def test_unparseable_checkpoint_still_yields_a_valid_filter():
+    flt = _admin.build_activity_log_filter("not-a-timestamp", now=_NOW)
+    ge, le = _bounds(flt)
+    assert ge and le
+
+
+def test_checkpoint_ahead_of_clock_keeps_the_window_valid():
+    ge, le = _bounds(_admin.build_activity_log_filter("2030-01-01T00:00:00Z", now=_NOW))
+    assert _admin._parse_iso(ge) <= _admin._parse_iso(le)
+
+
+class _Recorder:
+    """Captures the outgoing request and returns an empty ARM page."""
+
+    def __init__(self):
+        self.urls = []
+
+    def handler(self, request):
+        import httpx
+        self.urls.append(request.url)
+        return httpx.Response(200, json={"value": []})
+
+
+def _fetch(path, api_version, params_builder, since_iso=None):
+    import httpx
+    rec = _Recorder()
+    client = _admin._HttpStreamClient(
+        path=path, api_version=api_version,
+        params_builder=params_builder, transport=httpx.MockTransport(rec.handler),
+    )
+    client.fetch(
+        token="T", subscription_id=_SUB,
+        environment=_cfg.resolve_environment(_cfg.AZURE_CLOUD), since_iso=since_iso,
+    )
+    return rec.urls[0]
+
+
+def test_live_activity_log_request_carries_the_filter():
+    url = _fetch(_admin._ACTIVITY_LOG_PATH, _admin.ACTIVITY_LOG_API_VERSION,
+                 _admin.activity_log_params)
+    assert url.path.endswith("/providers/Microsoft.Insights/eventtypes/management/values")
+    assert url.params["api-version"] == _admin.ACTIVITY_LOG_API_VERSION
+    flt = url.params["$filter"]                       # the fix: absent → HTTP 400
+    ge, le = _bounds(flt)
+    assert ge and le
+
+
+def test_live_activity_log_request_passes_the_checkpoint_through():
+    checkpoint = "2026-07-26T09:30:00.123456Z"
+    url = _fetch(_admin._ACTIVITY_LOG_PATH, _admin.ACTIVITY_LOG_API_VERSION,
+                 _admin.activity_log_params, since_iso=checkpoint)
+    ge, _ = _bounds(url.params["$filter"])
+    assert _admin._parse_iso(ge) == _admin._parse_iso(checkpoint)
+
+
+def test_service_health_request_is_unchanged_no_filter():
+    # Service Health does NOT require $filter — its request must stay as it was.
+    url = _fetch(_admin._SERVICE_HEALTH_PATH, _admin.SERVICE_HEALTH_API_VERSION, None)
+    assert "$filter" not in str(url) and "%24filter" not in str(url)
+    assert url.params["api-version"] == _admin.SERVICE_HEALTH_API_VERSION
+
+
+def test_default_live_activity_log_client_is_filtered(monkeypatch):
+    monkeypatch.setattr(_admin, "is_live", lambda: True)
+    assert _admin.default_activity_log_client()._params_builder is _admin.activity_log_params
+
+
+def test_default_live_service_health_client_has_no_params_builder(monkeypatch):
+    monkeypatch.setattr(_admin, "is_live", lambda: True)
+    assert _admin.default_service_health_client()._params_builder is None
