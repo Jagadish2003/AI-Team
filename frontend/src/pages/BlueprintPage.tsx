@@ -38,6 +38,7 @@ import {
   ProjectionAssumptionList,
   projectionAssumptions,
 } from '../components/projection/ProjectionAssumptionLedger';
+import { ProjectionBandCompact } from '../components/projection/ProjectionBand';
 import { ProjectionBasisCompact } from '../components/projection/ProjectionBasis';
 
 function TierBadge({ tier }: { tier?: string }) {
@@ -372,6 +373,15 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
               : 'Agent purpose not available for this opportunity.'}
           </p>
         </SectionBlock>
+
+        {/* 2.0-A1 T4 — the projection band, its evidence label, and its
+            strength (with the capped caveat where one applies). Placed above
+            the assumptions so the band is never read without them nearby. */}
+        {projection?.magnitudeBand && (
+          <SectionBlock icon={<BarChart2 size={16} />} title="Projection Band">
+            <ProjectionBandCompact projection={projection} />
+          </SectionBlock>
+        )}
 
         {assumptions.length > 0 && (
           <SectionBlock icon={<ListChecks size={16} />} title="Projection Assumptions">

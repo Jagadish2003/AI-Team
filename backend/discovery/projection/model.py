@@ -13,14 +13,16 @@ The discipline, restated because it governs every line here:
     A projection is a DIRECTION and a MAGNITUDE BAND on specific MEASURED
     signals — never a point estimate, never a guarantee, never a savings claim.
 
-Band width is a deterministic function of three inputs (2.0-A1 AC2):
+Band width is a deterministic function of four evidence inputs (2.0-A1 AC2/AC4):
 
-    1. sample size        — how many observed instances the finding rests on
+    1. sample size          — how many observed instances the finding rests on
     2. recurrence stability — steady vs bursty, from temporal history
     3. corroboration status — single-source vs corroborated vs triple
+    4. confidence cap status — is confidence capped for want of corroboration
 
 Thinner evidence widens the band; it never narrows it.  Width is never a
-hand-set number.
+hand-set number.  The whole computation lives in ``band_width.py`` — this module
+decides WHICH measured values feed it and never computes a width itself.
 """
 
 from __future__ import annotations
@@ -28,6 +30,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
+from .band_width import (
+    BAND_WIDTH_MODEL_VERSION,
+    MIN_INSTANCES_FOR_DIRECTION,
+    NO_BAND_STRENGTH_LABEL,
+    STABILITY_BURSTY,
+    STABILITY_UNKNOWN,
+    BandWidth,
+    band_width_inputs_from_opportunity,
+    compute_band_width,
+)
 from .signal_registry import (
     SIGNAL_CONCEPTS,
     DetectorSignalProfile,
@@ -37,7 +49,9 @@ from .signal_registry import (
 #: Bumped when the projection computation changes in a way that makes a stored
 #: projection non-comparable with a freshly computed one.  2.0-A2 reads this to
 #: know whether a stored projection is still comparable to a new measurement.
-PROJECTION_SCHEMA_VERSION = "1.0.0"
+#: 1.1.0 — T4 moved band width onto the four-input deterministic model, so bands
+#: computed before it are not comparable with bands computed after it.
+PROJECTION_SCHEMA_VERSION = "1.1.0"
 
 # --- Direction -------------------------------------------------------------
 
@@ -61,88 +75,19 @@ _STAGE_HORIZON: Dict[str, int] = {
 
 # --- Band-width model ------------------------------------------------------
 #
-# The band is centred on a base midpoint and widened by three deterministic
-# penalties.  All values are fractions of the affected instance population.
+# Band width is NOT computed here.  ``band_width.py`` owns it end to end — the
+# four evidence inputs, the penalty tables, the weights, the geometry, and the
+# projection-strength scalar.  This module's only job on that front is to decide
+# which of a detector's measured fields is a countable sample size (a rate is
+# not a population), which is signal-profile knowledge the width model must not
+# need.
+#
+# Only the values this module still reasons about are named here; the tiers and
+# corroboration states themselves belong to the width model.
 
-#: Midpoint of the band before any widening — the share of identified recurring
-#: instances an agent is expected to handle when evidence is strong.  Chosen to
-#: sit well below "all of them": an agent handles the identified cases, and the
-#: residual requires judgment.
-_BASE_MIDPOINT = 0.40
-
-#: Half-width at full evidence strength (strong sample, steady, corroborated).
-_MIN_HALF_WIDTH = 0.15
-
-#: Half-width added when the evidence is at its weakest on all three axes.
-_MAX_ADDITIONAL_HALF_WIDTH = 0.30
-
-#: Hard bounds on the band.  A projection never claims 0% (that is
-#: "no material change", a different direction) and never claims 100%.
-_BAND_FLOOR = 0.05
-_BAND_CEILING = 0.90
-
-# Sample-size tiers (count of observed instances behind the finding).
-_SAMPLE_STRONG = 100
-_SAMPLE_MODERATE = 30
-_SAMPLE_THIN = 10
-
-#: Below this many observed instances the finding is too thin to project a
-#: direction of improvement at all.
-_MIN_INSTANCES_FOR_DIRECTION = 3
-
-#: Coefficient-of-variation thresholds for recurrence stability, computed from
-#: the temporal ``recent_values`` series.
-_CV_STEADY = 0.25
-_CV_VARIABLE = 0.60
-
-# Per-axis widening contributions.  Each is a fraction of
-# _MAX_ADDITIONAL_HALF_WIDTH, and the three weights sum to 1.0.
-_W_SAMPLE = 0.40
-_W_STABILITY = 0.30
-_W_CORROBORATION = 0.30
-
-_STABILITY_STEADY = "steady"
-_STABILITY_VARIABLE = "variable"
-_STABILITY_BURSTY = "bursty"
-_STABILITY_UNKNOWN = "unknown"
-
-_CORROBORATION_TRIPLE = "triple"
-_CORROBORATION_CORROBORATED = "corroborated"
-_CORROBORATION_SUPPORTING_ONLY = "supporting_only"
-_CORROBORATION_SINGLE_SOURCE = "single_source"
-
-#: The two non-elevating corroboration rules — the 2.0-A1 AC4 capped-confidence
-#: case.  They are NOT interchangeable: COR-08 means the finding stands on ONE
-#: source (nothing corroborates it), while COR-05 means a conversation source
-#: (Slack/Teams) corroborates it but cannot elevate confidence on its own.
-#: COR-08 is therefore the weaker state and must win when both are present.
-_RULE_SINGLE_SOURCE = "COR-08"
-_RULE_SUPPORTING_ONLY = "COR-05"
-_NON_ELEVATING_RULE_IDS = frozenset({_RULE_SUPPORTING_ONLY, _RULE_SINGLE_SOURCE})
-
-#: Substrings the corroboration engine puts in a source label when the source
-#: cannot elevate confidence on its own.
-_NON_ELEVATING_SOURCE_MARKERS = ("supporting only", "single source")
-
-# Axis penalty tables — a plain lookup keeps the computation auditable.
-_SAMPLE_PENALTY = {
-    "strong": 0.0,
-    "moderate": 0.35,
-    "thin": 0.70,
-    "minimal": 1.0,
-}
-_STABILITY_PENALTY = {
-    _STABILITY_STEADY: 0.0,
-    _STABILITY_VARIABLE: 0.50,
-    _STABILITY_BURSTY: 1.0,
-    _STABILITY_UNKNOWN: 0.70,
-}
-_CORROBORATION_PENALTY = {
-    _CORROBORATION_TRIPLE: 0.0,
-    _CORROBORATION_CORROBORATED: 0.30,
-    _CORROBORATION_SUPPORTING_ONLY: 0.85,
-    _CORROBORATION_SINGLE_SOURCE: 1.0,
-}
+_MIN_INSTANCES_FOR_DIRECTION = MIN_INSTANCES_FOR_DIRECTION
+_STABILITY_BURSTY = STABILITY_BURSTY
+_STABILITY_UNKNOWN = STABILITY_UNKNOWN
 
 
 # --------------------------------------------------------------------------
@@ -230,6 +175,11 @@ class Projection:
     basis: Dict[str, Any] = field(default_factory=dict)
     band_width_inputs: Dict[str, Any] = field(default_factory=dict)
     confidence_capped: bool = False
+    #: T4 — the full band-width derivation (inputs, per-axis drivers, labels).
+    #: None when the finding carries no band at all.
+    band_width: Optional[Dict[str, Any]] = None
+    #: T4 — the comparable projection-strength scalar and its cap label.
+    projection_strength: Optional[Dict[str, Any]] = None
     schema_version: str = PROJECTION_SCHEMA_VERSION
 
     def to_dict(self) -> Dict[str, Any]:
@@ -246,6 +196,10 @@ class Projection:
             "affectedSignals": [s.to_dict() for s in self.affected_signals],
             "basis": dict(self.basis),
             "bandWidthInputs": dict(self.band_width_inputs),
+            "bandWidth": dict(self.band_width) if self.band_width else None,
+            "projectionStrength": (
+                dict(self.projection_strength) if self.projection_strength else None
+            ),
             "confidenceCapped": self.confidence_capped,
         }
 
@@ -309,94 +263,9 @@ def _metric_value(opp: Mapping[str, Any]) -> Optional[float]:
     return None
 
 
-def _sample_tier(instance_count: Optional[float]) -> str:
-    if instance_count is None:
-        return "minimal"
-    if instance_count >= _SAMPLE_STRONG:
-        return "strong"
-    if instance_count >= _SAMPLE_MODERATE:
-        return "moderate"
-    if instance_count >= _SAMPLE_THIN:
-        return "thin"
-    return "minimal"
-
-
-def _recurrence_stability(recent_values: Sequence[Any]) -> str:
-    """Classify recurrence stability from the temporal value series.
-
-    Steady vs bursty is the coefficient of variation of the observed series.
-    Fewer than three observations is honestly ``unknown`` rather than assumed
-    steady — assuming steady would narrow the band on absent evidence.
-    """
-    values = [v for v in (_safe_float(x) for x in recent_values or ()) if v is not None]
-    if len(values) < 3:
-        return _STABILITY_UNKNOWN
-    mean = sum(values) / len(values)
-    if mean <= 0:
-        return _STABILITY_UNKNOWN
-    variance = sum((v - mean) ** 2 for v in values) / len(values)
-    cv = (variance**0.5) / mean
-    if cv <= _CV_STEADY:
-        return _STABILITY_STEADY
-    if cv <= _CV_VARIABLE:
-        return _STABILITY_VARIABLE
-    return _STABILITY_BURSTY
-
-
-def _corroboration_state(opp: Mapping[str, Any]) -> str:
-    """Classify corroboration status for band-width purposes.
-
-    Mirrors the states ``corroboration_engine`` can produce, read defensively so
-    a legacy stored opportunity without the ENT-2 fields is treated as
-    single-source (the widest band) rather than crashing or being flattered.
-    """
-    if bool(opp.get("triple_corroboration")):
-        return _CORROBORATION_TRIPLE
-
-    sources = opp.get("corroboration_sources")
-    sources = [str(s) for s in sources] if isinstance(sources, (list, tuple)) else []
-
-    rule_ids = opp.get("corroboration_rule_ids")
-    rule_ids = (
-        {str(r).strip().upper() for r in rule_ids}
-        if isinstance(rule_ids, (list, tuple))
-        else set()
-    )
-
-    elevating_sources = [
-        s
-        for s in sources
-        if not any(marker in s.lower() for marker in _NON_ELEVATING_SOURCE_MARKERS)
-    ]
-
-    # COR-08 is the single-source rule: nothing corroborates the finding at all.
-    # Checked first so it is never flattered into the (stronger) supporting-only
-    # state when the engine stamps it alongside a conversation rule.
-    if _RULE_SINGLE_SOURCE in rule_ids and not elevating_sources:
-        return _CORROBORATION_SINGLE_SOURCE
-    if rule_ids and rule_ids <= _NON_ELEVATING_RULE_IDS:
-        return _CORROBORATION_SUPPORTING_ONLY
-    if not elevating_sources:
-        # Sources present but all non-elevating => supporting only.
-        return (
-            _CORROBORATION_SUPPORTING_ONLY if sources else _CORROBORATION_SINGLE_SOURCE
-        )
-    return _CORROBORATION_CORROBORATED
-
-
-def _is_confidence_capped(opp: Mapping[str, Any], corroboration_state: str) -> bool:
-    """True when the finding's confidence is capped for want of corroboration.
-
-    2.0-A1 AC4: such a projection is labelled, and its band is widened by the
-    corroboration axis so it cannot out-rank a corroborated equivalent on
-    projection strength alone.
-    """
-    if corroboration_state in (
-        _CORROBORATION_SINGLE_SOURCE,
-        _CORROBORATION_SUPPORTING_ONLY,
-    ):
-        return True
-    return str(opp.get("confidence", "")).strip().upper() == "LOW"
+# The four input classifiers live in ``band_width`` and are reached through
+# ``band_width_inputs_from_opportunity``, so the width model and the projection
+# payload can never disagree about what "thin" or "single source" means.
 
 
 def _horizon_days(opp: Mapping[str, Any], stability: str) -> int:
@@ -428,30 +297,16 @@ _BASIS_UNIT_BY_SIGNAL_UNIT = {
 }
 
 
-def _band(
-    sample_tier: str,
-    stability: str,
-    corroboration_state: str,
-    signal_unit: str = "count",
-) -> MagnitudeBand:
-    """Compute the magnitude band deterministically from the three axes."""
-    penalty = (
-        _W_SAMPLE * _SAMPLE_PENALTY[sample_tier]
-        + _W_STABILITY * _STABILITY_PENALTY[stability]
-        + _W_CORROBORATION * _CORROBORATION_PENALTY[corroboration_state]
-    )
-    half_width = _MIN_HALF_WIDTH + _MAX_ADDITIONAL_HALF_WIDTH * penalty
+def _band(band_width: BandWidth, signal_unit: str = "count") -> MagnitudeBand:
+    """Render the computed band width as the analyst-facing magnitude band.
 
-    low = max(_BAND_FLOOR, _BASE_MIDPOINT - half_width)
-    high = min(_BAND_CEILING, _BASE_MIDPOINT + half_width)
-
-    low_pct = int(round(low * 100))
-    high_pct = int(round(high * 100))
-    if high_pct <= low_pct:  # never collapse to a point estimate
-        high_pct = low_pct + 1
+    Pure presentation: the numbers are decided in ``band_width.py``; the only
+    thing chosen here is what the percentages are a share OF, which depends on
+    the movement signal's unit.
+    """
     return MagnitudeBand(
-        low_pct=low_pct,
-        high_pct=high_pct,
+        low_pct=band_width.low_pct,
+        high_pct=band_width.high_pct,
         basis_unit=_BASIS_UNIT_BY_SIGNAL_UNIT.get(
             signal_unit, "of the recurring instances"
         ),
@@ -559,10 +414,18 @@ def build_projection(opp: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     if sample_size is None and profile.unit not in ("ratio", "pct"):
         sample_size = _metric_value(opp)
 
-    stability = _recurrence_stability(opp.get("recent_values") or ())
-    corroboration_state = _corroboration_state(opp)
-    sample_tier = _sample_tier(sample_size)
-    confidence_capped = _is_confidence_capped(opp, corroboration_state)
+    # The four band-width inputs, and the band they deterministically produce.
+    # Computed once, up front: both the band and every label derived from it
+    # (evidence strength, projection strength, the thin-evidence flag) read from
+    # this single result, so a rendered label can never disagree with the band
+    # it sits beside.
+    width_inputs = band_width_inputs_from_opportunity(opp, sample_size)
+    band_width = compute_band_width(width_inputs)
+
+    stability = width_inputs.recurrence_stability
+    corroboration_state = width_inputs.corroboration_status
+    sample_tier = width_inputs.sample_tier
+    confidence_capped = width_inputs.confidence_capped
     horizon = _horizon_days(opp, stability)
 
     affected = _affected_signals(profile, raw, movement_value)
@@ -582,9 +445,7 @@ def build_projection(opp: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
 
     if rate_only:
         direction = DIRECTION_IMPROVES
-        band: Optional[MagnitudeBand] = _band(
-            sample_tier, stability, corroboration_state, profile.unit
-        )
+        band: Optional[MagnitudeBand] = _band(band_width, profile.unit)
     elif (
         effective_instances is None
         or effective_instances < _MIN_INSTANCES_FOR_DIRECTION
@@ -593,23 +454,31 @@ def build_projection(opp: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         band = None
     else:
         direction = DIRECTION_IMPROVES
-        band = _band(sample_tier, stability, corroboration_state, profile.unit)
+        band = _band(band_width, profile.unit)
 
     baseline_mean = _safe_float(opp.get("baseline_mean"))
     baseline_window_days = _as_int(opp.get("baseline_window_days"))
-    thin_evidence = (
-        sample_tier in ("thin", "minimal")
-        or stability in (_STABILITY_BURSTY, _STABILITY_UNKNOWN)
-        or confidence_capped
-    )
+    thin_evidence = band_width.thin_evidence
 
     band_width_inputs = {
-        "sampleTier": sample_tier,
-        "sampleSize": _as_number(sample_size),
-        "recurrenceStability": stability,
-        "corroborationStatus": corroboration_state,
+        **width_inputs.to_dict(),
         "thinEvidence": thin_evidence,
     }
+
+    # A finding with no band has no width to explain and no strength to compare.
+    # Both blocks are None rather than zeroed: a zero would sort and render as a
+    # real, very weak projection instead of an absent one.
+    band_width_block = band_width.to_dict() if band is not None else None
+    strength_block = band_width.strength_to_dict() if band is not None else None
+    if strength_block is None:
+        strength_block = {
+            "value": None,
+            "tier": None,
+            "label": NO_BAND_STRENGTH_LABEL,
+            "capped": confidence_capped,
+            "cappedLabel": None,
+            "comparableWithCapped": False,
+        }
 
     basis: Dict[str, Any] = {
         "detectorId": detector_id,
@@ -635,6 +504,15 @@ def build_projection(opp: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         "corroborationSources": list(opp.get("corroboration_sources") or []),
         "evidenceStrength": "thin" if thin_evidence else "strong",
         "thinEvidence": thin_evidence,
+        # T4 — the analyst-facing evidence label and the band-width tier that
+        # produced it, on the basis block so the Opportunity Review basis panel
+        # can show the band's width and its reason side by side.
+        "evidenceTier": band_width.evidence_tier,
+        "evidenceLabel": band_width.evidence_label,
+        "bandTier": band_width.band_tier,
+        "bandLabel": band_width.band_label,
+        "bandWidthRationale": band_width.rationale,
+        "bandWidthModelVersion": BAND_WIDTH_MODEL_VERSION,
         "packId": opp.get("packId") or opp.get("pack_id"),
         "packVersion": opp.get("packVersion"),
         "evidenceIds": list(opp.get("evidenceIds") or []),
@@ -652,6 +530,8 @@ def build_projection(opp: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         affected_signals=affected,
         basis=basis,
         band_width_inputs=band_width_inputs,
+        band_width=band_width_block,
+        projection_strength=strength_block,
         confidence_capped=confidence_capped,
     )
     return projection.to_dict()
@@ -735,6 +615,7 @@ def project_opportunities(opps: Sequence[Any]) -> int:
 
 __all__ = [
     "PROJECTION_SCHEMA_VERSION",
+    "BAND_WIDTH_MODEL_VERSION",
     "DIRECTION_IMPROVES",
     "DIRECTION_NO_MATERIAL_CHANGE",
     "HORIZON_30",
