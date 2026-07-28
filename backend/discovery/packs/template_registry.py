@@ -77,14 +77,6 @@ class TemplateDefinition:
     suggested_roles: Dict[str, str]          # system_id -> SystemRole
     focus_defaults: FocusDefaults
     pack_id: str
-    # R191-P1 T5: a template may activate MORE THAN ONE pack. `packs` is the full
-    # ordered, de-duplicated pack selection; `pack_id` stays the PRIMARY (first)
-    # pack for backward compatibility. Declaring only `pack_id` makes
-    # packs == [pack_id]; declaring `packs` re-derives pack_id as its first entry
-    # (see __post_init__). A multi-pack template (e.g. combined operations) runs
-    # every listed pack on run creation — honored end to end via
-    # resolve_launch_config → the launch endpoint's pack_ids.
-    packs: List[str] = field(default_factory=list)
     # Detector IDs this template emphasises — provenance/documentation of what
     # the template's pack surfaces. The REAL scoring is already wired: pack_id
     # activates the pack's detectors + scorer, and focus_defaults.focus_id drives
@@ -93,21 +85,6 @@ class TemplateDefinition:
     detector_emphasis: List[str] = field(default_factory=list)
     terminology: Dict[str, str] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        # Reconcile the singular pack_id with the packs list into ONE
-        # order-preserving, de-duplicated selection (the shared primitive), then
-        # re-derive pack_id as the primary (first) pack. So a template author may
-        # set either field and both stay consistent; a single-pack template is
-        # unchanged (packs == [pack_id]).
-        from discovery.packs.pack_config import normalize_pack_ids
-
-        combined = normalize_pack_ids(
-            list(self.packs or []) + ([self.pack_id] if self.pack_id else [])
-        )
-        self.packs = combined
-        if combined:
-            self.pack_id = combined[0]
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
@@ -385,16 +362,11 @@ def register_template(defn: TemplateDefinition, *, validate_pack: bool = True) -
     if validate_pack:
         from discovery.packs.pack_config import list_packs
 
-        known = list_packs()
-        # R191-P1 T5: validate EVERY declared pack (a template may activate more
-        # than one), not just the primary — a template cannot point at a pack that
-        # does not exist.
-        for pid in (defn.packs or [defn.pack_id]):
-            if pid not in known:
-                raise ValueError(
-                    f"Template '{defn.template_id}' references unknown pack "
-                    f"'{pid}'. Known packs: {sorted(known)}"
-                )
+        if defn.pack_id not in list_packs():
+            raise ValueError(
+                f"Template '{defn.template_id}' references unknown pack "
+                f"'{defn.pack_id}'. Known packs: {sorted(list_packs())}"
+            )
     TEMPLATE_REGISTRY[defn.template_id] = defn
 
 
@@ -415,9 +387,6 @@ def template_defaults_snapshot(defn: TemplateDefinition) -> Dict[str, Any]:
         "label": defn.label,
         "description": defn.description,
         "pack_id": defn.pack_id,
-        # R191-P1 T5: the template's FULL pack selection (a template may activate
-        # more than one pack). pack_id remains the primary/first for compat.
-        "packs": list(defn.packs),
         "pack_version": get_pack_version(defn.pack_id),
         "focus_id": defn.focus_defaults.focus_id,
         "focus_emphasis": list(defn.focus_defaults.emphasis),
@@ -536,13 +505,7 @@ def resolve_launch_config(
 
     snapshots = [template_defaults_snapshot(defn) for defn in definitions]
     primary = definitions[0]
-    # R191-P1 T5: each selected template contributes its FULL pack list — a
-    # multi-pack template (defn.packs = [service_cloud, ncino]) activates all of
-    # its packs, and multiple selected templates union their packs. Falls back to
-    # the singular pack_id for a template with no explicit packs.
-    default_pack_ids = normalize_pack_ids(
-        [pack for defn in definitions for pack in (defn.packs or [defn.pack_id])]
-    )
+    default_pack_ids = normalize_pack_ids([defn.pack_id for defn in definitions])
     default_systems = _stable_union(
         [list(defn.suggested_systems) for defn in definitions]
     )

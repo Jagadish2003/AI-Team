@@ -21,6 +21,7 @@ import {
 } from '../types/stack_builder';
 import { useSetupState } from '../components/stack_builder';
 import type { LendingGuideLaunchState } from '../components/stack_builder';
+import { ANALYSIS_PACKS, analysisPackLabelFor } from '../data/analysisPacks';
 
 const SYSTEM_META: Record<string, { name: string }> = {
   sap: { name: 'SAP' },
@@ -72,13 +73,6 @@ function getSystemName(id: string) {
   return SYSTEM_META[id]?.name ?? id;
 }
 
-function packLabel(packId: string) {
-  if (packId === 'ncino') return 'nCino lending';
-  return packId
-    .split(/[_-]+/)
-    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
-}
 
 function calcQualityRows(
   selectedIds: string[],
@@ -256,11 +250,12 @@ interface Props {
   industries: IndustryListItem[];
   templates: TemplateListItem[];
   activePackId: string;
-  // R191-P1: the FULL set of packs this run will activate (order-preserving). A
-  // Salesforce workspace declaring multiple products runs multiple packs, so the
-  // Analysis pack summary is read-only and lists them all. Falls back to
-  // [activePackId] for callers that only pass the singular primary pack.
+  // R191-P1: the FULL set of packs this run will activate (order-preserving) —
+  // the union of the fixed Salesforce packs and the chosen analysis packs.
   activePackIds?: string[];
+  // R191-P1: the SALESFORCE packs, fixed by the Integration Hub product
+  // declaration. Shown read-only here — they are NOT chosen in the Discovery Plan.
+  salesforcePacks?: string[];
   onLaunch: () => void;
   launchState?: LendingGuideLaunchState;
 }
@@ -271,6 +266,7 @@ export default function DiscoveryPlanPage({
   templates,
   activePackId,
   activePackIds = [activePackId],
+  salesforcePacks = [],
   onLaunch,
   launchState = 'ready',
 }: Props) {
@@ -314,14 +310,28 @@ export default function DiscoveryPlanPage({
         .map(id => templates.find(item => item.template_id === id)?.label ?? id)
         .join(' + ')
     : '-';
-  // The packs this run will activate, as a read-only, comma-separated label. A
-  // multi-product Salesforce declaration (or a multi-pack template) runs more
-  // than one pack, so this is derived — not a user-editable single choice.
-  const runPackIds = (activePackIds && activePackIds.length > 0
-    ? activePackIds
-    : [activePackId]
-  ).filter(Boolean);
-  const analysisPackLabel = runPackIds.map(packLabel).join(', ') || '-';
+  // Salesforce packs are FIXED by the Integration Hub product declaration — shown
+  // read-only; they are not chosen here.
+  void activePackId; void activePackIds;
+  const salesforcePackLabel =
+    salesforcePacks.length > 0
+      ? salesforcePacks.map(analysisPackLabelFor).join(', ')
+      : '-';
+  // Analysis packs are chosen per run in this panel (state.packIds), excluding the
+  // fixed Salesforce packs.
+  const salesforceSet = new Set(salesforcePacks);
+  const selectedAnalysisIds = new Set(
+    (state.packIds ?? []).filter(id => id && !salesforceSet.has(id)),
+  );
+  const toggleAnalysisPack = (packId: string) => {
+    const next = new Set(state.packIds ?? []);
+    if (next.has(packId)) {
+      next.delete(packId);
+    } else {
+      next.add(packId);
+    }
+    setupState.setPackIds(Array.from(next));
+  };
 
   return (
     <div className="space-y-5">
@@ -345,10 +355,59 @@ export default function DiscoveryPlanPage({
               label="Template"
               value={templateLabel}
             />
-            <SummaryRow
-              label="Analysis pack"
-              value={analysisPackLabel}
-            />
+            {salesforcePacks.length > 0 && (
+              <SummaryRow
+                label="Salesforce packs"
+                value={salesforcePackLabel}
+              />
+            )}
+            {/* Analysis packs — chosen per run (non-Salesforce). Multi-select. */}
+            <div className="border-b border-border/70 py-2">
+              <div className="mb-1.5 text-xs text-muted">Analysis packs</div>
+              <div role="group" aria-label="Analysis packs" className="space-y-1.5">
+                {ANALYSIS_PACKS.map(pack => {
+                  const checked = selectedAnalysisIds.has(pack.id);
+                  return (
+                    <button
+                      key={pack.id}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={checked}
+                      onClick={() => toggleAnalysisPack(pack.id)}
+                      className={[
+                        'w-full flex items-start gap-2.5 rounded-lg border px-3 py-2 text-left',
+                        'transition-[border-color,background-color] cursor-pointer',
+                        'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/35',
+                        checked
+                          ? 'border-accent bg-accent/10'
+                          : 'border-border bg-panel hover:border-accent/40',
+                      ].join(' ')}
+                    >
+                      <span className={[
+                        'mt-0.5 h-3.5 w-3.5 flex-shrink-0 rounded border flex items-center justify-center',
+                        checked ? 'border-accent bg-accent/15' : 'border-border',
+                      ].join(' ')}>
+                        {checked && (
+                          <svg className="h-2.5 w-2.5 text-accent" viewBox="0 0 12 12"
+                            fill="none" stroke="currentColor" strokeWidth="2"
+                            strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                            <path d="M2.5 6.5l2.5 2.5 4.5-5" />
+                          </svg>
+                        )}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className={`block text-xs font-medium ${checked ? 'text-accent' : 'text-text'}`}>
+                          {pack.label}
+                        </span>
+                        <span className="block text-[11px] text-muted leading-relaxed">
+                          {pack.description}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <SummaryRow
               label="Total systems"
               value={String(state.selectedSystemIds.length)}

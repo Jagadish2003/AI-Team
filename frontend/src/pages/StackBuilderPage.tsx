@@ -175,58 +175,45 @@ export function resolvePackId(
   return 'service_cloud';
 }
 
-// R191-P1 T5 — resolve the full MULTI-pack selection for a run. Run configuration
-// can now activate more than one pack: an explicit multi-select, a template
-// declaring several packs, or a workspace declaring several Salesforce products
-// each map to packs. Returns an order-preserving, de-duplicated list whose FIRST
-// entry is the primary pack (kept in sync with resolvePackId).
+// ── Pack resolution — a run's packs are the UNION of two sources ────────────────
+//
+// R191-P1: a run's packs are the UNION of:
+//   • the SALESFORCE packs, fixed by the Integration Hub product declaration
+//     (Service Cloud / nCino / … via CLOUD_PACK_REGISTRY), and
+//   • the ANALYSIS packs, chosen per-run in the Discovery Plan multi-select
+//     (state.packIds; the offerable set lives in src/data/analysisPacks.ts).
+// The Salesforce products are NOT offered in the Discovery Plan — they are
+// declared once in the Integration Hub.
+
+// The Salesforce packs a workspace's declared products map to (fixed per run).
+export function salesforcePacksFromCatalog(
+  catalog: WorkspaceCatalogResponse | null,
+): string[] {
+  return Array.from(
+    new Set(
+      getCatalogSalesforceProducts(catalog)
+        .map(productId => CLOUD_PACK_REGISTRY[productId])
+        .filter((packId): packId is string => Boolean(packId)),
+    ),
+  );
+}
+
+// Resolve the full MULTI-pack selection for a run: the UNION of the fixed
+// Salesforce packs (product declaration) and the chosen analysis packs
+// (state.packIds — the Discovery Plan multi-select). Order-preserving and
+// de-duplicated, Salesforce packs first. Falls back to the single resolved pack
+// when neither is present.
 export function resolvePackIds(
   state: ReturnType<typeof useSetupState>['state'],
   catalog: WorkspaceCatalogResponse | null,
   industries: IndustryListItem[],
   templates: TemplateListItem[],
 ): string[] {
-  // 1. An explicit multi-select (state.packIds) is authoritative.
-  if (state.packIds?.length) {
-    return Array.from(new Set(state.packIds.filter(Boolean)));
-  }
-
-  // 2. An explicit single Step-4 pack choice.
-  if (state.packId) return [state.packId];
-
-  // 3. Selected template(s) — each contributes its FULL packs list (a multi-pack
-  //    template), unioned across all selected templates; falls back to a
-  //    template's singular pack_id when it declares no explicit packs.
-  const selectedTemplateIds = state.templateIds?.length
-    ? state.templateIds
-    : (state.templateId ? [state.templateId] : []);
-  const templatePacks: string[] = [];
-  for (const templateId of selectedTemplateIds) {
-    const template = templates.find(tpl => tpl.template_id === templateId);
-    if (!template) continue;
-    const packs = template.packs && template.packs.length > 0
-      ? template.packs
-      : (template.pack_id ? [template.pack_id] : []);
-    templatePacks.push(...packs);
-  }
-  const dedupedTemplatePacks = Array.from(
-    new Set(templatePacks.filter(packId => typeof packId === 'string' && packId)),
-  );
-  if (dedupedTemplatePacks.length > 0) return dedupedTemplatePacks;
-
-  // 4. The workspace may declare MULTIPLE Salesforce products (Integration Hub →
-  //    "Salesforce products in use" is a multi-select). Each declared product maps
-  //    to a discovery pack, so a multi-product declaration drives a multi-pack run,
-  //    order-preserving and de-duplicated (Service/Financial/Revenue/Health Cloud
-  //    all map to service_cloud). The first entry matches resolvePackId's result.
-  const declaredPacks = getCatalogSalesforceProducts(catalog)
-    .map(productId => CLOUD_PACK_REGISTRY[productId])
-    .filter((packId): packId is string => Boolean(packId));
-  if (declaredPacks.length > 0) {
-    return Array.from(new Set(declaredPacks));
-  }
-
-  // 5. Fallback: the single resolved pack (industry hint / safe default).
+  const salesforcePacks = salesforcePacksFromCatalog(catalog);
+  const analysisPacks = (state.packIds ?? []).filter(Boolean);
+  const all = Array.from(new Set([...salesforcePacks, ...analysisPacks]));
+  if (all.length > 0) return all;
+  // Nothing declared or selected — fall back to a single resolved pack.
   return [resolvePackId(state, catalog, industries, templates)];
 }
 
@@ -259,8 +246,18 @@ export function buildStackBuilderLaunchPayload(
   state: SetupState,
   packId: string,
   orgId: string,
-  packIds: string[] = [packId],
+  packIds?: string[],
 ): StackBuilderLaunchPayload {
+  // The full multi-pack selection sent to the backend. Prefer an explicit
+  // `packIds` (handleLaunch passes resolvePackIds — the Salesforce-product packs
+  // ∪ the chosen analysis packs); otherwise fall back to the state's own
+  // packIds (e.g. multi-template selection), then the singular primary pack.
+  const resolvedPackIds =
+    packIds && packIds.length > 0
+      ? packIds
+      : state.packIds && state.packIds.length > 0
+      ? state.packIds
+      : [packId];
   // Surface the silent-mismatch case: every selected system should carry a
   // confirmed weighting. If one is missing (e.g. a system was selected but its
   // weighting was lost to a browser-state glitch before reaching launch), the
@@ -293,9 +290,7 @@ export function buildStackBuilderLaunchPayload(
       : (state.templateId ? [state.templateId] : []),
     selected_system_ids: state.selectedSystemIds,
     pack_id: packId,
-    // The full resolved multi-pack selection (from resolvePackIds — includes the
-    // Salesforce-product-declaration mapping), passed in as `packIds`.
-    pack_ids: packIds.length > 0 ? packIds : [packId],
+    pack_ids: resolvedPackIds,
     weightings: state.weightings,
   };
 }
@@ -826,6 +821,7 @@ export default function StackBuilderPage({
               templates={templates}
               activePackId={resolvePackId(state, catalog, industries, templates)}
               activePackIds={resolvePackIds(state, catalog, industries, templates)}
+              salesforcePacks={salesforcePacksFromCatalog(catalog)}
               onLaunch={handleLaunch}
               launchState={launchState}
             />

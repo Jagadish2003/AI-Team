@@ -254,6 +254,16 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
     });
   }, []);
 
+  // R191-P1: set the explicit analysis-pack selection (the Discovery Plan
+  // multi-select of non-Salesforce packs). Order-preserving, de-duplicated; the
+  // primary singular packId mirrors the first entry for backward compatibility.
+  const setPackIds = useCallback((packIds: string[]) => {
+    setState(s => {
+      const deduped = Array.from(new Set((packIds ?? []).filter(Boolean)));
+      return { ...s, packIds: deduped, packId: deduped[0] ?? null };
+    });
+  }, []);
+
   const setTemplate = useCallback((id: TemplateId | null, preselected: string[] = []) => {
     setState(s => {
       // Remove previous template-added systems
@@ -593,6 +603,7 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
     setFocus,
     setIndustry,
     setPack,
+    setPackIds,
     setTemplate,
     applyTemplate,
     applyIndustryDefaults,

@@ -132,10 +132,6 @@ class TemplateListItem(BaseModel):
     suggested_roles: Dict[str, str]
     focus_defaults: TemplateFocusDefaults
     pack_id: str
-    # R191-P1 T5: a template may activate MORE THAN ONE pack. `pack_id` is the
-    # primary (first) pack for backward compatibility; `packs` is the full ordered
-    # list the run activates. Additive — single-pack templates carry [pack_id].
-    packs: List[str] = []
     detector_emphasis: List[str]
     terminology: Dict[str, str]
     metadata: Dict[str, Any]
@@ -153,7 +149,6 @@ def _to_template_item(defn) -> "TemplateListItem":
             emphasis=defn.focus_defaults.emphasis,
         ),
         pack_id=defn.pack_id,
-        packs=list(defn.packs),
         detector_emphasis=defn.detector_emphasis,
         terminology=defn.terminology,
         metadata=defn.metadata,

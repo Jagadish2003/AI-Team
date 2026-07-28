@@ -113,24 +113,38 @@ def test_ac4_overlapping_opportunities_stay_two_findings(two_pack):
         assert len({f["opportunity_identity"] for f in findings}) == len(findings)
 
 
-# ── AC5: a template declaring two packs activates both ────────────────────────
+# ── AC5: a multi-pack selection activates every pack ──────────────────────────
+# The generic template model declares ONE pack; a multi-pack run is composed from
+# the launch request's explicit pack_ids (the frontend sends the union of the
+# Salesforce-product packs + the Discovery Plan analysis packs) or from multiple
+# selected single-pack templates. Both resolve to the union of packs.
 
-def test_ac5_two_pack_template_activates_both_packs():
-    template_id = f"accept_combined_{uuid4().hex[:6]}"
-    register_template(
-        TemplateDefinition(
-            template_id=template_id, label="x", description="x",
-            suggested_systems=["servicenow"], suggested_roles={},
-            focus_defaults=FocusDefaults(focus_id="core_operations"),
-            pack_id=_PACK_A, packs=[_PACK_A, _PACK_B],
+def test_ac5_explicit_pack_ids_activate_every_pack():
+    resolved = resolve_launch_config(None, pack_ids=[_PACK_A, _PACK_B])
+    assert resolved["effective"]["pack_ids"] == [_PACK_A, _PACK_B]
+    assert resolved["effective"]["pack_id"] == _PACK_A
+
+
+def test_ac5_two_single_pack_templates_activate_both_packs():
+    template_ids = []
+    for pack_id in (_PACK_A, _PACK_B):
+        template_id = f"accept_{pack_id}_{uuid4().hex[:6]}"
+        register_template(
+            TemplateDefinition(
+                template_id=template_id, label="x", description="x",
+                suggested_systems=["servicenow"], suggested_roles={},
+                focus_defaults=FocusDefaults(focus_id="core_operations"),
+                pack_id=pack_id,
+            )
         )
-    )
+        template_ids.append(template_id)
     try:
-        resolved = resolve_launch_config(template_id)  # untouched
+        resolved = resolve_launch_config(None, template_ids=template_ids)
         assert resolved["effective"]["pack_ids"] == [_PACK_A, _PACK_B]
         assert resolved["effective"]["pack_id"] == _PACK_A
     finally:
-        unregister_template(template_id)
+        for template_id in template_ids:
+            unregister_template(template_id)
 
 
 # ── AC6: evidence resolves within its finding's own pack context ──────────────

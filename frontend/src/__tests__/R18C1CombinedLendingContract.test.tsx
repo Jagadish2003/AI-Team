@@ -135,7 +135,10 @@ function ContractHarness({
   );
 }
 
-function PlanHarness({ activePackIds }: { activePackIds?: string[] }) {
+function PlanHarness(
+  { activePackIds, salesforcePacks }:
+  { activePackIds?: string[]; salesforcePacks?: string[] },
+) {
   const setupState = useSetupState();
   const activePackId = setupState.state.packId ?? LENDING.pack_id;
   return (
@@ -156,6 +159,7 @@ function PlanHarness({ activePackIds }: { activePackIds?: string[] }) {
         templates={[LENDING, INSURANCE_FIXTURE]}
         activePackId={activePackId}
         activePackIds={activePackIds}
+        salesforcePacks={salesforcePacks}
         onLaunch={vi.fn()}
       />
       <output data-testid="selected-pack">{setupState.state.packId ?? ''}</output>
@@ -277,30 +281,29 @@ describe('R18-C1 T6 - combined registry and first-run guide contract', () => {
     expect(screen.getByText(/Focus Id, Selected System Ids, Roles/)).toBeInTheDocument();
   });
 
-  it('uses registry labels throughout the plan and shows the analysis pack read-only', () => {
+  it('offers an Analysis packs multi-select in the plan (no pack dropdown)', () => {
     render(<PlanHarness />);
     fireEvent.click(screen.getByRole('button', { name: 'Load registry plan' }));
 
     expect(screen.getByText(FINANCIAL_SERVICES.label)).toBeInTheDocument();
     expect(screen.getByText(LENDING.label)).toBeInTheDocument();
 
-    // R191-P1: the analysis pack is now a derived, read-only summary (a Salesforce
-    // workspace can run multiple packs), so there is no pack dropdown to change.
+    // R191-P1: no editable single-pack dropdown; instead a multi-select of the
+    // non-Salesforce analysis packs (Salesforce packs are fixed in the Hub).
     expect(
       screen.queryByRole('combobox', { name: 'Analysis pack' }),
     ).not.toBeInTheDocument();
-    expect(screen.getByText('Analysis pack')).toBeInTheDocument();
-    expect(screen.getByText('nCino lending')).toBeInTheDocument();
+    expect(screen.getByText('Analysis packs')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /Cloud Ops/i })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /GitHub Engineering/i })).toBeInTheDocument();
   });
 
-  it('lists every activated pack read-only when a run uses multiple packs', () => {
-    render(<PlanHarness activePackIds={['service_cloud', 'ncino']} />);
+  it('shows the fixed Salesforce packs read-only from the declaration', () => {
+    render(<PlanHarness salesforcePacks={['service_cloud', 'ncino']} />);
     fireEvent.click(screen.getByRole('button', { name: 'Load registry plan' }));
 
-    // Multi-pack run → the Analysis pack row lists all of them, comma-separated.
-    expect(screen.getByText('Service Cloud, nCino lending')).toBeInTheDocument();
-    expect(
-      screen.queryByRole('combobox', { name: 'Analysis pack' }),
-    ).not.toBeInTheDocument();
+    // The declared Salesforce products' packs are shown read-only (not selectable).
+    expect(screen.getByText('Salesforce packs')).toBeInTheDocument();
+    expect(screen.getByText('Service Cloud, nCino')).toBeInTheDocument();
   });
 });

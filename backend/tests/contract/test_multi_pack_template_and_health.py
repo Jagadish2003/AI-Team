@@ -1,21 +1,15 @@
-"""R191-P1 T5 (AT-707) — multi-pack run configuration + multi-pack run-health panel.
+"""R191-P1 (AT-707) — multi-pack run configuration + multi-pack run-health panel.
 
-Covers AC5: a template declaring two packs activates BOTH on run creation, and the
-run-health pack panel shows both executions (more than one row).
+Multi-pack runs are composed from:
+  * explicit ``pack_ids`` on the launch request (the frontend sends the union of
+    the Salesforce-product-declaration packs + the Discovery Plan analysis packs), and
+  * multiple selected single-pack templates (``template_ids``), each contributing
+    its pack.
 
-Two halves:
-  * Template model → launch: a template's `packs` list is honored end to end.
-    `resolve_launch_config` returns every declared pack; the launch endpoint
-    persists them as the run's `packIds`, so an untouched multi-pack template
-    activates all of its packs. An explicit caller selection still overrides.
-  * Run-health `packs_view`: a run whose record carries a per-pack execution list
-    (`run["packs"]`, persisted by materialize for a multi-pack run) is reported as
-    one pack row PER pack — not collapsed to one.
-
-Multi-pack behavior is demonstrated with a REGISTERED FIXTURE template built from
-two real, shipped packs (`service_cloud` + `enterprise_ops`) via the documented
-`register_template` hook, so no production template/registry is altered. Runs
-against the disposable PostgreSQL test DB (conftest `alembic upgrade head`).
+The generic template model is unchanged — a template declares exactly ONE pack —
+so this file no longer exercises a "template declaring two packs". Instead it
+covers the real composition paths and the run-health panel showing one row PER
+pack. Runs against the disposable PostgreSQL test DB (conftest `alembic upgrade head`).
 """
 from __future__ import annotations
 
@@ -61,81 +55,79 @@ def _owner_org(prefix: str) -> str:
 
 
 @pytest.fixture
-def combined_template():
-    """A registered fixture template declaring TWO shipped packs."""
-    template_id = f"combined_ops_{uuid4().hex[:6]}"
-    register_template(
-        TemplateDefinition(
-            template_id=template_id,
-            label="Combined operations (test)",
-            description="Two-pack template fixture for R191-P1 T5.",
-            suggested_systems=["servicenow", "jira"],
-            suggested_roles={"servicenow": "workflow_system", "jira": "workflow_system"},
-            focus_defaults=FocusDefaults(focus_id="core_operations", emphasis=[]),
-            pack_id="service_cloud",
-            packs=list(_TWO_PACKS),
+def two_templates():
+    """Two registered SINGLE-pack fixture templates (one per pack)."""
+    ids = []
+    for pack_id, focus in ((_TWO_PACKS[0], "member_customer_service"),
+                           (_TWO_PACKS[1], "core_operations")):
+        template_id = f"tpl_{pack_id}_{uuid4().hex[:6]}"
+        register_template(
+            TemplateDefinition(
+                template_id=template_id,
+                label=f"{pack_id} (test)",
+                description="Single-pack template fixture.",
+                suggested_systems=["servicenow", "jira"],
+                suggested_roles={"servicenow": "workflow_system", "jira": "workflow_system"},
+                focus_defaults=FocusDefaults(focus_id=focus, emphasis=[]),
+                pack_id=pack_id,
+            )
         )
-    )
-    yield template_id
-    unregister_template(template_id)
+        ids.append(template_id)
+    yield ids
+    for template_id in ids:
+        unregister_template(template_id)
 
 
-# ── Template model: packs list normalization ──────────────────────────────────
+# ── resolve_launch_config: multi-pack composition ─────────────────────────────
 
-def test_template_definition_normalizes_packs_and_primary():
-    defn = TemplateDefinition(
-        template_id="t_norm",
-        label="x", description="x",
-        suggested_systems=[], suggested_roles={},
-        focus_defaults=FocusDefaults(focus_id="core_operations"),
-        pack_id="service_cloud",
-        packs=["service_cloud", "enterprise_ops", "service_cloud"],  # dup collapses
-    )
-    assert defn.packs == ["service_cloud", "enterprise_ops"]
-    assert defn.pack_id == "service_cloud"  # primary = first
-
-
-def test_single_pack_template_defaults_packs_to_pack_id():
-    defn = TemplateDefinition(
-        template_id="t_single",
-        label="x", description="x",
-        suggested_systems=[], suggested_roles={},
-        focus_defaults=FocusDefaults(focus_id="core_operations"),
-        pack_id="ncino",
-    )
-    assert defn.packs == ["ncino"]
-
-
-# ── resolve_launch_config: template packs honored end to end ───────────────────
-
-def test_untouched_multi_pack_template_resolves_all_packs(combined_template):
-    resolved = resolve_launch_config(combined_template)  # no caller pack selection
+def test_explicit_pack_ids_resolve_to_all_packs():
+    resolved = resolve_launch_config(None, pack_ids=list(_TWO_PACKS))
     assert resolved["effective"]["pack_ids"] == _TWO_PACKS
-    assert resolved["effective"]["pack_id"] == "service_cloud"
-    # Untouched => no pack edit recorded.
-    assert "pack_id" not in resolved["provenance"]["edited_fields"]
+    assert resolved["effective"]["pack_id"] == _TWO_PACKS[0]
 
 
-def test_explicit_pack_selection_overrides_template_packs(combined_template):
-    resolved = resolve_launch_config(combined_template, pack_ids=["ncino"])
+def test_two_templates_resolve_to_the_union_of_their_packs(two_templates):
+    resolved = resolve_launch_config(None, template_ids=two_templates)
+    assert resolved["effective"]["pack_ids"] == _TWO_PACKS
+    assert resolved["effective"]["pack_id"] == _TWO_PACKS[0]
+
+
+def test_explicit_pack_ids_override_template_packs(two_templates):
+    resolved = resolve_launch_config(None, template_ids=two_templates, pack_ids=["ncino"])
     assert resolved["effective"]["pack_ids"] == ["ncino"]
     assert resolved["effective"]["pack_id"] == "ncino"
 
 
-# ── Launch endpoint: a two-pack template activates both on run creation ────────
+# ── Launch endpoint: a multi-pack launch activates every pack on run creation ──
 
-def test_launch_from_multi_pack_template_activates_both_packs(client, combined_template):
-    org = _owner_org("t5_launch")
-    body = {"org_id": org, "template_id": combined_template}  # untouched launch
+def test_launch_with_pack_ids_activates_both_packs(client):
+    org = _owner_org("t5_launch_packids")
+    body = {
+        "org_id": org,
+        "selected_system_ids": ["servicenow", "jira"],
+        "pack_ids": _TWO_PACKS,
+    }
     resp = client.post("/api/stack-builder/launch", headers=_auth(org), json=body)
     assert resp.status_code == 200
     data = resp.json()
-    assert data["packId"] == "service_cloud"        # primary (backward-compatible)
-    assert data["packIds"] == _TWO_PACKS            # both activate
+    assert data["packId"] == _TWO_PACKS[0]      # primary (backward-compatible)
+    assert data["packIds"] == _TWO_PACKS        # both activate
 
     run = client.get(f"/api/runs/{data['runId']}", headers=_auth(org)).json()
-    assert run["packId"] == "service_cloud"
+    assert run["packId"] == _TWO_PACKS[0]
     assert run["packIds"] == _TWO_PACKS
+
+
+def test_launch_with_two_templates_activates_both_packs(client, two_templates):
+    org = _owner_org("t5_launch_templates")
+    body = {
+        "org_id": org,
+        "template_ids": two_templates,
+        "selected_system_ids": ["servicenow", "jira"],
+    }
+    resp = client.post("/api/stack-builder/launch", headers=_auth(org), json=body)
+    assert resp.status_code == 200
+    assert resp.json()["packIds"] == _TWO_PACKS
 
 
 # ── Run-health packs panel: one row per pack for a multi-pack run ──────────────
@@ -151,13 +143,11 @@ def _seed_multi_pack_run(org_id: str) -> str:
             "status": "complete",
             "startedAt": _now_iso(-120),
             "updatedAt": _now_iso(),
-            # Primary scalar fields (backward-compatible).
             "packId": "service_cloud",
             "packName": "Service Cloud",
             "packVersion": "1.0.0",
             "executedDetectorIds": ["REPETITION", "HANDOFF_FRICTION"],
             "packExecutedAt": _now_iso(-30),
-            # R191-P1 T2/T3 multi-pack surface persisted on the run record.
             "packIds": _TWO_PACKS,
             "packVersions": {"service_cloud": "1.0.0", "enterprise_ops": "1.0.0"},
             "packs": [
@@ -190,14 +180,14 @@ def _seed_multi_pack_run(org_id: str) -> str:
     return run_id
 
 
-def test_run_health_packs_panel_shows_one_row_per_pack(client, combined_template):
+def test_run_health_packs_panel_shows_one_row_per_pack(client):
     org = _owner_org("t5_health")
     run_id = _seed_multi_pack_run(org)
 
     body = client.get("/api/run-health/packs", headers=_auth(org)).json()
     assert body["run_id"] == run_id
     packs = body["packs"]
-    assert len(packs) == 2  # AC5: more than one row
+    assert len(packs) == 2  # more than one row
 
     by_id = {p["pack_id"]: p for p in packs}
     assert set(by_id) == set(_TWO_PACKS)

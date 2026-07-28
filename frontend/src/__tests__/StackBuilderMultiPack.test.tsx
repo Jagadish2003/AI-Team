@@ -1,14 +1,13 @@
 /**
- * R191-P1 T5 (AT-707) — multi-select run configuration (frontend).
+ * R191-P1 (AT-707) — multi-pack run configuration (frontend).
  *
- * Run configuration can now activate MORE THAN ONE pack. `resolvePackIds` returns
- * the full ordered, de-duplicated pack list a run will activate, and the launch
- * payload carries `pack_ids` (the backend reconciles it with the singular
- * `pack_id`). A template declaring several packs activates them all; an explicit
- * Step-4 pack choice overrides; a single-pack template is unchanged.
- *
- * Covers AC5 (frontend half): a template declaring two packs activates both on
- * run creation.
+ * A run's packs are the UNION of:
+ *   • the SALESFORCE packs, fixed by the Integration Hub product declaration
+ *     (declared Salesforce products → packs via CLOUD_PACK_REGISTRY), and
+ *   • the ANALYSIS packs, chosen per run in the Discovery Plan multi-select
+ *     (held in state.packIds).
+ * `resolvePackIds` returns that union (order-preserving, de-duplicated, Salesforce
+ * packs first), and the launch payload carries it as `pack_ids`.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -16,7 +15,7 @@ import {
   buildStackBuilderLaunchPayload,
 } from '../pages/StackBuilderPage';
 import type { WorkspaceCatalogResponse } from '../types/workspace_catalog';
-import type { IndustryListItem, TemplateListItem } from '../types/stack_builder';
+import type { IndustryListItem } from '../types/stack_builder';
 
 function emptyCatalog(): WorkspaceCatalogResponse {
   return {
@@ -39,22 +38,6 @@ function catalogWithSalesforceProducts(products: string[]): WorkspaceCatalogResp
 
 const INDUSTRIES: IndustryListItem[] = [];
 
-function template(overrides: Partial<TemplateListItem>): TemplateListItem {
-  return {
-    template_id: 'combined_ops',
-    label: 'Combined operations',
-    description: '',
-    suggested_systems: [],
-    suggested_roles: {},
-    focus_defaults: { focus_id: 'core_operations', emphasis: [] },
-    pack_id: 'service_cloud',
-    detector_emphasis: [],
-    terminology: {},
-    metadata: {},
-    ...overrides,
-  };
-}
-
 function stateWith(overrides: Record<string, unknown> = {}): any {
   return {
     packId: null,
@@ -68,53 +51,8 @@ function stateWith(overrides: Record<string, unknown> = {}): any {
   };
 }
 
-describe('resolvePackIds — multi-select run configuration', () => {
-  it('activates every pack a template declares', () => {
-    const templates = [
-      template({ pack_id: 'service_cloud', packs: ['service_cloud', 'enterprise_ops'] }),
-    ];
-    const ids = resolvePackIds(
-      stateWith({ templateId: 'combined_ops' }), emptyCatalog(), INDUSTRIES, templates,
-    );
-    expect(ids).toEqual(['service_cloud', 'enterprise_ops']);
-  });
-
-  it('de-duplicates a template packs list, order-preserving', () => {
-    const templates = [
-      template({ packs: ['service_cloud', 'enterprise_ops', 'service_cloud'] }),
-    ];
-    const ids = resolvePackIds(
-      stateWith({ templateId: 'combined_ops' }), emptyCatalog(), INDUSTRIES, templates,
-    );
-    expect(ids).toEqual(['service_cloud', 'enterprise_ops']);
-  });
-
-  it('an explicit Step-4 pack choice overrides the template packs', () => {
-    const templates = [
-      template({ packs: ['service_cloud', 'enterprise_ops'] }),
-    ];
-    const ids = resolvePackIds(
-      stateWith({ templateId: 'combined_ops', packId: 'ncino' }),
-      emptyCatalog(), INDUSTRIES, templates,
-    );
-    expect(ids).toEqual(['ncino']);
-  });
-
-  it('falls back to a single pack for a single-pack template', () => {
-    const templates = [template({ pack_id: 'ncino', packs: ['ncino'] })];
-    const ids = resolvePackIds(
-      stateWith({ templateId: 'combined_ops' }), emptyCatalog(), INDUSTRIES, templates,
-    );
-    expect(ids).toEqual(['ncino']);
-  });
-
-  it('falls back to the safe default when nothing is selected', () => {
-    const ids = resolvePackIds(stateWith(), emptyCatalog(), INDUSTRIES, []);
-    expect(ids).toEqual(['service_cloud']);
-  });
-
-  it('maps every declared Salesforce product to its pack (multi-select declaration)', () => {
-    // Service Cloud + nCino declared → both packs activate.
+describe('resolvePackIds — Salesforce packs ∪ analysis packs', () => {
+  it('maps every declared Salesforce product to its pack (fixed from Integration Hub)', () => {
     const ids = resolvePackIds(
       stateWith(),
       catalogWithSalesforceProducts(['salesforce_sc', 'salesforce_ncino']),
@@ -125,7 +63,6 @@ describe('resolvePackIds — multi-select run configuration', () => {
   });
 
   it('de-duplicates when several declared products map to the same pack', () => {
-    // Service Cloud + Financial Services Cloud + nCino → service_cloud once, then ncino.
     const ids = resolvePackIds(
       stateWith(),
       catalogWithSalesforceProducts(['salesforce_sc', 'salesforce_fsc', 'salesforce_ncino']),
@@ -135,11 +72,34 @@ describe('resolvePackIds — multi-select run configuration', () => {
     expect(ids).toEqual(['service_cloud', 'ncino']);
   });
 
-  it('treats a template without a packs field as single-pack (pre-v1.11)', () => {
-    const templates = [template({ pack_id: 'service_cloud', packs: undefined })];
+  it('includes the chosen analysis packs (state.packIds)', () => {
     const ids = resolvePackIds(
-      stateWith({ templateId: 'combined_ops' }), emptyCatalog(), INDUSTRIES, templates,
+      stateWith({ packIds: ['cloud_ops', 'github_engineering'] }),
+      emptyCatalog(), INDUSTRIES, [],
     );
+    expect(ids).toEqual(['cloud_ops', 'github_engineering']);
+  });
+
+  it('unions the fixed Salesforce packs with the chosen analysis packs (SF first)', () => {
+    const ids = resolvePackIds(
+      stateWith({ packIds: ['cloud_ops'] }),
+      catalogWithSalesforceProducts(['salesforce_sc', 'salesforce_ncino']),
+      INDUSTRIES, [],
+    );
+    expect(ids).toEqual(['service_cloud', 'ncino', 'cloud_ops']);
+  });
+
+  it('de-duplicates across Salesforce and analysis packs', () => {
+    const ids = resolvePackIds(
+      stateWith({ packIds: ['service_cloud', 'cloud_ops'] }),
+      catalogWithSalesforceProducts(['salesforce_sc']),
+      INDUSTRIES, [],
+    );
+    expect(ids).toEqual(['service_cloud', 'cloud_ops']);
+  });
+
+  it('falls back to the safe default when nothing is declared or selected', () => {
+    const ids = resolvePackIds(stateWith(), emptyCatalog(), INDUSTRIES, []);
     expect(ids).toEqual(['service_cloud']);
   });
 });
