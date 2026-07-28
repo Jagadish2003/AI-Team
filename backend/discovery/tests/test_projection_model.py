@@ -157,9 +157,14 @@ def test_projection_carries_every_required_part():
         "detectorId",
         "observedInstances",
         "observedPopulation",
+        "observationWindowDays",
         "instanceSignal",
+        "baselineValue",
+        "signalUsed",
         "confidence",
         "corroborationStatus",
+        "evidenceStrength",
+        "thinEvidence",
         "evidenceIds",
     ):
         assert key in basis, f"basis missing: {key}"
@@ -201,9 +206,26 @@ def test_basis_reports_observed_counts_and_window():
     basis = projection["basis"]
     assert basis["observedInstances"] == 240
     assert basis["observedPopulation"] == 800
+    assert basis["observationWindowDays"] == 90
     assert basis["baselineWindowDays"] == 90
     assert basis["observedRunCount"] == 5
     assert basis["packVersion"] == "1.2.0"
+
+
+def test_basis_reports_baseline_signal_corroboration_and_evidence_strength():
+    projection = build_projection(_opp(recent_values=_steady()))
+    basis = projection["basis"]
+
+    assert basis["baselineValue"] == 201.6
+    assert basis["signalUsed"] == {
+        "signalName": "owner_changes_90d",
+        "concept": "reassignment_hops",
+        "conceptLabel": "Reassignment hops",
+        "unit": "count",
+    }
+    assert basis["corroborationStatus"] == "corroborated"
+    assert basis["evidenceStrength"] == "strong"
+    assert basis["thinEvidence"] is False
 
 
 # --------------------------------------------------------------------------
@@ -235,6 +257,22 @@ def test_thin_sample_yields_wider_band_than_strong_sample():
     assert _band_width(thin) > _band_width(strong)
     assert thin["bandWidthInputs"]["thinEvidence"] is True
     assert strong["bandWidthInputs"]["thinEvidence"] is False
+
+
+def test_thin_evidence_is_labelled_on_basis():
+    thin = build_projection(
+        _opp(
+            raw_evidence={
+                "owner_changes_90d": 6.0,
+                "total_cases_90d": 12.0,
+                "handoff_score": 2.4,
+            },
+            recent_values=_steady(),
+        )
+    )
+
+    assert thin["basis"]["evidenceStrength"] == "thin"
+    assert thin["basis"]["thinEvidence"] is True
 
 
 def test_bursty_recurrence_yields_wider_band_than_steady():

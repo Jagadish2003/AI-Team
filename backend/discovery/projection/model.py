@@ -595,33 +595,49 @@ def build_projection(opp: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         direction = DIRECTION_IMPROVES
         band = _band(sample_tier, stability, corroboration_state, profile.unit)
 
-    basis: Dict[str, Any] = {
-        "detectorId": detector_id,
-        "observedInstances": _as_number(instance_count),
-        "observedPopulation": _as_number(volume_count),
-        "instanceSignal": profile.instance_field,
-        "populationSignal": profile.volume_signal,
-        "baselineMean": _safe_float(opp.get("baseline_mean")),
-        "baselineStddev": _safe_float(opp.get("baseline_stddev")),
-        "baselineWindowDays": _as_int(opp.get("baseline_window_days")),
-        "observedRunCount": _as_int(opp.get("run_count")),
-        "signalKey": opp.get("signal_key"),
-        "confidence": str(opp.get("confidence", "")).strip().upper() or None,
-        "corroborationStatus": corroboration_state,
-        "corroborationSources": list(opp.get("corroboration_sources") or []),
-        "packId": opp.get("packId") or opp.get("pack_id"),
-        "packVersion": opp.get("packVersion"),
-        "evidenceIds": list(opp.get("evidenceIds") or []),
-    }
+    baseline_mean = _safe_float(opp.get("baseline_mean"))
+    baseline_window_days = _as_int(opp.get("baseline_window_days"))
+    thin_evidence = (
+        sample_tier in ("thin", "minimal")
+        or stability in (_STABILITY_BURSTY, _STABILITY_UNKNOWN)
+        or confidence_capped
+    )
 
     band_width_inputs = {
         "sampleTier": sample_tier,
         "sampleSize": _as_number(sample_size),
         "recurrenceStability": stability,
         "corroborationStatus": corroboration_state,
-        "thinEvidence": sample_tier in ("thin", "minimal")
-        or stability in (_STABILITY_BURSTY, _STABILITY_UNKNOWN)
-        or confidence_capped,
+        "thinEvidence": thin_evidence,
+    }
+
+    basis: Dict[str, Any] = {
+        "detectorId": detector_id,
+        "observedInstances": _as_number(instance_count),
+        "observedPopulation": _as_number(volume_count),
+        "observationWindowDays": baseline_window_days,
+        "instanceSignal": profile.instance_field,
+        "populationSignal": profile.volume_signal,
+        "signalUsed": {
+            "signalName": movement_signal.signal_name,
+            "concept": movement_signal.concept,
+            "conceptLabel": movement_signal.concept_label,
+            "unit": movement_signal.unit,
+        },
+        "baselineValue": baseline_mean,
+        "baselineMean": baseline_mean,
+        "baselineStddev": _safe_float(opp.get("baseline_stddev")),
+        "baselineWindowDays": baseline_window_days,
+        "observedRunCount": _as_int(opp.get("run_count")),
+        "signalKey": opp.get("signal_key"),
+        "confidence": str(opp.get("confidence", "")).strip().upper() or None,
+        "corroborationStatus": corroboration_state,
+        "corroborationSources": list(opp.get("corroboration_sources") or []),
+        "evidenceStrength": "thin" if thin_evidence else "strong",
+        "thinEvidence": thin_evidence,
+        "packId": opp.get("packId") or opp.get("pack_id"),
+        "packVersion": opp.get("packVersion"),
+        "evidenceIds": list(opp.get("evidenceIds") or []),
     }
 
     projection = Projection(

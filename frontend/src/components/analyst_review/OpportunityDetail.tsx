@@ -14,6 +14,7 @@ import {
 import { useRunContext } from "../../context/RunContext";
 import BaselineContextPanel from "./BaselineContextPanel";
 import ProjectionAssumptionLedger from "../projection/ProjectionAssumptionLedger";
+import ProjectionBasisPanel from "../projection/ProjectionBasis";
 
 function BulletList({
   items,
@@ -790,6 +791,9 @@ export default function OpportunityDetail({
 
         {/* T7: LLM enrichment panel */}
         <EnrichmentPanel opp={opp} enrichment={enrichment} />
+
+        {/* 2.0-A1 T3: every visible projection shows its computation basis. */}
+        <ProjectionBasisPanel projection={projection} />
 
         {/* 2.0-A1 T2: projection assumptions are rendered with the opportunity. */}
         <ProjectionAssumptionLedger projection={projection} />

@@ -170,8 +170,19 @@ export interface InterventionProjection {
     detectorId: string;
     observedInstances: number | null;
     observedPopulation: number | null;
+    /** Explicit observation window for the measured basis, e.g. 90 days. */
+    observationWindowDays?: number | null;
     instanceSignal: string | null;
     populationSignal: string | null;
+    /** API-named alias for baselineMean, used by projection transparency UI. */
+    baselineValue?: number | null;
+    /** API-named copy of the movement signal that was used for this projection. */
+    signalUsed?: {
+      signalName: string;
+      concept: string;
+      conceptLabel: string;
+      unit: string;
+    } | null;
     baselineMean: number | null;
     baselineStddev: number | null;
     baselineWindowDays: number | null;
@@ -181,6 +192,9 @@ export interface InterventionProjection {
     /** triple | corroborated | supporting_only | single_source */
     corroborationStatus: string;
     corroborationSources: string[];
+    /** strong | thin */
+    evidenceStrength?: string;
+    thinEvidence?: boolean;
     packId?: string | null;
     packVersion?: string | null;
     evidenceIds: string[];
