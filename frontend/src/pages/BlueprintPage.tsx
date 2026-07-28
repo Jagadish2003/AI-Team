@@ -38,6 +38,7 @@ import {
   ProjectionAssumptionList,
   projectionAssumptions,
 } from '../components/projection/ProjectionAssumptionLedger';
+import { ProjectionBasisCompact } from '../components/projection/ProjectionBasis';
 
 function TierBadge({ tier }: { tier?: string }) {
   const t = tier ?? 'Unknown';
@@ -438,6 +439,12 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
             <p className="text-sm text-muted">Permissions assessment is not yet available for this opportunity.</p>
           )}
         </SectionBlock>
+
+        {projection?.basis && (
+          <SectionBlock icon={<BarChart2 size={16} />} title="Projection Basis">
+            <ProjectionBasisCompact projection={projection} showTitle={false} />
+          </SectionBlock>
+        )}
 
         <SectionBlock icon={<BarChart2 size={16} />} title="Implementation Complexity">
           <div className="text-sm font-semibold text-text">{complexity.label}</div>

@@ -196,6 +196,21 @@ def _assert_shape(projection: Dict[str, Any]) -> None:
         for key in ("id", "label", "description"):
             assert assumption.get(key), f"assumption missing {key}"
 
+    basis = projection["basis"]
+    for key in (
+        "observedInstances",
+        "observationWindowDays",
+        "baselineValue",
+        "signalUsed",
+        "corroborationStatus",
+        "evidenceStrength",
+        "thinEvidence",
+    ):
+        assert key in basis, f"basis missing {key}"
+    assert basis["signalUsed"]["signalName"] == movement["signalName"]
+    assert basis["evidenceStrength"] in ("strong", "thin")
+    assert basis["thinEvidence"] is projection["bandWidthInputs"]["thinEvidence"]
+
 
 # ---------------------------------------------------------------------------
 # The pipeline hook — stores the projection with the opportunity (AC6).
@@ -507,6 +522,36 @@ class TestProjectionVocabularyOnTheWire:
                 "Residual cases still require human judgement",
                 "Projection applies only to the measured signal and horizon shown",
             ]
+
+    def test_projection_basis_is_visible_on_projection_api_surfaces(self, client):
+        org, run = _ids()
+        _seed_run_with_projection(org, run)
+
+        responses = [
+            client.get(f"/api/runs/{run}/opportunities", headers=_auth(org)).json()[0][
+                "projection"
+            ],
+            client.get(
+                f"/api/runs/{run}/opportunities/opp_001/enrichment",
+                headers=_auth(org),
+            ).json()["projection"],
+            client.get(
+                f"/api/runs/{run}/opportunities/opp_001/blueprint",
+                headers=_auth(org),
+            ).json()["projection"],
+            client.get(f"/api/runs/{run}/executive-report", headers=_auth(org)).json()[
+                "topQuickWins"
+            ][0]["projection"],
+        ]
+        for projection in responses:
+            basis = projection["basis"]
+            assert basis["observedInstances"] == 240
+            assert basis["observationWindowDays"] == 90
+            assert basis["baselineValue"] == 201.6
+            assert basis["signalUsed"]["signalName"] == "owner_changes_90d"
+            assert basis["corroborationStatus"] == "corroborated"
+            assert basis["evidenceStrength"] == "strong"
+            assert basis["thinEvidence"] is False
 
 
 # ---------------------------------------------------------------------------
