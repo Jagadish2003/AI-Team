@@ -1,4 +1,5 @@
 import React from 'react';
+import { Loader2 } from 'lucide-react';
 import Button from '../common/Button';
 import { Confidence } from '../../utils/confidence';
 import { Connector } from '../../types/connector';
@@ -8,13 +9,17 @@ export default function NextBestSourcePanel({
   recommendedConnectedCount,
   recommendedTotal,
   next,
-  onConnectNext
+  onConnectNext,
+  connecting,
 }: {
   confidence: Confidence;
   recommendedConnectedCount: number;
   recommendedTotal: number;
   next: Connector | null;
   onConnectNext: () => void;
+  // True while the next-best source's OAuth connect flow is in flight — the
+  // button disables and reads "Connecting…" so it can only be clicked once.
+  connecting?: boolean;
 }) {
   const step = confidence?.toLowerCase();
   const isLow    = step === 'low';
@@ -72,10 +77,21 @@ export default function NextBestSourcePanel({
             <div className="mt-3">
               <Button
                 variant={next.status === 'connected' ? 'tertiary' : 'primary'}
-                className="w-full"
-                onClick={onConnectNext}
+                className={`w-full ${connecting ? 'gap-1.5 !opacity-70' : ''}`}
+                disabled={connecting}
+                ariaLabel={connecting ? `Connecting ${next.name}` : undefined}
+                onClick={connecting ? undefined : onConnectNext}
               >
-                {next.status === 'connected' ? `Configure & Sync ${next.name}` : `Connect ${next.name}`}
+                {connecting ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+                    Connecting…
+                  </>
+                ) : next.status === 'connected' ? (
+                  `Configure & Sync ${next.name}`
+                ) : (
+                  `Connect ${next.name}`
+                )}
               </Button>
             </div>
           </>

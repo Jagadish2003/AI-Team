@@ -346,6 +346,23 @@ export default function IntegrationHubPage() {
     [startBarStatusConnectors],
   );
 
+  // One-shot Connect: starting a connect flow mints a one-time OAuth state nonce
+  // and then hands the browser to the provider, so the button must only ever be
+  // clickable once. This holds the id of the connector whose flow is in flight —
+  // its action button disables and reads "Connecting…", the same posture as the
+  // Stack Builder "Start discovery" button while a run is launching.
+  const [connectingId, setConnectingId] = useState<string | null>(null);
+
+  async function startConnect(id: string) {
+    if (connectingId) return;
+    setConnectingId(id);
+    const started = await connectConnector(id);
+    // On success the browser is already navigating to the provider — keep the
+    // button busy until it leaves the page. Only a failed auth-url call releases
+    // it, so the user can retry.
+    if (!started) setConnectingId(null);
+  }
+
   // Connect / configure handler (same logic as pre-Sprint-9)
   function handlePrimary(id: string) {
     const c = allConnectors.find(x => x.id === id);
@@ -378,7 +395,7 @@ export default function IntegrationHubPage() {
     } else if (c.status === 'coming_soon') {
       push('Coming Soon');
     } else {
-      connectConnector(id);
+      void startConnect(id);
       // Connect now leads straight to "View data" — configuring is automatic
       // (see the auto-configure effect). For OAuth connectors this toast is not
       // seen (the browser redirects to the provider), but keep it accurate.
@@ -391,7 +408,7 @@ export default function IntegrationHubPage() {
   // the same context method Connect uses — connectConnector navigates the
   // browser away, so no follow-up toast is needed here.
   function handleReconnect(id: string) {
-    connectConnector(id);
+    void startConnect(id);
   }
 
   // R18-C0 P4 / AT-566: disconnect flow. The tile's Disconnect action opens a
@@ -525,6 +542,7 @@ export default function IntegrationHubPage() {
                     onAddSource={handleAddSource}
                     connectBlocked={atSystemLimit}
                     connectBlockMessage={systemLimitMsg}
+                    connectingId={connectingId}
                   />
                 </div>
               ))}
@@ -544,6 +562,7 @@ export default function IntegrationHubPage() {
                 recommendedConnectedCount={startBarReadyCount}
                 recommendedTotal={3}
                 next={startBarNext}
+                connectingNext={Boolean(startBarNext) && connectingId === startBarNext?.id}
                 onConnectNext={() => {
                   if (!startBarNext) return;
                   if (startBarNext.status === 'connected') {
@@ -555,8 +574,8 @@ export default function IntegrationHubPage() {
                     // message, consistent with the disabled tile Connect buttons.
                     push(systemLimitMsg || 'Your license limit has been reached. Contact CloudFulcrum to add more.', 'error');
                   } else {
-                    connectConnector(startBarNext.id);
-                    push('Connected next best source.');
+                    void startConnect(startBarNext.id);
+                    push('Connecting…');
                   }
                 }}
               />

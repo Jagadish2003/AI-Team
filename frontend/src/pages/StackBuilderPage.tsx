@@ -180,8 +180,11 @@ export function resolvePackId(
 // R191-P1: a run's packs are the UNION of:
 //   • the SALESFORCE packs, fixed by the Integration Hub product declaration
 //     (Service Cloud / nCino / … via CLOUD_PACK_REGISTRY), and
-//   • the ANALYSIS packs, chosen per-run in the Discovery Plan multi-select
-//     (state.packIds; the offerable set lives in src/data/analysisPacks.ts).
+//   • the ANALYSIS pack, chosen per-run in the Discovery Plan's single-select
+//     dropdown, which defaults to "None" (state.packIds; the offerable set lives
+//     in src/data/analysisPacks.ts). state.packIds stays a LIST — a template can
+//     also contribute a pack — so the resolution below is unchanged by that
+//     control being single-select.
 // The Salesforce products are NOT offered in the Discovery Plan — they are
 // declared once in the Integration Hub.
 
@@ -200,7 +203,7 @@ export function salesforcePacksFromCatalog(
 
 // Resolve the full MULTI-pack selection for a run: the UNION of the fixed
 // Salesforce packs (product declaration) and the chosen analysis packs
-// (state.packIds — the Discovery Plan multi-select). Order-preserving and
+// (state.packIds — the Discovery Plan dropdown, plus any template pack). Order-preserving and
 // de-duplicated, Salesforce packs first. Falls back to the single resolved pack
 // when neither is present.
 export function resolvePackIds(

@@ -1,11 +1,14 @@
 /**
  * analysisPacks.ts — the non-Salesforce discovery packs a user can add to a run
- * from the Discovery Plan "Analysis packs" multi-select (R191-P1).
+ * from the Discovery Plan "Analysis pack" dropdown (R191-P1).
+ *
+ * The dropdown is SINGLE-select and defaults to "None": a run adds at most one
+ * analysis pack on top of whatever the workspace has declared.
  *
  * A run's packs are the UNION of:
  *   • the SALESFORCE packs, fixed by the Integration Hub product declaration
  *     (Service Cloud / nCino / … — NOT offered here), and
- *   • the ANALYSIS packs below, chosen per-run in the Discovery Plan.
+ *   • the ANALYSIS pack below, chosen per-run in the Discovery Plan.
  *
  * Shared by StackBuilderPage (resolution) and DiscoveryPlanPage (the picker) to
  * avoid a circular import between the two page modules.

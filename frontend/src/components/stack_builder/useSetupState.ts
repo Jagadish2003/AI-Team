@@ -254,9 +254,11 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
     });
   }, []);
 
-  // R191-P1: set the explicit analysis-pack selection (the Discovery Plan
-  // multi-select of non-Salesforce packs). Order-preserving, de-duplicated; the
-  // primary singular packId mirrors the first entry for backward compatibility.
+  // R191-P1: set the run's explicit pack list. The Discovery Plan's analysis-pack
+  // dropdown is single-select, but this stays a LIST because a run's packs can
+  // come from more than one source (a template's pack_id, the chosen analysis
+  // pack). Order-preserving, de-duplicated; the primary singular packId mirrors
+  // the first entry for backward compatibility.
   const setPackIds = useCallback((packIds: string[]) => {
     setState(s => {
       const deduped = Array.from(new Set((packIds ?? []).filter(Boolean)));
