@@ -65,6 +65,43 @@ def _org_id_for_run(run: Dict[str, Any] | None, fallback: str | None = None) -> 
     return run.get("orgId") or run.get("org_id") or input_org_id or fallback
 
 
+def _apply_intervention_projection(run_id: str, opps: List[Dict[str, Any]]) -> int:
+    """2.0-A1 T1 — attach the intervention projection and re-persist "opps".
+
+    Shared by both materialization paths (this module and routes_sprint4_t1).
+    Call AFTER temporal enrichment: the projection widens its magnitude band from
+    the observed recurrence series and cites the baseline it moves against, both
+    of which temporal enrichment puts on the in-memory opportunity.
+
+    The projection is written back to run_kv ``"opps"`` so it is STORED with the
+    opportunity (2.0-A1 AC6) — every read surface then serves the same stored
+    projection, and 2.0-A2 has something durable to compare a measured outcome
+    against. Non-blocking by contract: a projection failure must never fail a run
+    or lose an opportunity.
+
+    Returns the number of opportunities that received a projection.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        from discovery.projection import project_opportunities
+
+        projected = project_opportunities(opps)
+        if projected:
+            db.run_kv_set("opps", run_id, opps)
+        logger.info(
+            "Attached intervention projections to %d/%d opportunities for run %s",
+            projected,
+            len(opps or []),
+            run_id,
+        )
+        return projected
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Intervention projection failed (non-blocking): %s", exc)
+        return 0
+
+
 def _audit_prepend(run_id: str, event: Dict[str, Any]) -> None:
     audit = db.run_kv_get("audit", run_id, [])
     db.run_kv_set("audit", run_id, [event] + audit)
@@ -459,6 +496,11 @@ def run_trackb_and_persist(
             )
         except Exception as e:
             logger.warning("T7 temporal enrichment failed (non-blocking): %s", e)
+
+        # 2.0-A1 T1 — intervention projection (non-blocking). See the helper
+        # docstring: runs after temporal enrichment and re-persists "opps" so the
+        # projection is stored with the opportunity (AC6).
+        _apply_intervention_projection(run_id, opps)
 
         status = "complete" if len(succeeded) == len(systems) else "partial"
         audit_action = (

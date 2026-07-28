@@ -216,6 +216,27 @@ def get_required_permissions_for_detector(detector_id: str) -> List[str]:
     return list(perms) if isinstance(perms, list) else []
 
 
+def _numeric_signals(raw_evidence: Dict[str, Any]) -> Dict[str, Any]:
+    """Return only the numeric scalar measurements from a detector's raw_evidence.
+
+    2.0-A1 T1: the projection model needs the detector's measured numbers on the
+    STORED opportunity, but not the nested per-instance lists/dicts some
+    detectors attach (those are evidence and are served via evidenceIds).
+    Keeping this to numeric scalars also keeps the stored record small and
+    JSON-stable, so a projection recomputed from it is byte-identical.
+
+    Booleans are excluded — ``degraded_signal`` is a gate, not a measurement.
+    """
+    if not isinstance(raw_evidence, dict):
+        return {}
+    signals: Dict[str, Any] = {}
+    for key, value in raw_evidence.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        signals[str(key)] = value
+    return signals
+
+
 def _format_title(detector_id: str, ev: Dict[str, Any]) -> str:
     """Produce a human-readable title by filling the template with raw_evidence."""
     meta = _DETECTOR_META.get(detector_id, {})
@@ -367,6 +388,16 @@ def to_track_a_opportunities(
                 "threshold":     threshold,
                 "roadmap_stage": opp.get("roadmap_stage", ""),
                 "score_debug":   opp.get("score_debug", {}),
+                # 2.0-A1 T1: carry the detector's measured signal numbers onto the
+                # STORED opportunity. The projection model reads its sample size,
+                # affected-instance count, and movement-signal value from these
+                # (see discovery/projection/signal_registry.py) — without them a
+                # projection could only be computed inside the pipeline and could
+                # never be recomputed or audited from the stored record.
+                # Numeric scalars only: the nested instance lists some detectors
+                # put in raw_evidence (e.g. HANDOFF_FRICTION.top_categories) are
+                # evidence, not signal, and are already served via evidenceIds.
+                "raw_evidence":  _numeric_signals(ev),
             },
         }
         result.append(track_a_opp)

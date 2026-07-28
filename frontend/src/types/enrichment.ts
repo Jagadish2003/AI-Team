@@ -103,6 +103,92 @@ export interface OppEnrichment {
   // "Analyst review required" banner with preliminary_reason.
   preliminary: boolean;
   preliminary_reason: string | null;
+  // 2.0-A1 — intervention projection, read from the stored opportunity.
+  // null/undefined -> omit the panel (the detector has no signal profile, or the
+  // finding carries too few measured instances to project).
+  projection?: InterventionProjection | null;
+}
+
+/**
+ * 2.0-A1 — the magnitude band. Always a RANGE, never a point estimate:
+ * lowPct is always strictly below highPct.
+ */
+export interface MagnitudeBand {
+  lowPct: number;
+  highPct: number;
+  /** What the percentages are a share OF, e.g. "of the recurring instances". */
+  basisUnit: string;
+  /** Pre-rendered range label, e.g. "25–55% of the recurring instances". */
+  label: string;
+}
+
+/** 2.0-A1 — a measured signal the projection expects to move. */
+export interface ProjectedSignal {
+  /** One of: queue_volume | ageing | recurrence_count | time_to_resolve | reassignment_hops */
+  concept: string;
+  conceptLabel: string;
+  /** The real detector field name, e.g. "owner_changes_90d". */
+  signalName: string;
+  /** count | days | hours | ratio | pct */
+  unit: string;
+  currentValue: number | null;
+  /** "decrease" | "increase" — which way is an improvement. */
+  directionOfImprovement: string;
+}
+
+/**
+ * 2.0-A1 — a per-opportunity intervention projection.
+ *
+ * A projection is a DIRECTION and a MAGNITUDE BAND on specific measured signals
+ * — never a point estimate, never a guaranteed saving. Render the band as a
+ * range and the basis alongside it; do not reduce it to a single number.
+ */
+export interface InterventionProjection {
+  schemaVersion: string;
+  /** "improves" | "no_material_change" */
+  direction: string;
+  /** null when direction is "no_material_change". */
+  magnitudeBand: MagnitudeBand | null;
+  /** 30 | 60 | 90 — the window over which movement would be observable. */
+  observationHorizonDays: number;
+  /** The manual step the agent is expected to replace. */
+  manualStepReplaced: string;
+  /** The signal that should move if the agent is implemented. */
+  movementSignal: ProjectedSignal;
+  affectedSignals: ProjectedSignal[];
+  /** What the projection was computed from — render this with the band. */
+  basis: {
+    detectorId: string;
+    observedInstances: number | null;
+    observedPopulation: number | null;
+    instanceSignal: string | null;
+    populationSignal: string | null;
+    baselineMean: number | null;
+    baselineStddev: number | null;
+    baselineWindowDays: number | null;
+    observedRunCount: number | null;
+    signalKey?: string | null;
+    confidence: string | null;
+    /** triple | corroborated | supporting_only | single_source */
+    corroborationStatus: string;
+    corroborationSources: string[];
+    packId?: string | null;
+    packVersion?: string | null;
+    evidenceIds: string[];
+  };
+  /** Why the band is as wide as it is — deterministic, not a hand-set number. */
+  bandWidthInputs: {
+    /** strong | moderate | thin | minimal */
+    sampleTier: string;
+    sampleSize: number | null;
+    /** steady | variable | bursty | unknown */
+    recurrenceStability: string;
+    corroborationStatus: string;
+    /** True when the band is visibly wider because the evidence is thin. */
+    thinEvidence: boolean;
+  };
+  /** True when the finding's confidence is capped for want of corroboration. */
+  confidenceCapped: boolean;
 }
 
 export interface RunEnrichment {
