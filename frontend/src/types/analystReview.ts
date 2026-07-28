@@ -1,4 +1,5 @@
 import type { Decision, Confidence } from "./common";
+import type { InterventionProjection } from "./enrichment";
 
 export type Tier = "Quick Win" | "Strategic" | "Complex";
 export type OpportunityTier = Tier; // backward-compat alias
@@ -43,6 +44,9 @@ export interface OpportunityCandidate {
   corroboration_label?: string | null;
   triple_corroboration?: boolean;
   corroboration_rule_ids?: string[];
+  // 2.0-A1 — intervention projection, stored with the opportunity by the run
+  // pipeline. Absent on older runs and on findings that are not projectable.
+  projection?: InterventionProjection | null;
 }
 
 export interface ReviewAuditEvent {
