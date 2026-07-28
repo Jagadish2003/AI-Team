@@ -334,6 +334,34 @@ class CloudEventConnector(ChangeBasedIngestor):
                 if not page.has_more:
                     break
 
+        # Runtime visibility: the mapping + admission outcome for the whole poll —
+        # how many provider payloads became OperationalEvents, how many DISTINCT
+        # active signals they folded into (B7 T1 dedup), and whether the per-run
+        # budget deferred anything (B7 T4). Without this, "events were fetched" and
+        # "OperationalEvents reached the detectors" were indistinguishable in logs.
+        _mapped = sum(len(recs) for recs, _ in pages_out)
+        try:
+            _folded = len(self.active_signals())
+        except Exception:  # pragma: no cover - observability must never break a poll
+            _folded = -1
+        _budget = None
+        try:
+            _budget = self.budget_report()
+        except Exception:  # pragma: no cover - same
+            pass
+        logger.info(
+            "%s: org=%s mapped %d OperationalEvent(s) -> %d active signal(s)%s",
+            self.connector_id,
+            org_id,
+            _mapped,
+            _folded,
+            (
+                f"; budget deferred {_budget.deferred} of {_budget.seen}"
+                if _budget is not None and getattr(_budget, "deferred", 0)
+                else ""
+            ),
+        )
+
         if not pages_out:
             # Idle poll → empty delta echoing the (possibly advanced) positions.
             yield DeltaBatch(records=[], next_checkpoint=_encode_positions(running), is_complete=True)

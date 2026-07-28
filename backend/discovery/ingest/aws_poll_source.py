@@ -532,6 +532,10 @@ class AWSLivePollSource(CloudPollSource):
         #: Per-account run-health surface (AT-646) — the R18-C2 connector-panel
         #: artifact, accumulated as scopes are polled. Loud, never silent.
         self.health = AWSConnectorHealth()
+        #: Accounts whose successful authentication has already been logged, so the
+        #: "authenticated" line appears once per account rather than once per scope
+        #: (an account is polled once per surface/region). Observability only.
+        self._authenticated_accounts: set = set()
 
     def health_report(self) -> Dict[str, Any]:
         """Per-account run-health report (auth/throttle/partial states)."""
@@ -562,6 +566,20 @@ class AWSLivePollSource(CloudPollSource):
             self.health.mark_auth_failed(scope.account, f"{type(exc).__name__}: {exc}")
             return PollPage(events=[], next_position=position, has_more=False)
 
+        # Runtime visibility: report the authentication OUTCOME and how the account
+        # was reached (assumed role vs direct keys) exactly once per account per run.
+        # Failures already log at WARNING via AWSConnectorHealth; without this the
+        # success path was invisible, so "did AWS authenticate at all?" could only be
+        # answered from the health report after the fact. Never logs the credential.
+        if scope.account not in self._authenticated_accounts:
+            self._authenticated_accounts.add(scope.account)
+            logger.info(
+                "aws_poll_source: authenticated account %s via %s (partition=%s)",
+                scope.account,
+                getattr(credentials, "source", "unknown"),
+                account.partition,
+            )
+
         service = _SERVICE_FOR_SURFACE[scope.surface]
         reader = _SURFACE_READERS[scope.surface]
 
@@ -590,6 +608,19 @@ class AWSLivePollSource(CloudPollSource):
                     page_size=self.page_size,
                 )
                 self.health.mark_scope_ok(scope.account, scope.surface)
+                # Per-surface visibility: which AWS surface was read, for which
+                # account/region, and how many events it returned. This is the log
+                # line that answers "is CloudWatch/EventBridge/CloudTrail actually
+                # being polled?" — previously only failures were observable, so a
+                # surface returning nothing looked identical to one never polled.
+                logger.info(
+                    "aws_poll_source: polled %s account=%s region=%s — %d event(s)%s",
+                    scope.surface,
+                    scope.account,
+                    scope.region or "-",
+                    len(events),
+                    " (more pending)" if has_more else "",
+                )
                 # Pagination up to MAX_PAGES_PER_POLL happens inside the reader.
                 # Beyond that the reader reports has_more so the skeleton polls this
                 # scope again from the advanced position — a large backlog is drained

@@ -890,3 +890,110 @@ skeleton with `provider='azure'`, for Azure) and AC5 (a seeded re-firing alarm
 folds into one active signal with a count, live through the native poll path, and
 the aggregate still opens back to its raw instances), plus the poll loop, opaque
 per-scope checkpoints, resumable first load, and loud-skip robustness.
+
+## 16. Cloud events are CORROBORATION, not a standalone finding source
+
+A recurring question when a cloud connector is first switched on is: *"AWS is
+connected and events are arriving — why are there no findings and no Source
+Intelligence signals?"* That outcome is the DESIGN, not a break in the pipeline.
+This section records the execution path and the deliberate gate, so the absence
+of AWS-only findings is never re-investigated as a bug.
+
+### 16.1 The execution path
+
+A native cloud connector is driven from `discovery/runner.py`, not from a
+separate scheduler:
+
+```
+AWS account
+  └─ aws_poll_source.AWSLivePollSource.poll()        per (account, region, surface)
+       └─ reference_mappers.map_cloudwatch/…         provider payload -> OperationalEvent
+            └─ OpsEventStream.admit()                B7: dedup + noise floor + budget
+                 └─ CloudEventConnector.ingest_changes()   DeltaBatch + per-scope checkpoint
+                      └─ runner._ingest_aws_events()       (runner.py, gated — see below)
+                           └─ aws_events_data["records"]
+                                └─ build_cloud_ops_runtime(bridge_records=…)
+                                     └─ sn_data["cloud_ops"]["event_signatures"]
+                                          └─ cloud_ops detectors
+```
+
+`runner._ingest_aws_events` is called under a two-part gate:
+
+```python
+if _any_cloud_ops and "aws_events" in _systems:
+    aws_events_data = _ingest_aws_events(org_id, run_id)
+```
+
+so BOTH a `cloud_ops`-domain pack must be selected AND `aws_events` must be in
+the run's systems set (put there by
+`app/live_ingest_credentials._resolve_aws_events`, which requires a pinned
+account config *and* resolvable credentials). Native AWS records are merged with
+the B8 bridge and B2 Azure records into ONE assembly call, where the
+`OpsEventStream` folds identical `event_signature`s — so a native event and its
+bridged twin never double-count.
+
+### 16.2 The corroboration gate
+
+Cloud events reach the detectors as `sn_data['cloud_ops']['event_signatures']`.
+Whether a signature is detector-ELIGIBLE is decided by one field, set in
+`cloud_ops_runtime.py`:
+
+```python
+"window_overlap": bool(joined_incidents),
+```
+
+An event signature earns `window_overlap=True` only when it joins a ServiceNow
+incident inside the MSP-B7 T5 correlation window (§12). Every cloud-ops detector
+gates on it — `cloud_ops_recurring_resolution_loop._recurring_event_index`
+requires `window_ok and recurring`; `cloud_ops_alert_triage_toil._qualifies`
+requires `window_ok` plus `0.0 < median_ttr_minutes <= max_resolve_minutes` and
+exactly one distinct close code; `cloud_ops_shared_ci_hotspot` applies the same
+window gate.
+
+Those companion fields — `incident_count`, `median_ttr_minutes`, `close_codes`,
+`assignment_group` — are all ITSM-derived. **A cloud event carries none of them.**
+An events-only signature is therefore structurally ineligible:
+
+```
+incident_count: 0   median_ttr_minutes: 0.0   distinct_close_codes: 0
+assignment_group: ""   window_overlap: false   window_gated: true
+```
+
+This is the intended contract. The cloud_ops pack measures **operational toil** —
+repeated human resolution work, triage effort, queue ageing, reassignment
+churn — which is a property of the ITSM record, not of the alarm. Cloud events
+CORROBORATE that toil (elevating MEDIUM->HIGH within the window, the same bar as
+COR-09/COR-10) and supply the resource/CI spine the shared-CI hotspot traverses.
+They never assert a finding alone, because "an alarm fired 288 times" is not by
+itself evidence that anyone did repeated manual work.
+
+**Consequence, stated plainly:** an org with AWS connected but no ServiceNow
+produces zero cloud_ops findings and no Source Intelligence signals from AWS,
+however many events arrive. That is correct. AWS raises no finding of its own;
+it strengthens findings anchored in ITSM data. Pairing AWS with ServiceNow is
+what makes cloud events visible in results — `test_cloud_ops_runtime.py::
+test_runtime_wires_b4_b5_and_b8_into_existing_cloud_detectors` is the pinned
+proof of the positive path (events + incidents -> `window_overlap=True` ->
+detector fires at HIGH confidence).
+
+### 16.3 Runtime visibility
+
+The connector reports each stage at INFO so a quiet run can be diagnosed from
+logs alone, without attaching a debugger or reading the health blob:
+
+| Stage | Log line | Source |
+|---|---|---|
+| Mode / config | `aws_events: offline mode …` / `live mode — N pinned account(s) …` | `aws_event_connector.py` |
+| Scopes | `aws_events: org=… first run (full poll) — N scope(s)` | `cloud_event_connector.py` |
+| Authentication | `aws_poll_source: authenticated account … via assumed_role\|direct_keys\|hub (partition=…)` | `aws_poll_source.py` |
+| Per-surface poll | `aws_poll_source: polled cloudwatch\|eventbridge\|cloudtrail account=… region=… — N event(s)` | `aws_poll_source.py` |
+| Mapping + admission | `aws_events: org=… mapped N OperationalEvent(s) -> M active signal(s)` | `cloud_event_connector.py` |
+| Run summary | `AWS event connector: N event(s), M batch(es), checkpoint_advanced=…` | `runner.py` |
+| Detector assembly | `Cloud Operations runtime assembly: status=… event_signatures=N` | `runner.py` |
+
+The authentication line is emitted once per account (not once per scope) and
+never logs a credential. A polled-but-empty surface logs `0 event(s)`, so it is
+distinguishable from a surface that was never polled at all. Failures stay loud
+and separate: per-account auth failure, per-scope failure, and throttling each
+log at WARNING via `aws_health.AWSConnectorHealth` and land in the run-health
+report.
