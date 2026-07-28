@@ -2,7 +2,7 @@
 
 Covers the contract the story states:
   * every projection carries direction, band, horizon, manual step, movement
-    signal, and its computation basis (AC1);
+    signal, its assumption ledger, and its computation basis (AC1);
   * band width is deterministic from sample size, recurrence stability, and
     corroboration status, and thinner evidence yields a demonstrably WIDER band
     (AC2);
@@ -122,6 +122,7 @@ _REQUIRED_TOP_LEVEL = (
     "observationHorizonDays",
     "manualStepReplaced",
     "movementSignal",
+    "assumptionLedger",
     "affectedSignals",
     "basis",
     "bandWidthInputs",
@@ -145,6 +146,12 @@ def test_projection_carries_every_required_part():
     for key in ("concept", "conceptLabel", "signalName", "unit", "currentValue"):
         assert key in movement
 
+    assumptions = projection["assumptionLedger"]
+    assert len(assumptions) == 5
+    for assumption in assumptions:
+        for key in ("id", "label", "description"):
+            assert assumption[key], f"assumption missing {key}"
+
     basis = projection["basis"]
     for key in (
         "detectorId",
@@ -156,6 +163,21 @@ def test_projection_carries_every_required_part():
         "evidenceIds",
     ):
         assert key in basis, f"basis missing: {key}"
+
+
+def test_projection_carries_the_required_assumption_ledger():
+    projection = build_projection(_opp(recent_values=_steady()))
+    labels = [a["label"] for a in projection["assumptionLedger"]]
+
+    assert labels == [
+        "Agent handles the identified recurring cases",
+        "Adoption is complete for those cases",
+        "Upstream volume remains within its observed range",
+        "Residual cases still require human judgement",
+        "Projection applies only to the measured signal and horizon shown",
+    ]
+    assert any("manual step" in a["description"] for a in projection["assumptionLedger"])
+    assert any("30-day observation horizon" in a["description"] for a in projection["assumptionLedger"])
 
 
 def test_movement_signal_is_a_real_measured_field():
@@ -539,6 +561,14 @@ def test_generated_text_uses_no_guarantee_or_savings_language():
                 projection["manualStepReplaced"],
                 projection["magnitudeBand"]["label"],
                 projection["movementSignal"]["conceptLabel"],
+                *[
+                    assumption["label"]
+                    for assumption in projection["assumptionLedger"]
+                ],
+                *[
+                    assumption["description"]
+                    for assumption in projection["assumptionLedger"]
+                ],
             ]
         ).lower()
         for phrase in _FORBIDDEN_VOCABULARY:

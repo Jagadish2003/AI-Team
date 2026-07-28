@@ -136,12 +136,19 @@ export interface ProjectedSignal {
   directionOfImprovement: string;
 }
 
+/** 2.0-A1 T2 — an explicit assumption attached to the projection. */
+export interface ProjectionAssumption {
+  id: string;
+  label: string;
+  description: string;
+}
+
 /**
  * 2.0-A1 — a per-opportunity intervention projection.
  *
  * A projection is a DIRECTION and a MAGNITUDE BAND on specific measured signals
- * — never a point estimate, never a guaranteed saving. Render the band as a
- * range and the basis alongside it; do not reduce it to a single number.
+ * — never a point estimate, never a guaranteed saving. Render the assumption
+ * ledger with it; a projection without assumptions should not be surfaced.
  */
 export interface InterventionProjection {
   schemaVersion: string;
@@ -155,6 +162,8 @@ export interface InterventionProjection {
   manualStepReplaced: string;
   /** The signal that should move if the agent is implemented. */
   movementSignal: ProjectedSignal;
+  /** Explicit assumptions that must be visible with the projection. */
+  assumptionLedger: ProjectionAssumption[];
   affectedSignals: ProjectedSignal[];
   /** What the projection was computed from — render this with the band. */
   basis: {

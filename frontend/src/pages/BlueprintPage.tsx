@@ -34,6 +34,10 @@ import {
 } from '../utils/blueprintNaming';
 import { useResource } from '../lib/dataCache';
 import { cacheKeys } from '../lib/cacheKeys';
+import {
+  ProjectionAssumptionList,
+  projectionAssumptions,
+} from '../components/projection/ProjectionAssumptionLedger';
 
 function TierBadge({ tier }: { tier?: string }) {
   const t = tier ?? 'Unknown';
@@ -340,6 +344,8 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
   const actions = blueprint.suggestedActions ?? [];
   const guardrails = blueprint.guardrails ?? [];
   const permissions = blueprint.agentforcePermissions ?? [];
+  const projection = blueprint.projection ?? null;
+  const assumptions = projectionAssumptions(projection);
   const complexity = blueprint.complexity ?? {
     label: 'Assessment unavailable',
     description: 'Implementation complexity will be assessed during design.',
@@ -365,6 +371,12 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
               : 'Agent purpose not available for this opportunity.'}
           </p>
         </SectionBlock>
+
+        {assumptions.length > 0 && (
+          <SectionBlock icon={<ListChecks size={16} />} title="Projection Assumptions">
+            <ProjectionAssumptionList projection={projection} />
+          </SectionBlock>
+        )}
 
         <SectionBlock icon={<Zap size={16} />} title="Suggested Agent Actions">
           {actions.length > 0 ? (

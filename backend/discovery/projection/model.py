@@ -197,6 +197,22 @@ class ProjectedSignal:
 
 
 @dataclass(frozen=True)
+class ProjectionAssumption:
+    """One explicit assumption carried with the projection."""
+
+    id: str
+    label: str
+    description: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "description": self.description,
+        }
+
+
+@dataclass(frozen=True)
 class Projection:
     """A per-opportunity intervention projection.
 
@@ -209,6 +225,7 @@ class Projection:
     observation_horizon_days: int
     manual_step_replaced: str
     movement_signal: ProjectedSignal
+    assumption_ledger: List[ProjectionAssumption]
     affected_signals: List[ProjectedSignal] = field(default_factory=list)
     basis: Dict[str, Any] = field(default_factory=dict)
     band_width_inputs: Dict[str, Any] = field(default_factory=dict)
@@ -225,6 +242,7 @@ class Projection:
             "observationHorizonDays": self.observation_horizon_days,
             "manualStepReplaced": self.manual_step_replaced,
             "movementSignal": self.movement_signal.to_dict(),
+            "assumptionLedger": [a.to_dict() for a in self.assumption_ledger],
             "affectedSignals": [s.to_dict() for s in self.affected_signals],
             "basis": dict(self.basis),
             "bandWidthInputs": dict(self.band_width_inputs),
@@ -440,6 +458,57 @@ def _band(
     )
 
 
+def _assumption_ledger(
+    manual_step_replaced: str,
+    movement_signal: ProjectedSignal,
+    horizon_days: int,
+) -> List[ProjectionAssumption]:
+    """Build the explicit assumptions every projection must carry."""
+    signal_label = movement_signal.concept_label.lower()
+    return [
+        ProjectionAssumption(
+            id="agent_handles_identified_cases",
+            label="Agent handles the identified recurring cases",
+            description=(
+                "The projection assumes the agent handles the cases represented "
+                f"by this finding and takes over the manual step: {manual_step_replaced}."
+            ),
+        ),
+        ProjectionAssumption(
+            id="adoption_complete_for_cases",
+            label="Adoption is complete for those cases",
+            description=(
+                "The projection applies after the identified cases are routed "
+                "through the agent path instead of the current manual path."
+            ),
+        ),
+        ProjectionAssumption(
+            id="upstream_volume_within_observed_range",
+            label="Upstream volume remains within its observed range",
+            description=(
+                "The projection assumes incoming volume stays comparable to the "
+                "observed baseline and does not materially change the case mix."
+            ),
+        ),
+        ProjectionAssumption(
+            id="residual_requires_human_judgement",
+            label="Residual cases still require human judgement",
+            description=(
+                "The projection does not assume the agent handles exceptions, "
+                "ambiguous cases, or work that still needs human review."
+            ),
+        ),
+        ProjectionAssumption(
+            id="limited_to_signal_and_horizon",
+            label="Projection applies only to the measured signal and horizon shown",
+            description=(
+                f"The projection is limited to {signal_label} over the "
+                f"{horizon_days}-day observation horizon shown with this opportunity."
+            ),
+        ),
+    ]
+
+
 # --------------------------------------------------------------------------
 # Public API
 # --------------------------------------------------------------------------
@@ -561,6 +630,9 @@ def build_projection(opp: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         observation_horizon_days=horizon,
         manual_step_replaced=profile.manual_step,
         movement_signal=movement_signal,
+        assumption_ledger=_assumption_ledger(
+            profile.manual_step, movement_signal, horizon
+        ),
         affected_signals=affected,
         basis=basis,
         band_width_inputs=band_width_inputs,
@@ -654,6 +726,7 @@ __all__ = [
     "HORIZON_90",
     "MagnitudeBand",
     "ProjectedSignal",
+    "ProjectionAssumption",
     "Projection",
     "build_projection",
     "project_opportunities",

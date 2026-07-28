@@ -4,13 +4,15 @@ The two backend surfaces the story names:
 
     GET /api/runs/{run_id}/opportunities
     GET /api/runs/{run_id}/opportunities/{opp_id}/enrichment
+    GET /api/runs/{run_id}/opportunities/{opp_id}/blueprint
 
 Coverage:
-  * the stored projection reaches BOTH surfaces, and is served AS STORED
+  * the stored projection reaches the named API surfaces, and is served AS STORED
     (never recomputed at read time, so what an analyst reads is what 2.0-A2 will
     compare a measured outcome against);
   * every served projection carries direction, magnitude band, observation
-    horizon, the replaced manual step, and the movement signal (AC1);
+    horizon, the replaced manual step, the movement signal, and the assumption
+    ledger (AC1);
   * the projection is STORED with the opportunity, so it survives without the
     LLM-enrichment artifact (AC6);
   * a projection is never a point estimate and never carries savings/guarantee
@@ -45,6 +47,7 @@ REQUIRED_PROJECTION_KEYS = {
     "observationHorizonDays",
     "manualStepReplaced",
     "movementSignal",
+    "assumptionLedger",
     "affectedSignals",
     "basis",
     "bandWidthInputs",
@@ -184,6 +187,14 @@ def _assert_shape(projection: Dict[str, Any]) -> None:
     movement = projection["movementSignal"]
     for key in ("concept", "conceptLabel", "signalName", "unit"):
         assert key in movement, f"movementSignal missing {key}"
+
+    assumptions = projection["assumptionLedger"]
+    assert isinstance(assumptions, list) and assumptions, (
+        "projection must carry an explicit assumption ledger"
+    )
+    for assumption in assumptions:
+        for key in ("id", "label", "description"):
+            assert assumption.get(key), f"assumption missing {key}"
 
 
 # ---------------------------------------------------------------------------
@@ -382,9 +393,12 @@ class TestProjectionVocabularyOnTheWire:
     def _texts(self, projection: Dict[str, Any]) -> List[str]:
         texts = [projection["manualStepReplaced"], projection["magnitudeBand"]["label"]]
         texts += [s["conceptLabel"] for s in projection["affectedSignals"]]
+        for assumption in projection["assumptionLedger"]:
+            texts.append(assumption["label"])
+            texts.append(assumption["description"])
         return texts
 
-    def test_no_savings_or_guarantee_language_on_either_surface(self, client):
+    def test_no_savings_or_guarantee_language_on_projection_surfaces(self, client):
         org, run = _ids()
         _seed_run_with_projection(org, run)
 
@@ -394,6 +408,10 @@ class TestProjectionVocabularyOnTheWire:
             ],
             client.get(
                 f"/api/runs/{run}/opportunities/opp_001/enrichment",
+                headers=_auth(org),
+            ).json()["projection"],
+            client.get(
+                f"/api/runs/{run}/opportunities/opp_001/blueprint",
                 headers=_auth(org),
             ).json()["projection"],
         ]
@@ -462,6 +480,33 @@ class TestProjectionVocabularyOnTheWire:
             widths[label] = band["highPct"] - band["lowPct"]
 
         assert widths["capped"] >= widths["corroborated"]
+
+    def test_assumption_ledger_is_visible_on_projection_api_surfaces(self, client):
+        org, run = _ids()
+        _seed_run_with_projection(org, run)
+
+        responses = [
+            client.get(f"/api/runs/{run}/opportunities", headers=_auth(org)).json()[0][
+                "projection"
+            ],
+            client.get(
+                f"/api/runs/{run}/opportunities/opp_001/enrichment",
+                headers=_auth(org),
+            ).json()["projection"],
+            client.get(
+                f"/api/runs/{run}/opportunities/opp_001/blueprint",
+                headers=_auth(org),
+            ).json()["projection"],
+        ]
+        for projection in responses:
+            labels = [a["label"] for a in projection["assumptionLedger"]]
+            assert labels == [
+                "Agent handles the identified recurring cases",
+                "Adoption is complete for those cases",
+                "Upstream volume remains within its observed range",
+                "Residual cases still require human judgement",
+                "Projection applies only to the measured signal and horizon shown",
+            ]
 
 
 # ---------------------------------------------------------------------------
