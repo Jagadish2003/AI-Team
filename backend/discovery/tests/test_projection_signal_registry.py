@@ -151,7 +151,10 @@ def test_every_profile_is_internally_complete():
         )
         assert profile.movement_signal, f"{detector_id} has no movement_signal"
         assert profile.manual_step, f"{detector_id} has no manual_step"
-        assert profile.unit in ("count", "days", "hours", "ratio", "pct"), (
+        # "seconds" joins the duration units for operational detectors that
+        # measure age in seconds; model._BASIS_UNIT_BY_SIGNAL_UNIT maps it to the
+        # same "observed delay" basis as days/hours.
+        assert profile.unit in ("count", "days", "hours", "seconds", "ratio", "pct"), (
             f"{detector_id} has unknown unit {profile.unit!r}"
         )
         # A count/duration detector must resolve an instance field; a rate-based

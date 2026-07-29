@@ -292,6 +292,10 @@ _BASIS_UNIT_BY_SIGNAL_UNIT = {
     "count": "of the recurring instances",
     "days": "of the observed delay",
     "hours": "of the observed delay",
+    # Some operational detectors measure age in seconds rather than days/hours.
+    # It is the same "observed delay" concept — mapped explicitly so a band on a
+    # seconds-valued signal is not silently described as a share of instances.
+    "seconds": "of the observed delay",
     "ratio": "of the observed rate",
     "pct": "of the observed rate",
 }

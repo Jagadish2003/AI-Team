@@ -134,7 +134,12 @@ def _movement_phrase(signal: Mapping[str, Any]) -> str:
         phrase += f" ({name})"
     if isinstance(current, (int, float)) and not isinstance(current, bool):
         rendered = int(current) if float(current).is_integer() else round(float(current), 2)
-        suffix = {"days": " days", "hours": " hours", "pct": "%"}.get(str(unit), "")
+        suffix = {
+            "days": " days",
+            "hours": " hours",
+            "seconds": " seconds",
+            "pct": "%",
+        }.get(str(unit), "")
         phrase += f", currently {rendered:,}{suffix}" if isinstance(rendered, int) else (
             f", currently {rendered}{suffix}"
         )
