@@ -43,6 +43,8 @@ export const cacheKeys = {
   runEnrichment: (runId: string) => `runs/${runId}/enrichment`,
   runOppEnrichment: (runId: string, oppId: string) =>
     `runs/${runId}/opportunities/${oppId}/enrichment`,
+  runTraceGraph: (runId: string, oppId: string) =>
+    `runs/${runId}/opportunities/${oppId}/trace-graph`,
   runExecutiveReport: (runId: string) => `runs/${runId}/executive-report`,
 
   // ── Run Health dashboard ─────────────────────────────────────────────────
