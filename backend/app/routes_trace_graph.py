@@ -1,0 +1,174 @@
+"""
+routes_trace_graph.py — Release 2.0-B1 T1: the trace graph API.
+
+Exposes trace_graph.py's engine as a single, read-only, org-scoped endpoint:
+
+  GET /api/runs/{run_id}/opportunities/{opp_id}/trace-graph
+
+Mirrors routes_sprint4_t6.py's evidence-trace route contract exactly:
+  - 404 only for an unknown run or an opportunity absent from the run.
+  - Org-scoped: a run belonging to another org yields an empty
+    (available: false) trace, never another tenant's provenance.
+  - Never 404 for a merely empty/thin trace.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, List, Optional
+
+from fastapi import Depends, HTTPException
+from pydantic import BaseModel, Field
+
+from .security import require_auth
+from .rbac import require_role
+from . import db
+
+logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Response models
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TraceHopSummary(BaseModel):
+    hop_id: str
+    hop_type: str
+    label: str
+    origin: str
+    connector: Optional[str] = None
+    run_id: str
+    timestamp: Optional[str] = None
+    from_hop_id: Optional[str] = None
+    detail: Dict[str, Any] = Field(default_factory=dict)
+
+
+class JoinTraceSummary(BaseModel):
+    join_type: str
+    window_seconds: Optional[int] = None
+    delta_seconds: Optional[float] = None
+    within_window: bool
+    a_at: Optional[str] = None
+    b_at: Optional[str] = None
+    hop_id: Optional[str] = None
+
+
+class TraceGraphResponse(BaseModel):
+    """The full provenance chain for one opportunity (2.0-B1 AC1/AC2).
+
+    ``available`` is False (never 404) when the run belongs to another org or
+    the opportunity has no derivable chain — mirroring the evidence-trace and
+    enrichment routes' contract.
+    """
+    runId: str
+    oppId: str
+    hops: List[TraceHopSummary] = Field(default_factory=list)
+    joins: List[JoinTraceSummary] = Field(default_factory=list)
+    complete: bool = False
+    truncated: bool = False
+    available: bool = False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _require_run(run_id: str) -> Dict[str, Any]:
+    run = db.run_get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+    return run
+
+
+def _find_stored_opp(run_id: str, opp_id: str) -> Optional[Dict[str, Any]]:
+    opps = db.run_kv_get("opps", run_id, []) or []
+    return next((o for o in opps if isinstance(o, dict) and o.get("id") == opp_id), None)
+
+
+def _run_org_id(run: Dict[str, Any]) -> Optional[str]:
+    inputs = run.get("inputs") or {}
+    candidates = [
+        run.get("org_id"),
+        run.get("orgId"),
+        inputs.get("org_id") if isinstance(inputs, dict) else None,
+        inputs.get("orgId") if isinstance(inputs, dict) else None,
+    ]
+    for candidate in candidates:
+        if candidate:
+            return str(candidate)
+    return None
+
+
+def _load_trace(run: Dict[str, Any], run_id: str, opp_id: str):
+    """Org-scoped trace load. Returns None on any tenancy mismatch or failure —
+    never another tenant's provenance (same guard as _load_evidence_pointers)."""
+    try:
+        from app.middleware.tenancy import get_current_org_id
+        org_id = get_current_org_id()
+    except Exception as exc:
+        logger.debug("trace-graph skipped — org context unavailable: %s", exc)
+        return None
+
+    run_org_id = _run_org_id(run)
+    if run_org_id is not None and run_org_id != org_id:
+        logger.debug(
+            "trace-graph skipped — run %s belongs to org %s, request org %s",
+            run_id, run_org_id, org_id,
+        )
+        return None
+
+    try:
+        from .trace_graph import load_finding_trace
+        return load_finding_trace(run_id, opp_id)
+    except Exception as exc:
+        logger.debug("trace-graph load failed for run %s opp %s: %s", run_id, opp_id, exc)
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Route registration
+# ─────────────────────────────────────────────────────────────────────────────
+
+def register_trace_graph_routes(app) -> None:
+    if getattr(app.state, "trace_graph_routes_registered", False):
+        return
+    if any(getattr(r, "path", None) == "/api/runs/{run_id}/opportunities/{opp_id}/trace-graph" for r in app.routes):
+        app.state.trace_graph_routes_registered = True
+        return
+
+    @app.get(
+        "/api/runs/{run_id}/opportunities/{opp_id}/trace-graph",
+        response_model=TraceGraphResponse,
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+        tags=["runs"],
+    )
+    def get_trace_graph(run_id: str, opp_id: str) -> TraceGraphResponse:
+        """2.0-B1 (T1) — the complete provenance chain for one finding.
+
+        Walks finding -> contributing evidence -> source records, with every
+        hop carrying origin, connector, run id, and timestamp (AC1); where a
+        claim was corroborated by an MSP-B7 time-windowed join, the join type
+        and correlation window used are surfaced too, and a join outside its
+        window can never appear (AC2).
+        """
+        run = _require_run(run_id)
+
+        stored_opp = _find_stored_opp(run_id, opp_id)
+        if stored_opp is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Opportunity '{opp_id}' not found in run '{run_id}'",
+            )
+
+        trace = _load_trace(run, run_id, opp_id)
+        if trace is None:
+            return TraceGraphResponse(runId=run_id, oppId=opp_id, available=False)
+
+        return TraceGraphResponse(
+            runId=run_id,
+            oppId=opp_id,
+            hops=[TraceHopSummary(**hop.to_dict()) for hop in trace.hops],
+            joins=[JoinTraceSummary(**join.to_dict()) for join in trace.joins],
+            complete=trace.complete,
+            truncated=trace.truncated,
+            available=trace.complete,
+        )
