@@ -50,7 +50,10 @@ from .middleware.tenancy import get_current_org_id
 from .security import require_auth
 from .rbac import require_role
 
+from .pack_activation import compatibility_snapshot, gate_pack_activation
+from discovery.packs.pack_compatibility import PackIncompatibleError
 from discovery.packs.pack_config import get_pack_version, normalize_pack_ids
+from discovery.packs.platform_capabilities import get_platform_version
 from discovery.packs.template_registry import (
     get_template,
     normalize_template_ids,
@@ -228,6 +231,22 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
                 detail="pack_id is required",
             )
 
+        # 2.0-C1 T1 (AT-826 / AC1): a pack declaring an unmet platform-capability
+        # range or a required normalised concept this platform does not provide
+        # CANNOT be activated. This is the primary activation edge, so the refusal
+        # happens before any run record or KV entry exists — an incompatible pack
+        # never produces a half-created run. 409 Conflict + a reason naming every
+        # unmet requirement, mirroring the roadmap-connector connect guard.
+        try:
+            compatibility_reports = gate_pack_activation(
+                org_id=get_current_org_id(), pack_ids=eff_pack_ids
+            )
+        except PackIncompatibleError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        pack_compatibility = compatibility_snapshot(compatibility_reports)
+        platform_version_at_launch = get_platform_version()
+
         # Versions are captured at launch so historical provenance cannot drift
         # when a registry entry or pack is updated later.
         pack_versions = {
@@ -278,6 +297,12 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             "packId": eff_pack,
             "packIds": eff_pack_ids,
             "packVersions": pack_versions,
+            # 2.0-C1 T1: the compatibility verdict AS EVALUATED AT LAUNCH (declared
+            # range, required concepts, platform version). Captured here for the
+            # same reason as packVersions — a later registry or platform change
+            # must not rewrite what this run was actually launched against.
+            "packCompatibility": pack_compatibility,
+            "platformVersion": platform_version_at_launch,
             "focusId": eff_focus,
             "industryId": body.industry_id,
             "templateId": eff_template,
@@ -301,6 +326,10 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         # changes and downstream multi-pack execution can read pack_ids.
         run_kv_set("pack_ids", run_id, eff_pack_ids)
         run_kv_set("pack_versions", run_id, pack_versions)
+        # 2.0-C1 T1: run-scoped compatibility snapshot — the accurate pack
+        # range/version record run health reads instead of re-deriving it from the
+        # mutable registry after the fact.
+        run_kv_set("pack_compatibility", run_id, pack_compatibility)
         run_kv_set("template_ids", run_id, eff_template_ids)
         run_kv_set("template_versions", run_id, template_versions)
         run_kv_set("effective_configuration", run_id, effective)

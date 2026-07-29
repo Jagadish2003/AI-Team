@@ -1492,6 +1492,9 @@ def run(
         is_cloud_ops_pack,
         is_security_ops_pack,
     )
+    from .packs.pack_compatibility import assert_selection_activatable
+    from .packs.platform_capabilities import get_platform_version
+
     _selected_pack_args = normalize_pack_ids(
         list(pack_ids or []) + ([pack] if pack else [])
     )
@@ -1513,6 +1516,18 @@ def run(
             continue
         _seen_pack_ids.add(_pid)
         _pack_configs.append((_sel, _cfg))
+
+    # 2.0-C1 T1 (AT-826 / AC1): the LAST activation edge — the execution point.
+    # The API edges (/stack-builder/launch and /runs/{id}/compute) already refuse an
+    # incompatible selection with a 409, but a CLI/direct caller reaches the runner
+    # without passing through either, so the gate is re-asserted here. Deliberately
+    # NOT wrapped in a try/except: an incompatible pack must fail the run loudly
+    # with a reason naming the unmet requirement, exactly like the cloud_ops
+    # four-part-contract violation. Every shipped pack satisfies its declaration
+    # against the current platform version, so this never fires for a normal run.
+    _pack_compatibility = assert_selection_activatable(
+        [_cfg["packId"] for _, _cfg in _pack_configs]
+    )
 
     primary_pack_arg, pack_config = _pack_configs[0]
     pack_id = pack_config["packId"]
@@ -2879,6 +2894,14 @@ def run(
         "packIds": [m["packId"] for m in pack_execution_meta],
         "packVersions": {m["packId"]: m["packVersion"] for m in pack_execution_meta},
         "packs": pack_execution_meta,
+        # 2.0-C1 T1 (AT-826): the platform version this run executed against and the
+        # compatibility verdict per pack (declared range + required concepts), so run
+        # health reports the pack's state and version from what ACTUALLY ran instead
+        # of re-deriving it from a registry that may have moved on.
+        "platformVersion": get_platform_version(),
+        "packCompatibility": {
+            report.pack_id: report.to_dict() for report in _pack_compatibility
+        },
         "startedAt": started_at, "completedAt": datetime.now(timezone.utc).isoformat(),
         "inputs": org_ctx, "opportunities": opportunities,
         "perSystem": _per_system,

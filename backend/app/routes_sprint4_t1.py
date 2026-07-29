@@ -553,6 +553,38 @@ def _run_trackb_and_persist(
         )
 
 
+def _gate_pack_activation(
+    run_id: str, run: Dict[str, Any], body: "ComputeRequest"
+) -> None:
+    """Refuse an incompatible pack selection before compute starts (2.0-C1 T1).
+
+    Resolves the SAME effective selection ``_run_trackb_and_persist`` resolves —
+    the launch record's ``packIds`` plus the request's ``pack_ids``/``pack`` — so
+    the synchronous refusal and the background execution can never disagree about
+    which packs were selected. Raises HTTP 409 with a reason naming every unmet
+    requirement (AC1).
+    """
+    from .middleware.tenancy import get_current_org_id_optional
+    from .pack_activation import gate_pack_activation
+    from discovery.packs.pack_compatibility import PackIncompatibleError
+    from discovery.packs.pack_config import normalize_pack_ids
+
+    selected_pack_ids = normalize_pack_ids(
+        list(_pack_ids_for_run(run) or [])
+        + list(body.pack_ids or [])
+        + ([body.pack] if body.pack else [])
+    )
+    org_id = (
+        _org_id_for_run(run, get_current_org_id_optional() or "default") or "default"
+    )
+    try:
+        gate_pack_activation(
+            org_id=org_id, pack_ids=selected_pack_ids, run_id=run_id
+        )
+    except PackIncompatibleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 def register_sprint4_t1_routes(app: FastAPI) -> None:
     """Register Sprint 4 T1 endpoints on the existing FastAPI app."""
 
@@ -566,6 +598,15 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
         run = db.run_get(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+
+        # 2.0-C1 T1 (AT-826 / AC1): the SECOND activation edge. A run may be
+        # computed without ever passing through /stack-builder/launch (direct
+        # compute callers, replays of an older run record), so the same gate runs
+        # here against the same effective selection _run_trackb_and_persist will
+        # use — the launch record's packIds plus whatever this request supplied.
+        # Refused synchronously with 409 so no background task is ever queued for
+        # an incompatible pack and the status is not flipped to "running".
+        _gate_pack_activation(run_id, run, body)
 
         # SN-CONNECT-1 + JIRA-CONNECT-1: run connector health checks at run start.
         # Results stored in KV — S1 reads these to show Live/Fixture badges.

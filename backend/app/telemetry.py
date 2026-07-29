@@ -137,6 +137,23 @@ class PackExecutedPayload(TypedDict, total=False):
     duration_ms: NotRequired[int]
 
 
+class PackActivationRefusedPayload(TypedDict, total=False):
+    """2.0-C1 T1 (AT-826) — a pack activation refused on compatibility grounds.
+
+    Emitted at an activation edge when a pack declares a platform-capability range
+    or required normalised concept this platform does not satisfy. Carries the
+    NAMED unmet requirements so support can see exactly what was unmet without
+    reconstructing it from a registry that may have moved on. No credentials, no
+    PII — pack ids, concept ids, and version strings only.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_ids: NotRequired[list[str]]
+    platform_version: NotRequired[str]
+    unmet: NotRequired[list[dict]]
+    reason: NotRequired[str]
+
+
 class DetectorFiredPayload(TypedDict, total=False):
     """T1-S14-C — one record per detector that fires in a run."""
     detector_id: NotRequired[str]
@@ -906,6 +923,10 @@ register_event_type("run.signal_snapshot", RunSignalSnapshotPayload)
 # panel consumes this historical snapshot instead of reconstructing an old run
 # from the mutable pack registry.
 register_event_type("run.pack_executed", PackExecutedPayload)
+# 2.0-C1 T1 (AT-826): emitted at an activation edge when an incompatible pack is
+# refused, so a refusal is observable in run health and support tooling rather
+# than existing only as an HTTP 409 the caller saw once.
+register_event_type("pack.activation_refused", PackActivationRefusedPayload)
 # T3-S11-A Sprint 11
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
 # T3-S12-A T7 Sprint 12

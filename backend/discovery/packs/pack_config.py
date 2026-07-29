@@ -42,6 +42,14 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "Service Cloud",
         "domain":        "service_cloud",
         "pack_domain":   "service_cloud",
+        # 2.0-C1 T1 (AT-826): platform-capability range + required normalised
+        # concepts. See COMPATIBILITY_KEY below and pack_compatibility.py.
+        "compatibility": {
+            "minPlatformVersion": "1.0.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts":   ["case_workflow"],
+            "optionalConcepts":   ["cross_system_link"],
+        },
         "detectors": [
             "discovery.detectors.repetition",
             "discovery.detectors.handoff_friction",
@@ -64,6 +72,12 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "nCino Lending",
         "domain":        "ncino",
         "pack_domain":   "ncino",
+        "compatibility": {
+            "minPlatformVersion": "1.0.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts":   ["loan_origination_workflow"],
+            "optionalConcepts":   ["case_workflow", "cross_system_link"],
+        },
         "detectors": [
             "discovery.detectors.loan_origination_routing_friction",
             "discovery.detectors.covenant_tracking_gap", 
@@ -90,6 +104,13 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "STRS Benefits Administration",
         "domain":        "strs_benefits",
         "pack_domain":   "strs_benefits",
+        "compatibility": {
+            "minPlatformVersion": "1.0.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts":   ["benefit_administration_workflow"],
+            # STRS corroborates against Jira/ServiceNow when connected.
+            "optionalConcepts":   ["cross_system_link"],
+        },
         "detectors": [
             "discovery.detectors.application_stall",
             "discovery.detectors.benefit_election_deadline",
@@ -115,6 +136,12 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "SQL Server Operational Signals",
         "domain":        "sqlserver_opsignal",
         "pack_domain":   "sqlserver_opsignal",
+        "compatibility": {
+            "minPlatformVersion": "1.0.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts":   ["db_operational_signal"],
+            "optionalConcepts":   ["cross_system_link"],
+        },
         "detectors": [
             "discovery.detectors.db_ticket_volume_surge",
             "discovery.detectors.db_sla_breach_rate",
@@ -142,6 +169,13 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "GitHub Engineering Signals",
         "domain":        "github_engineering",
         "pack_domain":   "github_engineering",
+        "compatibility": {
+            "minPlatformVersion": "1.0.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts":   ["code_activity_signal"],
+            # Jira corroboration elevates PR-bottleneck confidence when present.
+            "optionalConcepts":   ["cross_system_link"],
+        },
         "detectors": [
             "discovery.detectors.github_pr_bottleneck",
             "discovery.detectors.github_commit_concentration",
@@ -166,6 +200,15 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "Enterprise Operations Intelligence",
         "domain":        "enterprise_ops",
         "pack_domain":   "enterprise_ops",
+        # Findings emerge from the GAP between ServiceNow incidents and Jira
+        # issues, so the cross-system link is a HARD requirement here, not an
+        # optional corroborator: without it there is nothing for this pack to see.
+        "compatibility": {
+            "minPlatformVersion": "1.0.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts":   ["incident_workflow", "cross_system_link"],
+            "optionalConcepts":   [],
+        },
         "detectors": [
             "discovery.detectors.ent_incident_resolution_lag",
             "discovery.detectors.ent_change_incident_correlation",
@@ -193,6 +236,26 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "Cloud Operations",
         "domain":        "cloud_ops",
         "pack_domain":   "cloud_ops",
+        # 2.0-C1 T1 (AT-826): this pack's detectors read the MSP-B4 deterministic
+        # signatures and group-routing history plus the MSP-B0/B7 operational-event
+        # stream, so those are HARD requirements and the range floor is the MSP
+        # release. MSP-B3 (CMDB) and MSP-B5 (runbooks) are declared OPTIONAL
+        # because the pack degrades honestly without them by design — the
+        # recurrence stays unlocated (MSP-B4 AC5) and the runbook leg downgrades to
+        # "runbook match unavailable" (MSP-B6 T6). Declaring them as required would
+        # misreport a graceful degradation as an incompatibility.
+        "compatibility": {
+            "minPlatformVersion": "1.9.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts": [
+                "incident_workflow",
+                "resolution_signature",
+                "incident_identity_signature",
+                "assignment_group_routing",
+                "operational_event",
+            ],
+            "optionalConcepts": ["cmdb_dependency", "runbook_match"],
+        },
         # MSP-B6 T2 (AT-737) record/stream detectors + T3 (AT-738) shared-CI hotspot.
         "detectors": [
             "discovery.detectors.cloud_ops_recurring_resolution_loop",
@@ -236,6 +299,19 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "Security Operations",
         "domain":        "security_ops",
         "pack_domain":   "security_ops",
+        # 2.0-C1 T1 (AT-826): consumes MSP-B11's SecOps workflow signal, so both
+        # SecOps concepts are hard requirements and the floor is the MSP release.
+        # MSP-B3's CMDB is optional — the shared-infra concentration detector
+        # narrows with it and still emits without it.
+        "compatibility": {
+            "minPlatformVersion": "1.9.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts": [
+                "security_incident_workflow",
+                "vulnerability_workflow",
+            ],
+            "optionalConcepts": ["cmdb_dependency", "incident_workflow"],
+        },
         # Second sibling of the Cloud-Operations pack on the same template model.
         # MSP-B12 T2 (Section 1) detectors — consume only MSP-B11's SecOps workflow
         # signal (sn_data['secops'] / ['vulnerability_response']) + B3's
@@ -300,6 +376,32 @@ DEFAULT_PACK = "service_cloud"
 # logic changes. DEFAULT_PACK_VERSION is the fallback for a pack that has not
 # declared one explicitly.
 DEFAULT_PACK_VERSION = "1.0.0"
+
+# 2.0-C1 T1 (AT-826): the registry key each pack declares its compatibility under.
+# Shape (all four keys optional; see platform_capabilities.py for the vocabulary):
+#
+#   "compatibility": {
+#       "minPlatformVersion": "1.9.0",     # inclusive floor;  None ⇒ no floor
+#       "maxPlatformVersion": None,        # inclusive ceiling; None ⇒ open-ended
+#       "requiredConcepts":   [...],       # gating — an unmet concept refuses activation
+#       "optionalConcepts":   [...],       # advisory — the pack degrades honestly without these
+#   }
+#
+# The gate lives in pack_compatibility.py, not here: this module stays the
+# declaration surface (like packVersion) so a pack's requirements are read in the
+# same place as the rest of its config.
+COMPATIBILITY_KEY = "compatibility"
+
+# Fallback for a pack that has not declared a "compatibility" block. Deliberately
+# PERMISSIVE (no bounds, no required concepts) so an undeclared pack behaves
+# exactly as it did before AT-826 — the declaration is enforced by a structural
+# test over PACK_REGISTRY, not by silently refusing to run an undeclared pack.
+DEFAULT_PACK_COMPATIBILITY: Dict[str, Any] = {
+    "minPlatformVersion": None,
+    "maxPlatformVersion": None,
+    "requiredConcepts": [],
+    "optionalConcepts": [],
+}
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -374,6 +476,59 @@ def get_pack_config_path(pack_id: Optional[str] = None) -> Optional[str]:
     config change alters behaviour with no code deploy (AC2).
     """
     return get_pack(pack_id).get("config_path")
+
+
+def get_pack_compatibility_declaration(
+    pack_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return a pack's declared compatibility block (2.0-C1 T1 / AT-826).
+
+    Always returns a complete block: a pack that declares nothing (or declares a
+    partial block) is filled from ``DEFAULT_PACK_COMPATIBILITY``, so callers never
+    need to handle a missing key. Concept lists are normalised to de-duplicated,
+    order-preserving lists of non-empty strings.
+
+    Resolution follows ``get_pack()`` — an unknown pack id reads the DEFAULT
+    pack's declaration, exactly as it reads the default pack's detectors, so an
+    unknown id is never refused on compatibility grounds it does not have.
+    """
+    declared = get_pack(pack_id).get(COMPATIBILITY_KEY) or {}
+    if not isinstance(declared, dict):
+        declared = {}
+
+    def _concepts(key: str) -> List[str]:
+        raw = declared.get(key, DEFAULT_PACK_COMPATIBILITY[key])
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, (list, tuple)):
+            return []
+        seen: set[str] = set()
+        out: List[str] = []
+        for entry in raw:
+            if not isinstance(entry, str):
+                continue
+            concept = entry.strip()
+            if not concept or concept in seen:
+                continue
+            seen.add(concept)
+            out.append(concept)
+        return out
+
+    def _bound(key: str) -> Optional[str]:
+        raw = declared.get(key, DEFAULT_PACK_COMPATIBILITY[key])
+        if not isinstance(raw, str):
+            return None
+        bound = raw.strip()
+        return bound or None
+
+    return {
+        "minPlatformVersion": _bound("minPlatformVersion"),
+        "maxPlatformVersion": _bound("maxPlatformVersion"),
+        "requiredConcepts": _concepts("requiredConcepts"),
+        "optionalConcepts": _concepts("optionalConcepts"),
+    }
+
+
 def is_strs_benefits_pack(pack_id: Optional[str] = None) -> bool:
     """
     Returns True when the active pack is STRS Benefits Administration.
