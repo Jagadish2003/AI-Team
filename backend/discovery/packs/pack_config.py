@@ -117,9 +117,13 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         #
         # 1.0.0 -> 1.1.0 by T2: the five detectors + their externalised thresholds
         # are a behaviour change, and this is the intentional bump that guard
-        # exists to force. Keep this in lockstep with packVersion in
-        # financial_services_cloud_pack_config.json (a test pins the two together).
-        "packVersion":   "1.1.0",
+        # exists to force. 1.1.0 -> 1.2.0 by T3: the FSC scorer calibration
+        # (financial_services_cloud_scorer.py's _FSC_SCORES + the three config
+        # dimension weights) changes how findings are scored and ranked, which is
+        # a pack-logic change by the same rule. Keep this in lockstep with
+        # packVersion in financial_services_cloud_pack_config.json (a test pins
+        # the two together).
+        "packVersion":   "1.2.0",
         "packName":      "Financial Services Cloud",
         "domain":        "financial_services_cloud",
         "pack_domain":   "financial_services_cloud",
@@ -133,7 +137,9 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         # T2: firing thresholds, the AC5 aggregation floor, and terminology load
         # from this external file (via financial_services_cloud_config.py) rather
         # than from inline detector constants, so replacing a PROVISIONAL number
-        # is a config edit. T3 fills its `calibration.impact_weights`.
+        # is a config edit. T3 filled `calibration` with the three dimension
+        # weights the FSC scorer ranks by (the per-detector base scores live in
+        # financial_services_cloud_scorer.py's _FSC_SCORES, with inline provenance).
         "config_path":   str(_PACKS_DIR / "financial_services_cloud_pack_config.json"),
         # Terminology is DATA, not code: every user-visible FSC string
         # (households, relationship groups, financial accounts, service

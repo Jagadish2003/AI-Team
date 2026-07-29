@@ -103,8 +103,37 @@ class FscScope:
 
 @dataclass(frozen=True)
 class FscCalibration:
+    """Scorer calibration (2.0-D1 T3).
+
+    ``impact_weights`` are the relative ranking weights across the three dimensions
+    D1 names. ``effort_concentration`` / ``breadth`` / ``automation_shape`` carry the
+    per-dimension detail the scorer derives each dimension score from, so a value
+    edit alters ranked order with no code deploy.
+
+    ``confidence`` documents the honest-confidence posture the T2 detectors already
+    apply — the scorer NEVER recomputes confidence from it.
+
+    Per-detector BASE scores are deliberately NOT here: they live in ``_FSC_SCORES``
+    in the scorer module, following the ``_LENDING_SCORES`` convention every pack
+    scorer on this branch uses, each value carrying inline provenance.
+    """
     confidence: Dict[str, Any] = field(default_factory=dict)
     impact_weights: Dict[str, float] = field(default_factory=dict)
+    effort_concentration: Dict[str, Any] = field(default_factory=dict)
+    breadth: Dict[str, Any] = field(default_factory=dict)
+    automation_shape: Dict[str, Any] = field(default_factory=dict)
+    calibration_status: str = ""
+
+    def automation_shape_for(self, detector_id: str) -> Optional[float]:
+        """Configured automation shape for a detector, or None when unset."""
+        by_detector = self.automation_shape.get("by_detector") or {}
+        value = by_detector.get(str(detector_id))
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+        return None
+
+    def is_provisional(self) -> bool:
+        return "PROVISIONAL" in str(self.calibration_status).upper()
 
 
 @dataclass(frozen=True)
@@ -221,6 +250,14 @@ def load_fsc_config(path: Optional[str] = None) -> FscPackConfig:
         ],
     )
 
+    # The calibration block's own provisional marker, read from the RAW tree so it
+    # survives _strip_meta (which drops keys beginning with "_"). Falls back to the
+    # file-level marker when the block does not carry its own.
+    calibration_status_raw = str(
+        (raw.get("calibration", {}) or {}).get("calibration_status", "")
+        or calibration_status
+    )
+
     calibration_raw = data.get("calibration", {}) or {}
     calibration = FscCalibration(
         confidence=dict(calibration_raw.get("confidence", {}) or {}),
@@ -229,6 +266,10 @@ def load_fsc_config(path: Optional[str] = None) -> FscPackConfig:
             for k, v in (calibration_raw.get("impact_weights", {}) or {}).items()
             if isinstance(v, (int, float)) and not isinstance(v, bool)
         },
+        effort_concentration=dict(calibration_raw.get("effort_concentration", {}) or {}),
+        breadth=dict(calibration_raw.get("breadth", {}) or {}),
+        automation_shape=dict(calibration_raw.get("automation_shape", {}) or {}),
+        calibration_status=calibration_status_raw,
     )
 
     config = FscPackConfig(
