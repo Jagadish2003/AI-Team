@@ -184,15 +184,20 @@ class TestVersionBumpGuard:
     the pins below. T2 (detectors) and T3 (scorer calibration) both trip this.
     """
 
-    # Pinned to financial_services_cloud packVersion 1.1.0.
+    # Pinned to financial_services_cloud packVersion 1.2.0.
     #
-    # T1 registration state was 1.0.0 (empty detector list, five label entries,
-    # three guardrails). 2.0-D1 T2 added the five FSC detector modules — a
-    # behaviour change — so it bumped packVersion 1.0.0 -> 1.1.0 and updated these
-    # pins. That is exactly the intentional pack-version update this guard exists
-    # to force, and it is the first time it has fired in anger.
-    PINNED_VERSION = "1.1.0"
-    PINNED_FINGERPRINT = "a03d6b1cebb1cf9d287d3a81a615a3c804c75c3faa0ac02d8d626d8496e5182a"
+    # History of this pin — each step is an intentional bump this guard forced:
+    #   1.0.0  T1 registration (empty detector list, five label entries).
+    #   1.1.0  T2 added the five detector modules (a behaviour change).
+    #   1.2.0  T3 added the scorer calibration (a pack-logic change).
+    #
+    # T3 also WIDENED the fingerprint to cover the calibration surface (the
+    # dimension weights and the per-detector automation shape). Before that, a
+    # weight edit — which changes the ranked order of every FSC finding — would not
+    # have tripped this guard, so a calibration change could have shipped without
+    # the version moving. 2.0-A2 confounder detection reads that version.
+    PINNED_VERSION = "1.2.0"
+    PINNED_FINGERPRINT = "d47f15da3e2d4d362b01eb5eb43a8d10c6a3fe7e29f56f40b6b4f8d6ffba2c2b"
 
     @staticmethod
     def _surface_fingerprint():
@@ -206,6 +211,18 @@ class TestVersionBumpGuard:
                 for key, entry in sorted(labels.items())
             },
         }
+        # T3: the scoring surface is part of the pack's behaviour, so a calibration
+        # edit must require a version bump exactly as a detector change does.
+        try:
+            from discovery.packs.financial_services_cloud_config import get_calibration
+        except ModuleNotFoundError:  # pragma: no cover
+            from backend.discovery.packs.financial_services_cloud_config import (  # type: ignore
+                get_calibration,
+            )
+        calibration = get_calibration()
+        surface["impact_weights"] = calibration.impact_weights
+        surface["automation_shape"] = calibration.automation_shape.get("by_detector", {})
+
         blob = json.dumps(surface, sort_keys=True, default=str)
         return hashlib.sha256(blob.encode()).hexdigest()
 
@@ -538,15 +555,20 @@ class TestNoNewMachinery:
             )
         assert load_fsc_config().pack_version == m.get_pack_version(PACK_ID)
 
-    def test_scorer_impact_weights_are_still_t3s_job(self):
-        """T2 must not invent scorer weights — an invented weight silently ranks."""
+    def test_scorer_impact_weights_are_populated_by_t3(self):
+        """T2 deliberately left these EMPTY (an invented weight silently ranks);
+        2.0-D1 T3 filled them with the three dimensions D1 names. Detailed scorer
+        coverage lives in test_fsc_scorer.py — this only pins that the T2 placeholder
+        was actually replaced rather than left dangling."""
         try:
             from discovery.packs.financial_services_cloud_config import get_calibration
         except ModuleNotFoundError:  # pragma: no cover
             from backend.discovery.packs.financial_services_cloud_config import (  # type: ignore
                 get_calibration,
             )
-        assert get_calibration().impact_weights == {}
+        weights = get_calibration().impact_weights
+        assert set(weights) == {"effort_concentration", "breadth", "automation_shape"}
+        assert round(sum(weights.values()), 6) == 1.0
 
 
 # ── Registry honesty (story item 5) ──────────────────────────────────────────────

@@ -2277,6 +2277,13 @@ def run(
         is_security_ops_detector,
         rank_security_ops_findings,
     )
+    # 2.0-D1 T3: FSC scoring calibration (per-detector base scores in the scorer's
+    # _FSC_SCORES with inline provenance; the three dimension weights in pack config).
+    from .packs.financial_services_cloud_scorer import (
+        score_financial_services_cloud,
+        is_financial_services_cloud_detector,
+        rank_fsc_findings,
+    )
     from .evidence_builder import build_evidence
     # R16-B1 (T3): stable cross-run opportunity identity, computed at assembly.
     from .opportunity_identity import (
@@ -2687,6 +2694,19 @@ def run(
                     _rank_err,
                 )
 
+        # 2.0-D1 T3: FSC ops-impact ranking, computed once per run so the three
+        # config-weighted dimensions normalise across the whole finding SET.
+        _fsc_ranking: Dict[int, Dict[str, Any]] = {}
+        if is_financial_services_cloud_pack(pack_id):
+            try:
+                _fsc_ranking = rank_fsc_findings(detector_results)
+            except Exception as _rank_err:  # noqa: BLE001 — ranking is non-blocking.
+                logger.warning(
+                    "financial_services_cloud ops-impact ranking failed "
+                    "(non-blocking): %s",
+                    _rank_err,
+                )
+
         pack_opportunities: List[Dict[str, Any]] = []
         for dr in detector_results:
             # Select scorer based on pack — this pack scores ONLY its own detectors
@@ -2721,6 +2741,13 @@ def run(
                 scored = score_cloud_ops(dr, ranking=_cloud_ops_ranking)
             elif is_security_ops_pack(pack_id) and is_security_ops_detector(dr.detector_id):
                 scored = score_security_ops(dr, ranking=_security_ops_ranking)
+            elif (
+                is_financial_services_cloud_pack(pack_id)
+                and is_financial_services_cloud_detector(dr.detector_id)
+            ):
+                # 2.0-D1 T3: FSC-specific calibration. Same two-key guard as every
+                # other pack, so no pack ever applies another pack's calibration.
+                scored = score_financial_services_cloud(dr, ranking=_fsc_ranking)
             else:
                 # R16-C1 T1: pass weighting context so the scorer can read
                 # role/priority for dr.signal_source (modulation is T2 work).

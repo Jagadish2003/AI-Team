@@ -15,7 +15,7 @@
     ]
   },
 
-  "packVersion": "1.1.0",
+  "packVersion": "1.2.0",
 
   "terminology": {
     "_note": "Machine-readable FSC vocabulary. The glossary keys MUST match the _terminology keys in financial_services_cloud_ui_labels.json — a contract test pins this so the two cannot drift. User-visible strings live in the label file, not here.",
@@ -90,13 +90,49 @@
   },
 
   "calibration": {
-    "_note": "Scorer calibration. 2.0-D1 T3 owns the ops-impact weights; T2 populates only the confidence posture its detectors actually apply, so nothing here is a placeholder pretending to be a weight.",
+    "_note": "Scorer calibration (2.0-D1 T3). Read by financial_services_cloud_scorer.py; NO scorer logic lives here. The three dimensions D1 names — effort concentration, breadth, automation shape — are weighted here, so changing a weight alters the ranked order of FSC findings with no code deploy. The per-detector BASE scores (tier/impact/effort/roadmap_stage) are deliberately NOT here: they live in _FSC_SCORES in the scorer module, following the _LENDING_SCORES convention every pack scorer on this branch uses, each value carrying an inline provenance comment.",
+    "calibration_status": "PROVISIONAL - NOT DERIVED FROM MEASURED FSC DATA",
+
     "confidence": {
+      "_note": "The honest-confidence posture the T2 detectors already apply. The scorer NEVER recomputes confidence — it carries the level the detector set on its four-part contract, so a single-source finding stays capped. These values document what the pack boundary enforces; they are not a knob the scorer reads to raise confidence.",
       "single_source_cap": "MEDIUM",
       "corroborated_level": "HIGH"
     },
+
     "impact_weights": {
-      "_note": "T3 populates. Deliberately empty rather than guessed — an invented weight would silently rank findings."
+      "_note": "Relative ranking weights across the three dimensions D1 names. They must sum to 1.0 (a contract test asserts it) so the composite ops-impact score stays in 0..1 and weights are readable as percentages. PROVISIONAL: the ordering they express is a reasoned judgement, not a measurement — see _basis on each dimension block below.",
+      "effort_concentration": 0.45,
+      "breadth": 0.30,
+      "automation_shape": 0.25
+    },
+
+    "effort_concentration": {
+      "_note": "How the raw effort magnitude is read per detector: volume x duration where the finding has a time dimension, volume alone where it does not. Normalised across the ranked SET by the scorer, so this block carries no scale.",
+      "_basis": "PROVISIONAL. Weighted highest of the three because effort concentration is the only dimension expressed in work actually consumed — the others describe the shape of that work. Mirrors the cloud_ops ops-impact scorer, which also ranks effort concentration first. Not measured.",
+      "volume_only_detectors": [
+        "FSC_SERVICING_REQUEST_RECURRENCE",
+        "FSC_REFERRAL_HANDOFF_FRICTION",
+        "FSC_CROSS_OBJECT_REWORK"
+      ]
+    },
+
+    "breadth": {
+      "_note": "How many distinct PERMITTED units a finding touches — households (as counts), financial accounts, teams, queues, service-process types. Never an individual: breadth counts units, and the AC5 aggregation floor governs what a unit may be.",
+      "_basis": "PROVISIONAL. Weighted second: a pattern spanning several households or teams is a broader case for automation than the same effort concentrated in one place. Not measured.",
+      "minimum": 1.0
+    },
+
+    "automation_shape": {
+      "_note": "Trivially-automatable vs judgment-heavy, 0..1, per detector. Unlike cloud_ops (which derives this from median MTTR), FSC findings carry DWELL time rather than resolution time — dwell measures waiting, not work, so deriving automation shape from it would be wrong. It is therefore a per-detector judgement about the SHAPE OF THE WORK, which is exactly the kind of value that belongs in config rather than in a detector body.",
+      "_basis": "PROVISIONAL, but the ORDERING is deliberate and defensible: repeated data maintenance (address changes, duplicated record upkeep) is the most automatable FSC work; referral routing is partly automatable; queue ageing is a capacity question more than an automation one; and an approval or suitability review is the LEAST automatable — it is a regulated human decision, which is why that detector also carries a compliance guardrail. A weight edit here changes ranked order with no code deploy.",
+      "default": 0.5,
+      "by_detector": {
+        "FSC_SERVICING_REQUEST_RECURRENCE": 0.85,
+        "FSC_CROSS_OBJECT_REWORK": 0.80,
+        "FSC_REFERRAL_HANDOFF_FRICTION": 0.60,
+        "FSC_SERVICE_QUEUE_AGEING": 0.45,
+        "FSC_APPROVAL_REVIEW_CYCLE": 0.20
+      }
     }
   }
 }
