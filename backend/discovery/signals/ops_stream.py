@@ -411,6 +411,19 @@ class OpsEventStream:
         signals.sort(key=lambda s: (s.event_signature, s.resource_id, s.active_period_start))
         return signals
 
+    def has_capacity(self) -> bool:
+        """True while the run's event budget can still process another event.
+
+        The read side of MSP-B7 T4's budget, exposed so a POLLING producer can stop
+        *fetching* once the budgeted window is full instead of paying for provider
+        pages whose events :meth:`admit` will only defer. The budget's purpose is to
+        stop the run processing everything (see :mod:`discovery.signals.budget`);
+        without this a producer with an unbounded backlog keeps calling the provider
+        forever while every event is deferred — the budget bounds the data but never
+        the work. An unbudgeted stream always has capacity.
+        """
+        return self._budget.has_capacity()
+
     def budget_report(self) -> BudgetReport:
         """The run's event-budget outcome (MSP-B7 T4).
 

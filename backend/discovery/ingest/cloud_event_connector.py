@@ -53,11 +53,35 @@ Deletes / tombstones (R16-A1 §5): ``reports_deletes = False`` — a cloud event
 stream is append-only observation history; a fired alarm or a logged API call is
 never retracted upstream, so there is no deletion to propagate. The limitation is
 declared, not faked.
+
+Bounded per-run work (MSP-B1 — the poll loop must end)
+-----------------------------------------------------
+A scope's backlog can be far larger than one poll (CloudTrail's ``LookupEvents``
+retains 90 days and is rate-limited to a couple of calls a second), so the
+continuation loop is BOUNDED per run by three rules, checked only between polls of
+the same scope:
+
+1. **Event budget** — MSP-B7 T4's per-run budget stops the *fetching*, not just the
+   admission. Once :meth:`OpsEventStream.has_capacity` is False every further event
+   would be deferred anyway, so continuing to page the provider buys nothing.
+2. **Per-scope poll cap** (:data:`DEFAULT_MAX_POLLS_PER_SCOPE`) — one scope's
+   backlog can never monopolise the run.
+3. **Wall-clock deadline** (:data:`DEFAULT_POLL_DEADLINE_SECONDS`) — volume is not
+   time: a throttled provider can spend minutes on a single page. The deadline is
+   consulted for CONTINUATION polls only, so every scope still gets its first poll
+   and a late scope is never starved by an earlier one's backlog.
+
+Stopping early is NOT truncation: the scope's advanced position rides the terminal
+batch's checkpoint, so the next run resumes exactly where this one stopped. Every
+early stop is logged at WARNING and reported by :meth:`poll_report` (the R18-C2
+connector-panel artifact), because a partial ingest must never read as a clean one.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional
@@ -85,6 +109,61 @@ CHECKPOINT_VERSION = 1
 
 #: ``source_artifact_type`` stamped on every event's OBSERVED evidence pointer.
 CLOUD_EVENT_ARTIFACT_TYPE = "cloud_event"
+
+#: Default cap on CONTINUATION polls of a single scope within one run (the first
+#: poll of a scope is always performed). Each poll already follows the provider's
+#: own pagination internally, so this bounds a scope to a few thousand events per
+#: run and leaves the remainder to the next run. ``0`` = unbounded.
+DEFAULT_MAX_POLLS_PER_SCOPE = 4
+
+#: Default wall-clock budget (seconds) for one run's whole poll phase. Bounds TIME
+#: rather than volume, which is what a rate-limited/throttled provider actually
+#: costs. Consulted for continuation polls only. ``0`` = unbounded.
+DEFAULT_POLL_DEADLINE_SECONDS = 180.0
+
+#: Why a scope stopped paging before its backlog drained (reported, never silent).
+STOP_BUDGET = "event_budget_exhausted"
+STOP_POLL_CAP = "max_polls_per_scope"
+STOP_DEADLINE = "poll_deadline_seconds"
+
+
+def _configured_max_polls_per_scope() -> int:
+    """Per-scope continuation cap from ``CLOUD_EVENT_MAX_POLLS_PER_SCOPE``.
+
+    The env name is spelled literally (not via a constant) so the ingest-layer env
+    guard can statically confirm it is a numeric tuning knob and not a credential.
+    """
+    raw = os.environ.get("CLOUD_EVENT_MAX_POLLS_PER_SCOPE")
+    if raw is None or not str(raw).strip():
+        return DEFAULT_MAX_POLLS_PER_SCOPE
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        logger.warning(
+            "cloud_event_connector: CLOUD_EVENT_MAX_POLLS_PER_SCOPE=%r is not an "
+            "integer — using the default %d", raw, DEFAULT_MAX_POLLS_PER_SCOPE,
+        )
+        return DEFAULT_MAX_POLLS_PER_SCOPE
+    return max(0, value)
+
+
+def _configured_poll_deadline_seconds() -> float:
+    """Poll-phase wall-clock budget from ``CLOUD_EVENT_POLL_DEADLINE_SECONDS``.
+
+    Literal env name for the same reason as above.
+    """
+    raw = os.environ.get("CLOUD_EVENT_POLL_DEADLINE_SECONDS")
+    if raw is None or not str(raw).strip():
+        return DEFAULT_POLL_DEADLINE_SECONDS
+    try:
+        value = float(str(raw).strip())
+    except ValueError:
+        logger.warning(
+            "cloud_event_connector: CLOUD_EVENT_POLL_DEADLINE_SECONDS=%r is not a "
+            "number — using the default %s", raw, DEFAULT_POLL_DEADLINE_SECONDS,
+        )
+        return DEFAULT_POLL_DEADLINE_SECONDS
+    return max(0.0, value)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -239,6 +318,10 @@ class CloudEventConnector(ChangeBasedIngestor):
     provider: str = ""            # 'aws' | 'azure' — set by subclass or __init__
     connector_id: str = ""        # stable runner key — set by subclass or __init__
     reports_deletes = False       # append-only observation stream (see module docstring)
+    #: A cloud event is an observation, never an indexed retrieval artifact — so the
+    #: change runner must not emit per-event artifact_changed/freshness work for it
+    #: (see ChangeBasedIngestor.produces_retrieval_content).
+    produces_retrieval_content = False
 
     def __init__(
         self,
@@ -250,6 +333,8 @@ class CloudEventConnector(ChangeBasedIngestor):
         stream: Optional[OpsEventStream] = None,
         active_period_seconds: int = DEFAULT_ACTIVE_PERIOD_SECONDS,
         budget: Optional[int] = None,
+        max_polls_per_scope: Optional[int] = None,
+        poll_deadline_seconds: Optional[float] = None,
     ) -> None:
         if provider:
             self.provider = provider
@@ -264,6 +349,21 @@ class CloudEventConnector(ChangeBasedIngestor):
         self.stream = stream if stream is not None else OpsEventStream(
             active_period_seconds=active_period_seconds, budget=budget
         )
+        self.max_polls_per_scope = (
+            _configured_max_polls_per_scope()
+            if max_polls_per_scope is None
+            else max(0, int(max_polls_per_scope))
+        )
+        self.poll_deadline_seconds = (
+            _configured_poll_deadline_seconds()
+            if poll_deadline_seconds is None
+            else max(0.0, float(poll_deadline_seconds))
+        )
+        #: scope_key -> stop reason, for scopes whose backlog was not drained in the
+        #: last run (loud: read via :meth:`poll_report`). Reset per ingest_changes.
+        self._backlog_remaining: Dict[str, str] = {}
+        self._polls_performed = 0
+        self._scopes_polled = 0
 
     # ── ChangeBasedIngestor contract ─────────────────────────────────────────
     def ingest_changes(
@@ -282,12 +382,21 @@ class CloudEventConnector(ChangeBasedIngestor):
         The records carry the per-event normalised event (the same shape the
         bridge emits); the DEDUPLICATED view is the admission stream, read via
         :meth:`active_signals`.
+
+        Per-run work is BOUNDED (see the module docstring): a scope stops paging on
+        the event budget, the per-scope poll cap, or the wall-clock deadline, and the
+        undrained remainder resumes from the persisted position next run. Every early
+        stop is logged and reported by :meth:`poll_report`.
         """
         if not org_id or not str(org_id).strip():
             raise ValueError("org_id is required")
 
         positions = _decode_positions(since.value if since else None)
         running: Dict[str, str] = dict(positions)
+        self._backlog_remaining = {}
+        self._polls_performed = 0
+        self._scopes_polled = 0
+        started_at = time.monotonic()
 
         scopes = self.poll_source.list_scopes(org_id)
         logger.info(
@@ -300,8 +409,9 @@ class CloudEventConnector(ChangeBasedIngestor):
         # Poll + admit everything up front (admission is a side effect into the
         # stream), collecting the record-bearing pages so exactly one terminal
         # batch can be flagged is_complete=True — the runner needs one terminal
-        # batch to advance the checkpoint (R16-A1 / AT-378). Event VOLUME is bound
-        # by the B7 per-run budget enforced inside admission, not by this buffer.
+        # batch to advance the checkpoint (R16-A1 / AT-378). This buffer is bounded
+        # by the per-run poll bounds below (poll cap × deadline × B7 budget), which
+        # is what keeps a huge provider backlog from being buffered in one run.
         pages_out: List[tuple] = []  # (records, positions_snapshot)
         for scope in scopes:
             if scope.provider != self.provider:
@@ -320,8 +430,12 @@ class CloudEventConnector(ChangeBasedIngestor):
                 continue
 
             pos = positions.get(scope.scope_key, "")
+            polls = 0
+            self._scopes_polled += 1
             while True:
                 page = self.poll_source.poll(org_id, scope, pos)
+                polls += 1
+                self._polls_performed += 1
                 records: List[Dict[str, Any]] = []
                 for raw in page.events:
                     rec = self._process(org_id, scope, mapper, raw)
@@ -332,6 +446,20 @@ class CloudEventConnector(ChangeBasedIngestor):
                 if records:
                     pages_out.append((records, dict(running)))
                 if not page.has_more:
+                    break
+                # The scope reports a remaining backlog. Continue only while all
+                # three per-run bounds allow it; otherwise stop LOUDLY and leave the
+                # remainder to the next run (the advanced position is checkpointed,
+                # so nothing is dropped — this is resume, not truncation).
+                stop_reason = self._continuation_stop_reason(polls, started_at)
+                if stop_reason is not None:
+                    self._backlog_remaining[scope.scope_key] = stop_reason
+                    logger.warning(
+                        "%s: scope %s still has a backlog after %d poll(s) — stopping "
+                        "this run (%s); the remainder resumes from the checkpointed "
+                        "position on the next run (no events dropped).",
+                        self.connector_id, scope.scope_key, polls, stop_reason,
+                    )
                     break
 
         # Runtime visibility: the mapping + admission outcome for the whole poll —
@@ -350,14 +478,23 @@ class CloudEventConnector(ChangeBasedIngestor):
         except Exception:  # pragma: no cover - same
             pass
         logger.info(
-            "%s: org=%s mapped %d OperationalEvent(s) -> %d active signal(s)%s",
+            "%s: org=%s mapped %d OperationalEvent(s) -> %d active signal(s) "
+            "across %d poll(s) of %d scope(s)%s%s",
             self.connector_id,
             org_id,
             _mapped,
             _folded,
+            self._polls_performed,
+            self._scopes_polled,
             (
                 f"; budget deferred {_budget.deferred} of {_budget.seen}"
                 if _budget is not None and getattr(_budget, "deferred", 0)
+                else ""
+            ),
+            (
+                f"; {len(self._backlog_remaining)} scope(s) still have a backlog "
+                f"(resumes next run): {sorted(self._backlog_remaining)}"
+                if self._backlog_remaining
                 else ""
             ),
         )
@@ -377,6 +514,51 @@ class CloudEventConnector(ChangeBasedIngestor):
                 next_checkpoint=_encode_positions(snapshot),
                 is_complete=(i == last),
             )
+
+    # ── Per-run bounds ───────────────────────────────────────────────────────
+    def _continuation_stop_reason(
+        self, polls_done: int, started_at: float
+    ) -> Optional[str]:
+        """Why this scope must stop paging now, or ``None`` to keep going.
+
+        Called ONLY when a scope reports a remaining backlog, and only after at least
+        one poll of that scope — so no scope is ever starved of its first poll by an
+        earlier scope's backlog or by the deadline.
+        """
+        # 1. B7 budget: past it every further event is deferred at admission, so
+        #    fetching more provider pages buys nothing (MSP-B7 T4 — the budget must
+        #    stop the run PROCESSING everything, which includes the fetch).
+        try:
+            if not self.stream.has_capacity():
+                return STOP_BUDGET
+        except Exception:  # pragma: no cover - a stream without the read side
+            pass
+        # 2. Per-scope continuation cap.
+        if self.max_polls_per_scope and polls_done >= self.max_polls_per_scope:
+            return STOP_POLL_CAP
+        # 3. Wall-clock deadline for the whole poll phase.
+        if (
+            self.poll_deadline_seconds
+            and (time.monotonic() - started_at) >= self.poll_deadline_seconds
+        ):
+            return STOP_DEADLINE
+        return None
+
+    def poll_report(self) -> Dict[str, Any]:
+        """The last run's poll-phase outcome — the R18-C2 connector-panel artifact.
+
+        ``backlog_remaining`` maps each scope that did NOT drain to the bound that
+        stopped it, so a partial ingest is visible as a fact instead of looking like
+        a clean one. ``complete`` is True only when every polled scope drained.
+        """
+        return {
+            "scopes_polled": self._scopes_polled,
+            "polls": self._polls_performed,
+            "max_polls_per_scope": self.max_polls_per_scope,
+            "poll_deadline_seconds": self.poll_deadline_seconds,
+            "backlog_remaining": dict(self._backlog_remaining),
+            "complete": not self._backlog_remaining,
+        }
 
     # ── Mapping + admission + emission ───────────────────────────────────────
     def _process(

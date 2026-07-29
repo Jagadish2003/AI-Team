@@ -24,9 +24,18 @@ watermark does NOT move. Instead the position records:
 * ``pending_high`` — the newest instant seen when the backfill started, held aside.
 
 Only when the window finally drains does ``pending_high`` become the watermark and
-the ceiling clear. The poll reports ``has_more`` so the skeleton keeps paging in
-the same run, and total volume stays bounded by the B7 admission budget — the
-budget is the honest place to stop, and it stops *loudly*.
+the ceiling clear. The poll reports ``has_more`` so the skeleton keeps paging (the
+skeleton bounds how many continuation polls one run performs, and the B7 budget
+bounds the volume — both loudly).
+
+The walk itself is also bounded in DEPTH (``max_backfill_seconds``), measured from
+the backfill's own newest instant rather than wall-clock now. Without that bound an
+initial load on a busy account walks the full 90-day ``LookupEvents`` retention with
+the watermark pinned the whole way, so every NEW event queues behind the entire
+history — the connector looks hung and the run never reaches the detectors. The
+bound closes the window at a configured depth, promotes ``pending_high``, and says
+so at WARNING; the omission of older events is a declared, configurable initial-load
+boundary, not a silent thinning.
 
 CloudWatch needs none of this: ``DescribeAlarmHistory`` accepts
 ``ScanBy='TimestampAscending'``, so reading oldest-first makes truncation safe by
@@ -287,7 +296,11 @@ def advance_ascending(
 
 
 def advance_descending(
-    previous: TimePosition, events: List[Tuple[str, str]], *, truncated: bool
+    previous: TimePosition,
+    events: List[Tuple[str, str]],
+    *,
+    truncated: bool,
+    max_backfill_seconds: Optional[float] = None,
 ) -> TimePosition:
     """Next position after a NEWEST-FIRST read (CloudTrail ``LookupEvents``).
 
@@ -296,6 +309,17 @@ def advance_descending(
     backlog instead of skipping it. When the read completes, the newest instant
     seen across the whole backfill (held in ``pending_high``) becomes the watermark
     and the window clears.
+
+    ``max_backfill_seconds`` bounds how far back an initial load walks, measured
+    from the backfill's own newest instant (``pending_high``) — NOT from wall-clock
+    now, so it is independent of when the run happens. ``LookupEvents`` retains 90
+    days; on a busy account walking all of it holds the watermark pinned for many
+    runs, which delays every NEW event behind the whole historical backlog. Once the
+    window has walked past this depth the backfill is closed: ``pending_high`` is
+    promoted to the watermark and steady-state incremental polling resumes. Events
+    older than the depth are consequently NOT ingested — that is a bounded initial
+    load, logged at WARNING and configurable, never a silent thinning. ``None``/``0``
+    keeps the unbounded walk.
     """
     timestamps = [timestamp for timestamp, _ in events]
     page_high = _max_timestamp(timestamps, "")
@@ -309,6 +333,21 @@ def advance_descending(
         if previous.pending_high
         else _ids_at(page_high, events)
     )
+
+    if (
+        truncated
+        and page_low
+        and max_backfill_seconds
+        and _exceeds_backfill_depth(pending_high, page_low, max_backfill_seconds)
+    ):
+        logger.warning(
+            "aws_watermark: initial backfill reached its depth bound (%.0fs before "
+            "%s) at %s — closing the window and resuming incremental polling. "
+            "Events older than that are NOT ingested; raise "
+            "AWS_EVENT_MAX_BACKFILL_DAYS to widen the initial load.",
+            max_backfill_seconds, pending_high, page_low,
+        )
+        truncated = False  # fall through to the drain path: promote pending_high
 
     if truncated and page_low:
         new_ceiling = page_low
@@ -343,6 +382,18 @@ def advance_descending(
         return TimePosition(watermark=final, boundary_ids=merged)
     ids = pending_high_ids if final == pending_high else _ids_at(final, events)
     return TimePosition(watermark=final, boundary_ids=ids)
+
+
+def _exceeds_backfill_depth(high: str, low: str, max_seconds: float) -> bool:
+    """True when a descending walk has gone ``max_seconds`` below its own high mark.
+
+    Tolerant: if either instant is unparseable the depth cannot be established and
+    the walk continues (the bound must never end a backfill on a bad timestamp).
+    """
+    high_dt, low_dt = parse_timestamp(high), parse_timestamp(low)
+    if high_dt is None or low_dt is None:
+        return False
+    return (high_dt - low_dt).total_seconds() >= max_seconds
 
 
 def _max_timestamp(timestamps: Iterable[Any], fallback: str) -> str:
