@@ -1382,31 +1382,46 @@ CREATE INDEX IF NOT EXISTS idx_runbook_match_feedback_org_created
 -- migration serves every pack as active rather than failing.
 --
 
+-- pinned_version / previous_version / resulting_version are the 2.0-C1 T3 (AT-828)
+-- version-rollback columns (alembic 0032). NULL means "not pinned" — the pack runs
+-- its current registry version, exactly as before rollback existed.
 CREATE TABLE IF NOT EXISTS pack_states (
-    org_id      VARCHAR(64)  NOT NULL,
-    pack_id     VARCHAR(64)  NOT NULL,
-    state       VARCHAR(16)  NOT NULL,
-    revision    INTEGER      NOT NULL DEFAULT 0,
-    reason      TEXT,
-    updated_by  VARCHAR(128),
-    created_at  TIMESTAMPTZ  NOT NULL,
-    updated_at  TIMESTAMPTZ  NOT NULL,
+    org_id         VARCHAR(64)  NOT NULL,
+    pack_id        VARCHAR(64)  NOT NULL,
+    state          VARCHAR(16)  NOT NULL,
+    revision       INTEGER      NOT NULL DEFAULT 0,
+    reason         TEXT,
+    updated_by     VARCHAR(128),
+    created_at     TIMESTAMPTZ  NOT NULL,
+    updated_at     TIMESTAMPTZ  NOT NULL,
+    pinned_version VARCHAR(32),
     PRIMARY KEY (org_id, pack_id)
 );
 
 CREATE TABLE IF NOT EXISTS pack_state_history (
-    id              VARCHAR(64)  PRIMARY KEY,
-    org_id          VARCHAR(64)  NOT NULL,
-    pack_id         VARCHAR(64)  NOT NULL,
-    revision        INTEGER      NOT NULL,
-    transition      VARCHAR(16)  NOT NULL,
-    previous_state  VARCHAR(16)  NOT NULL,
-    resulting_state VARCHAR(16)  NOT NULL,
-    reason          TEXT,
-    actor_id        VARCHAR(128) NOT NULL,
-    changed_at      TIMESTAMPTZ  NOT NULL,
+    id                VARCHAR(64)  PRIMARY KEY,
+    org_id            VARCHAR(64)  NOT NULL,
+    pack_id           VARCHAR(64)  NOT NULL,
+    revision          INTEGER      NOT NULL,
+    transition        VARCHAR(16)  NOT NULL,
+    previous_state    VARCHAR(16)  NOT NULL,
+    resulting_state   VARCHAR(16)  NOT NULL,
+    reason            TEXT,
+    actor_id          VARCHAR(128) NOT NULL,
+    changed_at        TIMESTAMPTZ  NOT NULL,
+    previous_version  VARCHAR(32),
+    resulting_version VARCHAR(32),
     UNIQUE (org_id, pack_id, revision)
 );
+
+-- Idempotent guards for a database provisioned before 0032 (the CREATE above only
+-- applies to a fresh install).
+ALTER TABLE pack_states
+    ADD COLUMN IF NOT EXISTS pinned_version VARCHAR(32);
+ALTER TABLE pack_state_history
+    ADD COLUMN IF NOT EXISTS previous_version VARCHAR(32);
+ALTER TABLE pack_state_history
+    ADD COLUMN IF NOT EXISTS resulting_version VARCHAR(32);
 
 CREATE INDEX IF NOT EXISTS idx_pack_state_history_org_pack
     ON pack_state_history (org_id, pack_id, revision DESC);

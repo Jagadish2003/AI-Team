@@ -267,11 +267,21 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         excluded_packs = [item.to_dict() for item in activation.excluded]
         pack_compatibility = compatibility_snapshot(activation.activated)
         platform_version_at_launch = get_platform_version()
+        # 2.0-C1 T3 (AT-828): packs this org has rolled back. Recorded separately
+        # from pack_versions so the run says both "it ran 1.1.0" and "1.1.0 was a
+        # deliberate pin", not just the former.
+        pinned_pack_versions = dict(activation.pinned_versions)
 
         # Versions are captured at launch so historical provenance cannot drift
-        # when a registry entry or pack is updated later.
+        # when a registry entry or pack is updated later. A ROLLED-BACK pack records
+        # its PINNED version here, because that is the version the run will actually
+        # execute and stamp — recording the registry's current version would make the
+        # run record disagree with its own findings.
         pack_versions = {
-            selected_pack_id: get_pack_version(selected_pack_id)
+            selected_pack_id: (
+                pinned_pack_versions.get(selected_pack_id)
+                or get_pack_version(selected_pack_id)
+            )
             for selected_pack_id in eff_pack_ids
         }
         template_versions = {
@@ -328,6 +338,8 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             # because this org has disabled them. Recorded so the exclusion is
             # visible on the run and in run health rather than being silent.
             "excludedPacks": excluded_packs,
+            # 2.0-C1 T3 (AT-828 / AC5): which packs were rolled back for this run.
+            "pinnedPackVersions": pinned_pack_versions,
             "focusId": eff_focus,
             "industryId": body.industry_id,
             "templateId": eff_template,
@@ -356,6 +368,7 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         # mutable registry after the fact.
         run_kv_set("pack_compatibility", run_id, pack_compatibility)
         run_kv_set("excluded_packs", run_id, excluded_packs)
+        run_kv_set("pinned_pack_versions", run_id, pinned_pack_versions)
         run_kv_set("template_ids", run_id, eff_template_ids)
         run_kv_set("template_versions", run_id, template_versions)
         run_kv_set("effective_configuration", run_id, effective)

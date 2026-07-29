@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 # ── Pack registry ─────────────────────────────────────────────────────────────
 
 _PACKS_DIR = Path(__file__).parent
+# 2.0-C1 T3 (AT-828): config artifacts of PRIOR pack versions that remain runnable.
+# See versions/README.md — the archive is what makes rollback honest rather than a
+# version stamp that lies about which behaviour actually executed.
+_VERSIONS_DIR = _PACKS_DIR / "versions"
 
 PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
 
@@ -271,6 +275,29 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         # terminology set load from this external file, not from code — a config
         # change alters behaviour with no code deploy. See cloud_ops_config.py.
         "config_path":   str(_PACKS_DIR / "cloud_ops_pack_config.json"),
+        # 2.0-C1 T3 (AT-828): PRIOR versions that remain runnable, newest first.
+        # Each entry carries the real behaviour of that version — its archived
+        # config artifact AND its detector list — so a run pinned to it executes
+        # 1.1.0 rather than being stamped 1.1.0 while running 1.2.0. 1.1.0 is
+        # MSP-B6 T4's state: the five Section-2 detectors, before MSP-B5 wiring
+        # added the documentation-gap detector. 1.0.0 is deliberately NOT offered
+        # (it was the T1 scaffold with ZERO detectors — see versions/README.md).
+        "versionHistory": [
+            {
+                "version": "1.1.0",
+                "configPath": str(
+                    _VERSIONS_DIR / "cloud_ops_pack_config.v1.1.0.json"
+                ),
+                "detectors": [
+                    "discovery.detectors.cloud_ops_recurring_resolution_loop",
+                    "discovery.detectors.cloud_ops_alert_triage_toil",
+                    "discovery.detectors.cloud_ops_reassignment_ping_pong",
+                    "discovery.detectors.cloud_ops_queue_ageing",
+                    "discovery.detectors.cloud_ops_shared_ci_hotspot",
+                ],
+                "note": "MSP-B6 T4 (AT-739) — before the MSP-B5 documentation-gap detector",
+            },
+        ],
         "llm_context": (
             "Managed cloud-operations (NOC) analysis. "
             "Speak NOC language: alerts, incidents, runbooks, MTTR, toil, escalation. "
@@ -329,6 +356,26 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         # load from this external file, not from code — a config change alters
         # behaviour with no code deploy (see security_ops_config.py).
         "config_path":   str(_PACKS_DIR / "security_ops_pack_config.json"),
+        # 2.0-C1 T3 (AT-828): prior runnable versions, newest first. 1.1.0 is
+        # MSP-B12 T2's state — the five Section-1 detectors with that release's
+        # calibration. 1.0.0 (the T1 scaffold, zero detectors) is deliberately not
+        # offered as a rollback target; see versions/README.md.
+        "versionHistory": [
+            {
+                "version": "1.1.0",
+                "configPath": str(
+                    _VERSIONS_DIR / "security_ops_pack_config.v1.1.0.json"
+                ),
+                "detectors": [
+                    "discovery.detectors.security_ops_remediation_recurrence",
+                    "discovery.detectors.security_ops_security_it_pingpong",
+                    "discovery.detectors.security_ops_sla_deferral_ageing",
+                    "discovery.detectors.security_ops_shared_infra_concentration",
+                    "discovery.detectors.security_ops_sir_triage_toil",
+                ],
+                "note": "MSP-B12 T2 — the five Section-1 detectors",
+            },
+        ],
         # Model-context hint for LLM enrichment. Security-derived content only
         # participates in AI-assisted assembly under in-boundary / customer-tenant
         # model modes; under hosted-AI mode the pack runs deterministic detectors and
@@ -391,6 +438,22 @@ DEFAULT_PACK_VERSION = "1.0.0"
 # declaration surface (like packVersion) so a pack's requirements are read in the
 # same place as the rest of its config.
 COMPATIBILITY_KEY = "compatibility"
+
+# 2.0-C1 T3 (AT-828): the registry key listing PRIOR pack versions that remain
+# runnable, newest first. Each entry declares the real behaviour of that version:
+#
+#   {
+#       "version":    "1.1.0",              # must differ from the current packVersion
+#       "configPath": ".../pack_config.v1.1.0.json",   # archived artifact (see versions/)
+#       "detectors":  [...],                # that version's detector list
+#       "note":       "free-text provenance",
+#   }
+#
+# A pack with NO versionHistory has no rollback target and rollback is refused with
+# that reason named — the platform declines to pretend it can serve behaviour it no
+# longer has. Only config-driven packs (cloud_ops, security_ops) can currently
+# declare history; a code-only pack would have to externalise its calibration first.
+VERSION_HISTORY_KEY = "versionHistory"
 
 # Fallback for a pack that has not declared a "compatibility" block. Deliberately
 # PERMISSIVE (no bounds, no required concepts) so an undeclared pack behaves
@@ -527,6 +590,148 @@ def get_pack_compatibility_declaration(
         "requiredConcepts": _concepts("requiredConcepts"),
         "optionalConcepts": _concepts("optionalConcepts"),
     }
+
+
+def get_pack_version_history(pack_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Prior runnable versions of a pack, newest first (2.0-C1 T3 / AT-828).
+
+    Each entry is normalised to ``{version, configPath, detectors, note}``. Entries
+    without a usable ``version`` are dropped, and an entry whose version equals the
+    pack's CURRENT ``packVersion`` is dropped too — the current version is served
+    from the pack's own config, never from the archive, so listing it would create
+    two sources of truth for one version.
+
+    Returns ``[]`` for a pack that declares no history (no rollback target).
+    """
+    pack = get_pack(pack_id)
+    declared = pack.get(VERSION_HISTORY_KEY) or []
+    if not isinstance(declared, (list, tuple)):
+        return []
+    current = str(pack.get("packVersion", DEFAULT_PACK_VERSION))
+
+    history: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in declared:
+        if not isinstance(entry, dict):
+            continue
+        version = str(entry.get("version") or "").strip()
+        if not version or version == current or version in seen:
+            continue
+        seen.add(version)
+        detectors = entry.get("detectors")
+        history.append(
+            {
+                "version": version,
+                "configPath": (
+                    str(entry["configPath"]).strip()
+                    if isinstance(entry.get("configPath"), str)
+                    and str(entry["configPath"]).strip()
+                    else None
+                ),
+                "detectors": (
+                    [str(d) for d in detectors if str(d).strip()]
+                    if isinstance(detectors, (list, tuple))
+                    else None
+                ),
+                "note": entry.get("note"),
+            }
+        )
+    return history
+
+
+def get_pack_version_entry(
+    pack_id: Optional[str], version: str
+) -> Optional[Dict[str, Any]]:
+    """The archived history entry for one prior version, or ``None`` if not archived."""
+    wanted = str(version or "").strip()
+    if not wanted:
+        return None
+    for entry in get_pack_version_history(pack_id):
+        if entry["version"] == wanted:
+            return entry
+    return None
+
+
+def get_rollbackable_versions(pack_id: Optional[str] = None) -> List[str]:
+    """Version strings this pack can be rolled back to, newest first."""
+    return [entry["version"] for entry in get_pack_version_history(pack_id)]
+
+
+def resolve_pack_at_version(
+    pack_id: Optional[str], version: Optional[str] = None
+) -> Dict[str, Any]:
+    """The pack config AS IT BEHAVES at ``version`` (2.0-C1 T3 / AT-828).
+
+    ``version`` ``None`` (or equal to the current ``packVersion``) returns the
+    current registry config unchanged, so an un-pinned pack is byte-identical to
+    before rollback existed.
+
+    For a pinned PRIOR version, returns a COPY of the pack with that version's real
+    behaviour substituted — ``packVersion``, ``detectors``, and ``config_path`` —
+    plus ``pinnedVersion`` so a consumer can tell a pinned resolution from a normal
+    one. The registry itself is never mutated.
+
+    Raises :class:`PackVersionUnavailable` for a version with no archived entry:
+    serving the CURRENT behaviour under an older stamp would be a lie, and silently
+    ignoring the pin would make rollback untrustworthy.
+    """
+    pack = get_pack(pack_id)
+    current = str(pack.get("packVersion", DEFAULT_PACK_VERSION))
+    wanted = str(version or "").strip()
+    if not wanted or wanted == current:
+        return pack
+
+    entry = get_pack_version_entry(pack_id, wanted)
+    if entry is None:
+        raise PackVersionUnavailable(
+            pack_id=pack["packId"],
+            version=wanted,
+            available=get_rollbackable_versions(pack_id),
+            current=current,
+        )
+
+    resolved = dict(pack)
+    resolved["packVersion"] = entry["version"]
+    resolved["pinnedVersion"] = entry["version"]
+    if entry["detectors"] is not None:
+        resolved["detectors"] = list(entry["detectors"])
+    if entry["configPath"] is not None:
+        resolved["config_path"] = entry["configPath"]
+    return resolved
+
+
+class PackVersionUnavailable(LookupError):
+    """A requested pack version has no archived artifact, so it cannot be served.
+
+    ``str(exc)`` names the pack, the requested version, and the versions that ARE
+    available, so a refusal is actionable.
+    """
+
+    def __init__(
+        self,
+        *,
+        pack_id: str,
+        version: str,
+        available: List[str],
+        current: str,
+    ) -> None:
+        self.pack_id = pack_id
+        self.version = version
+        self.available = list(available)
+        self.current = current
+        if self.available:
+            options = (
+                f"Versions available for rollback: {', '.join(self.available)} "
+                f"(current: {current})."
+            )
+        else:
+            options = (
+                f"This pack has no archived prior versions, so it cannot be rolled "
+                f"back (current: {current})."
+            )
+        super().__init__(
+            f"Pack '{pack_id}' version {version!r} is not available to run. {options}"
+        )
 
 
 def is_strs_benefits_pack(pack_id: Optional[str] = None) -> bool:

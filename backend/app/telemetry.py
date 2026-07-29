@@ -186,6 +186,34 @@ class PackStateChangedPayload(TypedDict, total=False):
     changed_at: NotRequired[str]
 
 
+class PackVersionPinnedPayload(TypedDict, total=False):
+    """2.0-C1 T3 (AT-828) — a run executed a ROLLED-BACK pack version.
+
+    Emitted when activation resolves one or more version pins, so run health and
+    support can see that a run deliberately used a prior version rather than the
+    currently-shipped one. Pack ids and version strings only.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_ids: NotRequired[list[str]]
+    pinned_versions: NotRequired[dict]
+
+
+class PackVersionPinUnservablePayload(TypedDict, total=False):
+    """2.0-C1 T3 (AT-828) — a version pin could not be honoured.
+
+    The pinned version's archived artifact is no longer declared, so the pack ran its
+    CURRENT version instead (stamped consistently with what it executed). Emitted so
+    a stale pin is never silent — an operator must either re-archive the artifact or
+    clear the pin.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    version: NotRequired[str]
+    reason: NotRequired[str]
+
+
 class DetectorFiredPayload(TypedDict, total=False):
     """T1-S14-C — one record per detector that fires in a run."""
     detector_id: NotRequired[str]
@@ -964,6 +992,11 @@ register_event_type("pack.activation_refused", PackActivationRefusedPayload)
 # `state_changed` when an owner disables or re-enables a pack.
 register_event_type("pack.execution_skipped", PackExecutionSkippedPayload)
 register_event_type("pack.state_changed", PackStateChangedPayload)
+# 2.0-C1 T3 (AT-828): version rollback. `version_pinned` records that a run used a
+# prior version deliberately; `version_pin_unservable` records a pin that could not
+# be honoured (its archived artifact is gone) so a stale pin is never silent.
+register_event_type("pack.version_pinned", PackVersionPinnedPayload)
+register_event_type("pack.version_pin_unservable", PackVersionPinUnservablePayload)
 # T3-S11-A Sprint 11
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
 # T3-S12-A T7 Sprint 12

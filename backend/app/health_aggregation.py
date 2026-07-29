@@ -498,6 +498,7 @@ def _packs_view_multi(
 
     primary_pack_id = str(latest.get("packId") or "")
     run_executed = latest.get("executedDetectorIds")
+    run_pins = _run_pinned_versions(run_id, latest)
 
     packs_out: List[Dict[str, Any]] = []
     for meta in run_packs:
@@ -550,6 +551,12 @@ def _packs_view_multi(
                 # disabled after this run reads "disabled" here while its
                 # execution record is untouched.
                 "pack_state": _current_pack_state(org_id, pack_id),
+                # 2.0-C1 T3 (AC5): the version this run was PINNED to, if any.
+                # `pack_version` above is what actually executed — for a pinned run
+                # they are the same value, and this field is what says the version
+                # was a deliberate rollback rather than the shipped default.
+                "pinned_version": run_pins.get(pack_id),
+                "rolled_back": pack_id in run_pins,
             }
         )
 
@@ -557,6 +564,7 @@ def _packs_view_multi(
         "run_id": run_id,
         "packs": packs_out,
         "excluded_packs": _excluded_packs_for_run(run_id, latest),
+        "pinned_pack_versions": run_pins,
     }
 
 
@@ -572,6 +580,26 @@ def _current_pack_state(org_id: str, pack_id: str) -> str:
     from .pack_state import STATE_ACTIVE, STATE_DISABLED, disabled_pack_ids_safe
 
     return STATE_DISABLED if pack_id in disabled_pack_ids_safe(org_id) else STATE_ACTIVE
+
+
+def _run_pinned_versions(run_id: str, run: Dict[str, Any]) -> Dict[str, str]:
+    """``{pack_id: version}`` this RUN executed at a rolled-back version.
+
+    A historical fact about the run, read from the run record (the runner persists
+    it), NOT from the org's current pin — a rollback that happened after this run
+    must not make the run look as though it used the pinned version (2.0-C1 AC3:
+    nothing is rewritten retroactively).
+    """
+    from_run = run.get("pinnedPackVersions")
+    if isinstance(from_run, dict) and from_run:
+        return {str(k): str(v) for k, v in from_run.items() if k and v}
+    try:
+        stored = db.run_kv_get("pinned_pack_versions", run_id, {}) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(stored, dict):
+        return {}
+    return {str(k): str(v) for k, v in stored.items() if k and v}
 
 
 def _excluded_packs_for_run(run_id: str, run: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -606,11 +634,21 @@ def packs_view(org_id: str) -> Dict[str, Any]:
     """
     latest = _latest_run(org_id)
     if latest is None:
-        return {"run_id": None, "packs": [], "excluded_packs": []}
+        return {
+            "run_id": None,
+            "packs": [],
+            "excluded_packs": [],
+            "pinned_pack_versions": {},
+        }
 
     run_id = str(latest.get("id") or "")
     if not run_id:
-        return {"run_id": None, "packs": [], "excluded_packs": []}
+        return {
+            "run_id": None,
+            "packs": [],
+            "excluded_packs": [],
+            "pinned_pack_versions": {},
+        }
 
     run_packs = latest.get("packs")
     if isinstance(run_packs, list) and run_packs:
@@ -630,11 +668,15 @@ def packs_view(org_id: str) -> Dict[str, Any]:
         or db.run_kv_get("pack_id", run_id, None)
         or ""
     )
+    # Historical fact about THIS run — resolved once and reused below.
+    run_pins = _run_pinned_versions(run_id, latest)
+
     if not pack_id:
         return {
             "run_id": run_id,
             "packs": [],
             "excluded_packs": _excluded_packs_for_run(run_id, latest),
+            "pinned_pack_versions": run_pins,
         }
 
     run_detectors = latest.get("executedDetectorIds")
@@ -666,6 +708,7 @@ def packs_view(org_id: str) -> Dict[str, Any]:
             "run_id": run_id,
             "packs": [],
             "excluded_packs": _excluded_packs_for_run(run_id, latest),
+            "pinned_pack_versions": run_pins,
         }
 
     detector_count = len(detectors)
@@ -686,11 +729,14 @@ def packs_view(org_id: str) -> Dict[str, Any]:
                 "evaluated_count": event_payload.get("evaluated_count"),
                 "not_evaluated_count": event_payload.get("not_evaluated_count"),
                 "executed_at": execution_recorded_at,
-                # 2.0-C1 T2 (AC5) — see _current_pack_state.
+                # 2.0-C1 T2/T3 (AC5) — see _current_pack_state / _run_pinned_versions.
                 "pack_state": _current_pack_state(org_id, pack_id),
+                "pinned_version": run_pins.get(pack_id),
+                "rolled_back": pack_id in run_pins,
             }
         ],
         "excluded_packs": _excluded_packs_for_run(run_id, latest),
+        "pinned_pack_versions": run_pins,
     }
 
 

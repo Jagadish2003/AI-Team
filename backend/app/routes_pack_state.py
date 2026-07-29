@@ -41,9 +41,15 @@ from .pack_state import (
     pack_state_history,
     pack_state_view,
     set_pack_state,
+    set_pinned_pack_version,
 )
 from .rbac import _get_user_id_from_token, require_role
 from .security import require_auth
+from discovery.packs.pack_config import (
+    PackVersionUnavailable,
+    get_pack_version,
+    get_rollbackable_versions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +135,85 @@ def put_pack_state(
         )
         _record_state_changed(outcome)
     return outcome.as_dict()
+
+
+class PackVersionRequest(BaseModel):
+    """A pack version rollback (2.0-C1 T3 / AT-828).
+
+    ``version`` is the TARGET version, so the request is idempotent. ``null`` (or
+    omitted) CLEARS the pin, restoring the pack to the version the platform
+    currently ships — the "undo the rollback" operation.
+    """
+
+    version: Optional[str] = Field(
+        default=None,
+        max_length=32,
+        description=(
+            "Prior version to run, from the pack's availableVersions. null clears "
+            "the pin and restores the current version. Only affects future runs; "
+            "existing findings keep their original version stamp."
+        ),
+    )
+    reason: Optional[str] = Field(
+        default=None,
+        max_length=1000,
+        description=(
+            "Optional operator note explaining why, recorded on the state row and "
+            "the audit trail (e.g. 'regression in 1.2.0 queue-ageing thresholds')."
+        ),
+    )
+
+
+@router.put(
+    "/{pack_id}/version",
+    dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+    summary="Roll a discovery pack back to a prior version, or restore the current one",
+)
+def put_pack_version(
+    pack_id: str,
+    body: PackVersionRequest,
+    token: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Pin a pack to a prior version, or clear the pin.
+
+    Affects FUTURE runs only. Existing findings keep the version stamp they were
+    produced with and nothing historical is rewritten or backfilled (2.0-C1 AC3).
+
+    **409** when the requested version has no archived artifact — the response names
+    the versions that ARE available. The platform will not stamp a run with a version
+    whose behaviour it cannot actually serve.
+    """
+    org_id = get_current_org_id()
+    actor_id = _get_user_id_from_token(token)
+    try:
+        outcome = set_pinned_pack_version(
+            org_id, pack_id, body.version, actor_id=actor_id, reason=body.reason
+        )
+    except PackNotFound:
+        raise _pack_not_found(pack_id)
+    except PackVersionUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    if outcome.changed:
+        log_event(
+            PACK_STATE_CHANGED,
+            org_id=org_id,
+            user_id=actor_id,
+            pack_id=outcome.pack_id,
+            transition=outcome.transition,
+            previous_state=outcome.previous_state,
+            resulting_state=outcome.current_state,
+            revision=outcome.revision,
+            previous_version=outcome.previous_version,
+            resulting_version=outcome.current_version,
+        )
+        _record_state_changed(outcome)
+    return {
+        **outcome.as_dict(),
+        "availableVersions": get_rollbackable_versions(pack_id),
+        "currentVersion": get_pack_version(pack_id),
+        "effectiveVersion": outcome.current_version or get_pack_version(pack_id),
+    }
 
 
 @router.get(

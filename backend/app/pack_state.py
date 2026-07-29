@@ -80,8 +80,15 @@ PACK_STATES = frozenset({STATE_ACTIVE, STATE_DISABLED})
 
 TRANSITION_DISABLE = "disable"
 TRANSITION_ENABLE = "enable"
+#: 2.0-C1 T3 (AT-828): version transitions. ``rollback`` pins the pack to a prior
+#: archived version; ``restore`` clears the pin so the pack runs its current version
+#: again. They share this table's ``revision`` counter and history trail with the
+#: enable/disable transitions — one audit trail per (org, pack) answers "what has
+#: this org done to this pack".
+TRANSITION_ROLLBACK = "rollback"
+TRANSITION_RESTORE = "restore"
 
-#: The only legal transitions. A target state maps to exactly one transition name.
+#: The only legal state transitions. A target state maps to exactly one name.
 _TRANSITION_FOR_TARGET = {
     STATE_DISABLED: TRANSITION_DISABLE,
     STATE_ACTIVE: TRANSITION_ENABLE,
@@ -138,9 +145,52 @@ def _validated_state(state: Any) -> str:
     return normalized
 
 
+def _validated_pin(pack_id: str, version: Any) -> Optional[str]:
+    """Validate a rollback target, returning the pin to store.
+
+    ``None``/empty means "clear the pin" (restore to the current version).
+
+    A version equal to the pack's CURRENT ``packVersion`` also normalises to
+    ``None``: pinning to the current version and having no pin are the same
+    position, and storing it would leave a stale pin behind after the next bump —
+    the pack would silently keep running the old version.
+
+    Any other version must have an ARCHIVED artifact
+    (``pack_config.get_rollbackable_versions``), else :class:`PackVersionUnavailable`
+    is raised naming the versions that are available. This is the honesty boundary:
+    the platform will not stamp a run with a version whose behaviour it cannot serve.
+    """
+    from discovery.packs.pack_config import (
+        PackVersionUnavailable,
+        get_pack_version,
+        get_rollbackable_versions,
+    )
+
+    wanted = str(version or "").strip()
+    if not wanted:
+        return None
+    if wanted == get_pack_version(pack_id):
+        return None
+
+    if wanted not in get_rollbackable_versions(pack_id):
+        raise PackVersionUnavailable(
+            pack_id=pack_id,
+            version=wanted,
+            available=get_rollbackable_versions(pack_id),
+            current=get_pack_version(pack_id),
+        )
+    return wanted
+
+
 @dataclass(frozen=True)
 class PackStateOutcome:
-    """The result of a state transition attempt."""
+    """The result of a lifecycle transition attempt (state OR version).
+
+    ``previous_version`` / ``current_version`` are the 2.0-C1 T3 pin values —
+    ``None`` means "not pinned, runs the current registry version". They are carried
+    on every outcome (not just rollbacks) so a caller always sees the full lifecycle
+    position after any transition.
+    """
 
     org_id: str
     pack_id: str
@@ -152,6 +202,8 @@ class PackStateOutcome:
     reason: Optional[str]
     changed_at: str
     actor_id: str
+    previous_version: Optional[str] = None
+    current_version: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -165,6 +217,8 @@ class PackStateOutcome:
             "reason": self.reason,
             "changedAt": self.changed_at,
             "actorId": self.actor_id,
+            "previousPinnedVersion": self.previous_version,
+            "pinnedVersion": self.current_version,
         }
 
 
@@ -197,6 +251,21 @@ class PackStateStore:
 
     def history(self, org_id: str, pack_id: str) -> List[Dict[str, Any]]:
         """Append-only transition history, newest first (repo audit convention)."""
+        raise NotImplementedError
+
+    def set_pinned_version(
+        self,
+        org_id: str,
+        pack_id: str,
+        version: Optional[str],
+        actor_id: str,
+        reason: Optional[str] = None,
+    ) -> PackStateOutcome:
+        """Pin the pack to ``version``, or clear the pin when ``version`` is None.
+
+        2.0-C1 T3 (AT-828). Writes a ``rollback``/``restore`` row to the SAME
+        append-only history as the state transitions.
+        """
         raise NotImplementedError
 
 
@@ -243,12 +312,15 @@ class InMemoryPackStateStore(PackStateStore):
             previous_state = str(row["state"]) if row else STATE_ACTIVE
             revision = int(row["revision"]) if row else 0
 
+            pinned = (row or {}).get("pinned_version")
+
             if previous_state == target:
                 # Idempotent — no history row for a no-op transition.
                 return PackStateOutcome(
                     org, pack, _TRANSITION_FOR_TARGET[target], previous_state,
                     previous_state, revision, False, (row or {}).get("reason"),
                     (row or {}).get("updated_at", now), actor,
+                    previous_version=pinned, current_version=pinned,
                 )
 
             revision += 1
@@ -261,6 +333,10 @@ class InMemoryPackStateStore(PackStateStore):
                 "updated_by": actor,
                 "created_at": (row or {}).get("created_at", now),
                 "updated_at": now,
+                # A state change never touches the version pin — the two lifecycle
+                # dimensions are independent (disabling a rolled-back pack must not
+                # silently un-pin it).
+                "pinned_version": pinned,
             }
             self._history.append(
                 {
@@ -274,11 +350,77 @@ class InMemoryPackStateStore(PackStateStore):
                     "reason": reason,
                     "actor_id": actor,
                     "changed_at": now,
+                    "previous_version": pinned,
+                    "resulting_version": pinned,
                 }
             )
             return PackStateOutcome(
                 org, pack, _TRANSITION_FOR_TARGET[target], previous_state, target,
                 revision, True, reason, now, actor,
+                previous_version=pinned, current_version=pinned,
+            )
+
+    def set_pinned_version(
+        self,
+        org_id: str,
+        pack_id: str,
+        version: Optional[str],
+        actor_id: str,
+        reason: Optional[str] = None,
+    ) -> PackStateOutcome:
+        org = _required(org_id, "org_id")
+        pack = _validated_pack_id(pack_id)
+        actor = _required(actor_id, "actor_id")
+        target = _validated_pin(pack, version)
+        now = _now()
+        transition = TRANSITION_RESTORE if target is None else TRANSITION_ROLLBACK
+
+        with self._lock:
+            row = self._rows.get((org, pack))
+            previous_version = (row or {}).get("pinned_version")
+            state = str(row["state"]) if row else STATE_ACTIVE
+            revision = int(row["revision"]) if row else 0
+
+            if previous_version == target:
+                # Idempotent — no history row for a no-op pin.
+                return PackStateOutcome(
+                    org, pack, transition, state, state, revision, False,
+                    (row or {}).get("reason"), (row or {}).get("updated_at", now),
+                    actor, previous_version=previous_version, current_version=target,
+                )
+
+            revision += 1
+            self._rows[(org, pack)] = {
+                "org_id": org,
+                "pack_id": pack,
+                # A version pin never changes the enable/disable state.
+                "state": state,
+                "revision": revision,
+                "reason": reason,
+                "updated_by": actor,
+                "created_at": (row or {}).get("created_at", now),
+                "updated_at": now,
+                "pinned_version": target,
+            }
+            self._history.append(
+                {
+                    "id": f"psh_{uuid4().hex}",
+                    "org_id": org,
+                    "pack_id": pack,
+                    "revision": revision,
+                    "transition": transition,
+                    "previous_state": state,
+                    "resulting_state": state,
+                    "reason": reason,
+                    "actor_id": actor,
+                    "changed_at": now,
+                    "previous_version": previous_version,
+                    "resulting_version": target,
+                }
+            )
+            return PackStateOutcome(
+                org, pack, transition, state, state, revision, True, reason, now,
+                actor, previous_version=previous_version, current_version=target,
             )
 
     def history(self, org_id: str, pack_id: str) -> List[Dict[str, Any]]:
@@ -317,7 +459,8 @@ class PostgresPackStateStore(PackStateStore):
         try:
             cur = con.cursor()
             cur.execute(
-                "SELECT pack_id, state, revision, reason, updated_by, updated_at "
+                "SELECT pack_id, state, revision, reason, updated_by, updated_at, "
+                "       pinned_version "
                 "FROM pack_states WHERE org_id = %s",
                 (org,),
             )
@@ -333,9 +476,88 @@ class PostgresPackStateStore(PackStateStore):
                 "reason": row[3],
                 "updated_by": row[4],
                 "updated_at": _iso(row[5]),
+                "pinned_version": row[6],
             }
             for row in rows
         }
+
+    def set_pinned_version(
+        self,
+        org_id: str,
+        pack_id: str,
+        version: Optional[str],
+        actor_id: str,
+        reason: Optional[str] = None,
+    ) -> PackStateOutcome:
+        org = _required(org_id, "org_id")
+        pack = _validated_pack_id(pack_id)
+        actor = _required(actor_id, "actor_id")
+        target = _validated_pin(pack, version)
+        now = _now()
+        transition = TRANSITION_RESTORE if target is None else TRANSITION_ROLLBACK
+
+        con = db.connect()
+        try:
+            cur = con.cursor()
+            # Lock the row for the read-modify-write so two concurrent transitions
+            # cannot both claim the same revision number.
+            cur.execute(
+                "SELECT state, revision, reason, created_at, updated_at, "
+                "       pinned_version "
+                "FROM pack_states WHERE org_id = %s AND pack_id = %s FOR UPDATE",
+                (org, pack),
+            )
+            row = cur.fetchone()
+            state = str(row[0]) if row else STATE_ACTIVE
+            revision = int(row[1]) if row else 0
+            previous_version = row[5] if row else None
+
+            if previous_version == target:
+                con.commit()
+                return PackStateOutcome(
+                    org, pack, transition, state, state, revision, False,
+                    (row[2] if row else None),
+                    _iso(row[4]) if row else now, actor,
+                    previous_version=previous_version, current_version=target,
+                )
+
+            revision += 1
+            cur.execute(
+                """
+                INSERT INTO pack_states
+                    (org_id, pack_id, state, revision, reason, updated_by,
+                     created_at, updated_at, pinned_version)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (org_id, pack_id) DO UPDATE SET
+                    revision       = EXCLUDED.revision,
+                    reason         = EXCLUDED.reason,
+                    updated_by     = EXCLUDED.updated_by,
+                    updated_at     = EXCLUDED.updated_at,
+                    pinned_version = EXCLUDED.pinned_version
+                """,
+                (org, pack, state, revision, reason, actor, now, now, target),
+            )
+            cur.execute(
+                """
+                INSERT INTO pack_state_history
+                    (id, org_id, pack_id, revision, transition, previous_state,
+                     resulting_state, reason, actor_id, changed_at,
+                     previous_version, resulting_version)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    f"psh_{uuid4().hex}", org, pack, revision, transition,
+                    state, state, reason, actor, now, previous_version, target,
+                ),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        return PackStateOutcome(
+            org, pack, transition, state, state, revision, True, reason, now, actor,
+            previous_version=previous_version, current_version=target,
+        )
 
     def set_state(
         self,
@@ -358,13 +580,17 @@ class PostgresPackStateStore(PackStateStore):
             # Lock the row for the read-modify-write so two concurrent transitions
             # cannot both claim the same revision number.
             cur.execute(
-                "SELECT state, revision, reason, created_at, updated_at "
+                "SELECT state, revision, reason, created_at, updated_at, "
+                "       pinned_version "
                 "FROM pack_states WHERE org_id = %s AND pack_id = %s FOR UPDATE",
                 (org, pack),
             )
             row = cur.fetchone()
             previous_state = str(row[0]) if row else STATE_ACTIVE
             revision = int(row[1]) if row else 0
+            # A state change never touches the version pin — the two lifecycle
+            # dimensions are independent, so it is carried through unchanged.
+            pinned = row[5] if row else None
 
             if previous_state == target:
                 con.commit()
@@ -372,6 +598,7 @@ class PostgresPackStateStore(PackStateStore):
                     org, pack, transition, previous_state, previous_state, revision,
                     False, (row[2] if row else None),
                     _iso(row[4]) if row else now, actor,
+                    previous_version=pinned, current_version=pinned,
                 )
 
             revision += 1
@@ -379,8 +606,8 @@ class PostgresPackStateStore(PackStateStore):
                 """
                 INSERT INTO pack_states
                     (org_id, pack_id, state, revision, reason, updated_by,
-                     created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                     created_at, updated_at, pinned_version)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (org_id, pack_id) DO UPDATE SET
                     state      = EXCLUDED.state,
                     revision   = EXCLUDED.revision,
@@ -388,18 +615,19 @@ class PostgresPackStateStore(PackStateStore):
                     updated_by = EXCLUDED.updated_by,
                     updated_at = EXCLUDED.updated_at
                 """,
-                (org, pack, target, revision, reason, actor, now, now),
+                (org, pack, target, revision, reason, actor, now, now, pinned),
             )
             cur.execute(
                 """
                 INSERT INTO pack_state_history
                     (id, org_id, pack_id, revision, transition, previous_state,
-                     resulting_state, reason, actor_id, changed_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     resulting_state, reason, actor_id, changed_at,
+                     previous_version, resulting_version)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     f"psh_{uuid4().hex}", org, pack, revision, transition,
-                    previous_state, target, reason, actor, now,
+                    previous_state, target, reason, actor, now, pinned, pinned,
                 ),
             )
             con.commit()
@@ -408,7 +636,7 @@ class PostgresPackStateStore(PackStateStore):
 
         return PackStateOutcome(
             org, pack, transition, previous_state, target, revision, True,
-            reason, now, actor,
+            reason, now, actor, previous_version=pinned, current_version=pinned,
         )
 
     def history(self, org_id: str, pack_id: str) -> List[Dict[str, Any]]:
@@ -420,7 +648,8 @@ class PostgresPackStateStore(PackStateStore):
             cur.execute(
                 """
                 SELECT id, revision, transition, previous_state, resulting_state,
-                       reason, actor_id, changed_at
+                       reason, actor_id, changed_at,
+                       previous_version, resulting_version
                 FROM pack_state_history
                 WHERE org_id = %s AND pack_id = %s
                 ORDER BY revision DESC
@@ -442,6 +671,8 @@ class PostgresPackStateStore(PackStateStore):
                 "reason": row[5],
                 "actor_id": row[6],
                 "changed_at": _iso(row[7]),
+                "previous_version": row[8],
+                "resulting_version": row[9],
             }
             for row in rows
         ]
@@ -516,6 +747,102 @@ def enable_pack(
     )
 
 
+def set_pinned_pack_version(
+    org_id: str,
+    pack_id: str,
+    version: Optional[str],
+    *,
+    actor_id: str,
+    reason: Optional[str] = None,
+) -> PackStateOutcome:
+    """Set or clear a pack's version pin — the single write the API edge calls.
+
+    ``version`` ``None`` (or the pack's current version) clears the pin; any other
+    value must be an archived version. :func:`rollback_pack_version` and
+    :func:`restore_pack_version` are the intention-revealing wrappers.
+    """
+    return get_pack_state_store().set_pinned_version(
+        org_id, pack_id, version, actor_id, reason
+    )
+
+
+def rollback_pack_version(
+    org_id: str,
+    pack_id: str,
+    version: str,
+    *,
+    actor_id: str,
+    reason: Optional[str] = None,
+) -> PackStateOutcome:
+    """Pin a pack to a PRIOR version so subsequent runs use it (2.0-C1 T3 / AC3).
+
+    Only affects FUTURE runs. Existing findings keep the version stamp they were
+    produced with, and nothing historical is rewritten or backfilled — the pin is a
+    forward-looking configuration row, not a migration.
+
+    Raises :class:`~discovery.packs.pack_config.PackVersionUnavailable` when the
+    version has no archived artifact (naming the versions that do), and
+    :class:`PackNotFound` for an unregistered pack id.
+    """
+    return get_pack_state_store().set_pinned_version(
+        org_id, pack_id, version, actor_id, reason
+    )
+
+
+def restore_pack_version(
+    org_id: str,
+    pack_id: str,
+    *,
+    actor_id: str,
+    reason: Optional[str] = None,
+) -> PackStateOutcome:
+    """Clear a version pin so the pack runs its CURRENT version again.
+
+    The rollback stays on the append-only history — restoring does not erase it.
+    """
+    return get_pack_state_store().set_pinned_version(
+        org_id, pack_id, None, actor_id, reason
+    )
+
+
+def get_pinned_pack_version(org_id: str, pack_id: str) -> Optional[str]:
+    """The version this org pinned a pack to, or ``None`` when un-pinned."""
+    return pack_state_rows(org_id).get(pack_id, {}).get("pinned_version")
+
+
+def pinned_pack_versions(org_id: str) -> Dict[str, str]:
+    """``{pack_id: pinned_version}`` for this org. Raises if unreadable."""
+    return {
+        pack_id: str(row["pinned_version"])
+        for pack_id, row in pack_state_rows(org_id).items()
+        if row.get("pinned_version")
+    }
+
+
+def pinned_pack_versions_safe(org_id: Optional[str]) -> Dict[str, str]:
+    """:func:`pinned_pack_versions`, degrading to ``{}`` on any failure.
+
+    Fail-soft for the same reason as :func:`disabled_pack_ids_safe`: an unreadable
+    state store must not stop a run. Note the direction of the degradation — with no
+    pin readable a run executes the CURRENT version, which is the platform's own
+    shipped behaviour, and stamps that same current version. So the run stays
+    self-consistent (it is never stamped with a version it did not execute); it
+    simply does not honour the rollback. That is the safe failure for AC3: an honest
+    current-version run beats a run stamped one version and behaving as another.
+    """
+    if not org_id:
+        return {}
+    try:
+        return pinned_pack_versions(org_id)
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Could not read pinned pack versions for org=%s; running current versions",
+            org_id,
+            exc_info=True,
+        )
+        return {}
+
+
 def get_pack_state(org_id: str, pack_id: str) -> str:
     """This org's state for one pack. Unknown/unset ⇒ ``active``."""
     return get_pack_state_store().get_state(org_id, pack_id)
@@ -573,22 +900,37 @@ def pack_state_view(org_id: str) -> List[Dict[str, Any]]:
     Packs with no explicit row report ``active`` with ``revision: 0``, so the view
     always covers the whole registry rather than only the rows that exist.
     """
-    from discovery.packs.pack_config import PACK_REGISTRY, get_pack_version
+    from discovery.packs.pack_config import (
+        PACK_REGISTRY,
+        get_pack_version,
+        get_rollbackable_versions,
+    )
 
     rows = _safe_state_rows(org_id)
     view: List[Dict[str, Any]] = []
     for pack_id, pack in PACK_REGISTRY.items():
         row = rows.get(pack_id) or {}
+        current_version = get_pack_version(pack_id)
+        pinned = row.get("pinned_version") or None
         view.append(
             {
                 "packId": pack_id,
                 "packName": pack.get("packName", pack_id),
-                "packVersion": get_pack_version(pack_id),
+                # The version the REGISTRY currently ships…
+                "packVersion": current_version,
                 "state": str(row.get("state") or STATE_ACTIVE),
                 "revision": int(row.get("revision") or 0),
                 "reason": row.get("reason"),
                 "updatedBy": row.get("updated_by"),
                 "updatedAt": row.get("updated_at"),
+                # …and the 2.0-C1 T3 version position. `pinnedVersion` is None when
+                # un-pinned; `effectiveVersion` is what a run STARTED NOW would
+                # execute and stamp, which is the number an operator actually cares
+                # about. `availableVersions` are the rollback targets (empty ⇒ this
+                # pack cannot be rolled back).
+                "pinnedVersion": pinned,
+                "effectiveVersion": pinned or current_version,
+                "availableVersions": get_rollbackable_versions(pack_id),
             }
         )
     return view

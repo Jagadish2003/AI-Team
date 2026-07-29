@@ -5,16 +5,31 @@
 | Task | Delivers | Criterion |
 |------|----------|-----------|
 | **T1 — AT-826** | Compatibility declaration + activation gate | **AC1** — a pack declaring an unmet platform range cannot be activated; the refusal names the unmet requirement |
-| **T2 — AT-827** | Safe disable state machine (§8 below) | **AC2** — disabling stops future execution while all historical findings remain retrievable and correctly labelled |
+| **T2 — AT-827** | Safe disable state machine (§8) | **AC2** — disabling stops future execution while all historical findings remain retrievable and correctly labelled |
+| **T3 — AT-828** | Version rollback (§9) | **AC3** — rollback causes subsequent runs to use the prior version; existing findings retain their original version stamps |
 
 Packs are versioned and stamped per run (R16-B1 §4), 1.9 added two more packs, and
 1.9.1 enabled multi-pack runs. What was missing: what happens when a pack version
-is incompatible with the platform version, and when a customer wants a pack turned
-off — **without destroying run history**.
+is incompatible with the platform version, when a customer wants a pack turned off,
+and when a pack upgrade must be reversed — **without destroying run history**.
 
-> **Scope.** Rollback (AT-828), the exhaustive never-delete-history data-layer
-> sweep (AT-829), and UI surfacing (AT-830) are separate tasks layered on top of
-> what is described here. §1–§7 cover compatibility (T1); §8 covers disable (T2).
+> **Scope.** The exhaustive never-delete-history data-layer sweep (AT-829) and UI
+> surfacing (AT-830) are separate tasks layered on top of what is described here.
+> §1–§7 cover compatibility (T1); §8 covers disable (T2); §9 covers rollback (T3).
+
+## The three lifecycle dimensions
+
+A pack has three independent lifecycle facts per organisation, and it is worth being
+precise that they do not interact:
+
+| Dimension | Question | Values | Owner |
+|-----------|----------|--------|-------|
+| **Compatibility** | *Can this pack run here at all?* | derived from the declaration | T1 |
+| **State** | *Is it turned on?* | `active` / `disabled` | T2 |
+| **Version** | *Which version does it run?* | current, or a pinned prior version | T3 |
+
+Disabling a rolled-back pack does not clear its pin; re-enabling does not lose it.
+They share one row and one audit trail (§9.5) but never overwrite each other.
 
 ## 1. What a pack declares
 
@@ -200,7 +215,9 @@ letting a bad declaration surface as a runtime refusal in front of a customer:
 | [`tests/unit/test_pack_activation_gate.py`](../backend/tests/unit/test_pack_activation_gate.py) | The shared app-layer gate + refusal telemetry + the compute edge's selection resolution. DB-free. |
 | [`tests/unit/test_pack_state_machine.py`](../backend/tests/unit/test_pack_state_machine.py) | The disable state machine: transitions, idempotence, org isolation, append-only history, exclusion, labelling, fail-soft reads. DB-free. |
 | [`tests/contract/test_pack_compatibility_activation.py`](../backend/tests/contract/test_pack_compatibility_activation.py) | The HTTP contract: 409 + named reason on both edges, no half-created run, no queued background task, run-record persistence. Needs the contract DB. |
+| [`tests/unit/test_pack_version_rollback.py`](../backend/tests/unit/test_pack_version_rollback.py) | Rollback: the archive's integrity, pin transitions, resolution of detectors/config/stamp, refusal of unservable targets, fail-soft. DB-free. |
 | [`tests/contract/test_pack_disable_lifecycle.py`](../backend/tests/contract/test_pack_disable_lifecycle.py) | Disable over HTTP: the state endpoints, RBAC, launch exclusion, historical findings retrievable + labelled, run-health state across transitions. Needs the contract DB. |
+| [`tests/contract/test_pack_version_rollback_lifecycle.py`](../backend/tests/contract/test_pack_version_rollback_lifecycle.py) | Rollback over HTTP: the version endpoint, RBAC, runs after rollback using the prior version, findings keeping original stamps, run-health across transitions. Needs the contract DB. |
 
 ---
 
@@ -332,3 +349,157 @@ the dashboard says executed. `pack_state` is the one field read **live**, becaus
 "is this pack still running?" is a question about *now*, not about the run. So a
 pack disabled after a run reads `disabled` while its recorded `pack_version` and
 `detectors` stay exactly as executed.
+
+---
+
+# 9. Version rollback (T3 / AT-828)
+
+**Criterion discharged:** AC3 — *rollback causes subsequent runs to use the prior
+version; existing findings retain their original version stamps*, and nothing is
+rewritten retroactively.
+
+## 9.1 The problem with "just pin the version number"
+
+A pack version is a *stamp* (`packVersion`, R16-B1 §4) whose whole purpose is to let
+governance tell a data change from a pack-logic change. So the naive rollback —
+store `1.1.0` and keep running the current code — would be **actively harmful**: it
+produces runs stamped `1.1.0` that behaved like `1.2.0`, corrupting the one signal
+the stamp exists to carry.
+
+A rollback is therefore only honest if the platform can genuinely *serve* the prior
+version's behaviour. Two things carry that behaviour:
+
+| Carries behaviour | Where it lives | How it is served |
+|-------------------|----------------|------------------|
+| detector list | `PACK_REGISTRY[...]["detectors"]` | declared per version in `versionHistory` |
+| thresholds / calibration / terminology | external config JSON | the **archived artifact** in `versions/` |
+
+That is why only **config-driven packs** are rollbackable today. `cloud_ops` and
+`security_ops` externalised their calibration (MSP-B6 T1 / MSP-B12 T1: "a config
+change alters behaviour with no code deploy"), which is exactly what makes a prior
+version reproducible. A code-only pack has nothing to archive, so rollback is
+**refused** for it — naming that reason.
+
+## 9.2 The version archive
+
+[`discovery/packs/versions/`](../backend/discovery/packs/versions/README.md) holds
+the config artifact of each prior runnable version. The files are **verbatim
+history recovered from git**, not hand-written:
+
+| File | Version | Recovered from |
+|------|---------|----------------|
+| `cloud_ops_pack_config.v1.1.0.json` | 1.1.0 | `ae4d6f3e` (MSP-B6 T4) |
+| `security_ops_pack_config.v1.1.0.json` | 1.1.0 | `11e4aaf0` (MSP-B12 T2) |
+
+A test asserts each artifact's own `packVersion` matches its filename and differs
+from the current config — the guard that the archive is real history rather than a
+copy of the current file renamed.
+
+Both packs also had a `1.0.0`, but those were **scaffolds with zero detectors**.
+Rolling back to a version that produces no findings would be a footgun dressed up as
+a feature, so `1.0.0` is deliberately not offered.
+
+**The discipline: archive on bump.** When you bump a config-driven pack's
+`packVersion`, archive the outgoing config and add its `versionHistory` entry *in the
+same PR*. That is the only moment the artifact is trivially available.
+
+## 9.3 What a version declares
+
+```python
+"versionHistory": [                      # PRIOR versions only, newest first
+    {
+        "version":    "1.1.0",
+        "configPath": ".../versions/cloud_ops_pack_config.v1.1.0.json",
+        "detectors":  [...],             # that version's detector list
+        "note":       "MSP-B6 T4 — before the MSP-B5 documentation-gap detector",
+    },
+],
+```
+
+`pack_config.resolve_pack_at_version(pack_id, version)` returns a **copy** of the
+pack with that version's `packVersion`, `detectors`, and `config_path` substituted,
+plus a `pinnedVersion` marker. The registry is never mutated. An unarchived version
+raises `PackVersionUnavailable`, whose message names the versions that *are*
+available.
+
+## 9.4 How a pinned run actually runs the prior version
+
+Three substitutions, all in `runner._resolve_pack_activation`:
+
+1. **Version stamp** — `_effective_pack_version()` prefers the pin, so every
+   opportunity is stamped with the version that actually produced it.
+2. **Detectors** — `_detectors_for_pinned_version()` narrows the runner's current
+   per-domain import list to the version's declared list, preserving declared order.
+   Applied **only when a pin is active**, so an un-pinned run is byte-identical to
+   before rollback existed. A declared detector this build no longer provides is
+   skipped loudly; if *none* survive it raises rather than running an arbitrary set
+   under that version's stamp.
+3. **Config** — the archived artifact is published to a per-run
+   [`contextvars`](../backend/discovery/packs/pack_version_context.py) mapping.
+   Detectors and scorers call `get_detector_thresholds(section, fallback)` with no
+   path argument, so threading a path through every signature would touch dozens of
+   call sites; instead each loader applies one precedence:
+
+   ```
+   explicit path argument  →  this run's pinned path  →  the pack's default path
+   ```
+
+   A `ContextVar` (not a module global) for the same reason as
+   `discovery/ingest/__init__.py`'s live-connector context: runs execute
+   concurrently in background threads under `copy_context().run(...)`, and a global
+   would leak one tenant's rolled-back config into another tenant's run.
+
+## 9.5 Nothing is rewritten retroactively
+
+A pin is a **forward-looking configuration row**. There is no backfill step of any
+kind, and the rollback path never reads or writes findings, evidence, or run records:
+
+- an existing finding keeps the `packVersion` it was produced with, forever;
+- a run launched before the rollback still records the version it ran;
+- restoring afterwards does not rewrite the run that *did* use the pin;
+- the rollback stays on the append-only history after a restore.
+
+Run health reads each run's **historical** pin (`run["pinnedPackVersions"]`, written
+by the runner), never the org's current pin — so rolling back today cannot backdate
+what yesterday's run reports.
+
+Version and state transitions share one `pack_states` row and one
+`pack_state_history` trail, with `revision` counting every change of either kind.
+That is deliberate: AT-830 has to surface "what has this org done to this pack", and
+one trail means one answer. The columns are additive (alembic `0032`,
+`ADD COLUMN IF NOT EXISTS`), so a pack with no pin reads `NULL` and behaves exactly
+as before.
+
+## 9.6 Fail-soft, in the safe direction
+
+An unreadable state store, or a pin whose artifact was dropped in a later release,
+degrades to the **current** version rather than failing the run. Note *why* that is
+the safe direction: the run then executes and is stamped with the same version, so it
+stays self-consistent — it simply does not honour the rollback. An honest
+current-version run beats a run stamped one version and behaving as another. A
+dropped artifact also emits `pack.version_pin_unservable`, so a stale pin is never
+silent.
+
+## 9.7 API
+
+| Endpoint | Role | Purpose |
+|----------|------|---------|
+| `PUT /api/packs/{pack_id}/version` | **owner** | `{"version": "1.1.0"}` rolls back; `{"version": null}` restores the current version. Idempotent. **409** when the version is not archived, naming what is. |
+| `GET /api/packs/state` | viewer | Adds `pinnedVersion`, `effectiveVersion`, and `availableVersions` per pack |
+| `GET /api/packs/{pack_id}/state/history` | analyst | Rollback/restore transitions carry `previous_version` / `resulting_version` |
+
+`effectiveVersion` is the number an operator actually cares about — what a run
+started *now* would execute and stamp — while `packVersion` stays what the registry
+ships.
+
+## 9.8 What gets recorded
+
+| Location | Content |
+|----------|---------|
+| Run record | `pinnedPackVersions`; `packVersions` records the **pinned** version for a rolled-back pack, because that is what the run executes |
+| Run-scoped KV | `pinned_pack_versions:{run_id}` (launch edge *and* runner) |
+| Runner payload | `pinnedPackVersions` |
+| Run health | `pinned_version` + `rolled_back` per pack row, plus a top-level `pinned_pack_versions` |
+| Audit | `pack_state_changed` with the version fields |
+| Telemetry | `pack.version_pinned`, `pack.version_pin_unservable` |
+| Domain audit trail | `pack_state_history` (`rollback` / `restore` transitions) |

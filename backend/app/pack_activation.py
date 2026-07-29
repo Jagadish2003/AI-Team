@@ -23,7 +23,7 @@ CLI/direct caller that never touches an API edge cannot run an incompatible pack
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from discovery.packs.pack_compatibility import (
@@ -129,6 +129,12 @@ class ActivationDecision:
 
     activated: List[PackCompatibility]
     excluded: List[ExcludedPack]
+    #: 2.0-C1 T3 (AT-828): ``{pack_id: pinned_version}`` for packs this org has
+    #: rolled back. Only packs that are actually running appear here.
+    pinned_versions: Dict[str, str] = field(default_factory=dict)
+    #: ``{pack_id: archived_config_path}`` for the pinned packs — what the runner
+    #: publishes to the per-run context so detectors read the pinned config.
+    pinned_config_paths: Dict[str, str] = field(default_factory=dict)
 
     @property
     def activated_pack_ids(self) -> List[str]:
@@ -138,10 +144,20 @@ class ActivationDecision:
     def excluded_pack_ids(self) -> List[str]:
         return [item.pack_id for item in self.excluded]
 
+    def effective_version(self, pack_id: str) -> Optional[str]:
+        """The version ``pack_id`` will execute and be stamped with, if it is running."""
+        if pack_id in self.pinned_versions:
+            return self.pinned_versions[pack_id]
+        for report in self.activated:
+            if report.pack_id == pack_id:
+                return report.pack_version
+        return None
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "activatedPackIds": self.activated_pack_ids,
             "excludedPacks": [item.to_dict() for item in self.excluded],
+            "pinnedPackVersions": dict(self.pinned_versions),
         }
 
 
@@ -206,23 +222,38 @@ def resolve_activatable_packs(
 ) -> ActivationDecision:
     """The single activation resolution both API edges and the runner use.
 
-    Two stages, in this order:
+    Three stages, in this order:
 
     1. **Drop disabled packs** (AT-827). A disabled pack is intentionally turned
        off, so it is excluded rather than refused — and the exclusion is recorded
        loudly (run record, run health, telemetry), never silent.
     2. **Gate the remainder on compatibility** (AT-826). An incompatible pack is a
        configuration error and still REFUSES the activation with a 409.
+    3. **Apply version pins** (AT-828). A rolled-back pack contributes its pinned
+       version and that version's archived config path, so the run executes AND is
+       stamped with the pinned version.
 
     Disabled is evaluated FIRST on purpose: a pack the customer has already turned
     off must not be able to fail a run on compatibility grounds. It is not going to
     execute either way, so refusing the run over it would be noise.
 
+    Compatibility is checked against the pack's CURRENT declaration, not the pinned
+    version's: a pack's declared platform range lives in the registry and is a
+    property of the pack, not of an archived config artifact. A rollback that would
+    land on an unsupported platform is prevented at the rollback edge instead, where
+    the operator can act on it.
+
     Raises :class:`AllPacksDisabledError` when the exclusion leaves nothing to run,
     and :class:`PackIncompatibleError` when a pack that WOULD have run is
-    incompatible.
+    incompatible. A pin that has become unservable (its artifact was removed) is
+    NOT fatal — it degrades to the current version with a loud warning rather than
+    failing every run for the org.
     """
-    from .pack_state import STATE_DISABLED as _DISABLED, disabled_pack_ids_safe
+    from .pack_state import (
+        STATE_DISABLED as _DISABLED,
+        disabled_pack_ids_safe,
+        pinned_pack_versions_safe,
+    )
 
     selection = normalize_pack_ids(list(pack_ids or []))
     if not selection:
@@ -264,4 +295,119 @@ def resolve_activatable_packs(
     activated = gate_pack_activation(
         org_id=org_id, pack_ids=remaining, run_id=run_id
     )
-    return ActivationDecision(activated=activated, excluded=excluded)
+
+    # ── Stage 3: version pins (AT-828) ────────────────────────────────────────
+    pinned_versions, pinned_config_paths = _resolve_version_pins(
+        org_id=org_id,
+        pack_ids=[report.pack_id for report in activated],
+        run_id=run_id,
+        pins=pinned_pack_versions_safe(org_id),
+    )
+    return ActivationDecision(
+        activated=activated,
+        excluded=excluded,
+        pinned_versions=pinned_versions,
+        pinned_config_paths=pinned_config_paths,
+    )
+
+
+def _resolve_version_pins(
+    *,
+    org_id: str,
+    pack_ids: Sequence[str],
+    run_id: Optional[str],
+    pins: Dict[str, str],
+) -> "tuple[Dict[str, str], Dict[str, str]]":
+    """Resolve each running pack's version pin to (version, archived config path).
+
+    A pin whose archived artifact is no longer declared cannot be honoured. Rather
+    than failing every run for the org, that pin is SKIPPED with a loud warning and
+    the pack runs — and is stamped with — its current version. The run therefore
+    stays self-consistent: it is never stamped one version while behaving as
+    another, which is the property AC3 actually protects. An operator sees the
+    warning and either re-archives the artifact or clears the stale pin.
+    """
+    from discovery.packs.pack_config import (
+        PackVersionUnavailable,
+        resolve_pack_at_version,
+    )
+
+    versions: Dict[str, str] = {}
+    config_paths: Dict[str, str] = {}
+    for pack_id in pack_ids:
+        wanted = pins.get(pack_id)
+        if not wanted:
+            continue
+        try:
+            resolved = resolve_pack_at_version(pack_id, wanted)
+        except PackVersionUnavailable as exc:
+            logger.warning(
+                "Pinned version for pack %s (org=%s run=%s) can no longer be served, "
+                "running the current version instead: %s",
+                pack_id, org_id, run_id, exc,
+            )
+            _record_pin_unservable(
+                org_id=org_id, pack_id=pack_id, version=wanted, run_id=run_id
+            )
+            continue
+        pinned_version = resolved.get("pinnedVersion")
+        if not pinned_version:
+            # The pin equals the current version — nothing to override.
+            continue
+        versions[pack_id] = str(pinned_version)
+        config_path = resolved.get("config_path")
+        if config_path:
+            config_paths[pack_id] = str(config_path)
+
+    if versions:
+        logger.info(
+            "Run %s (org=%s) uses pinned pack version(s): %s", run_id, org_id, versions
+        )
+        _record_versions_pinned(org_id=org_id, versions=versions, run_id=run_id)
+    return versions, config_paths
+
+
+def _record_versions_pinned(
+    *, org_id: str, versions: Dict[str, str], run_id: Optional[str]
+) -> None:
+    """Emit which pinned versions a run used, so a rollback is visible in run health."""
+    from .telemetry import record_event
+
+    try:
+        record_event(
+            "pack.version_pinned",
+            {
+                "org_id": org_id,
+                "run_id": run_id,
+                "pinned_versions": dict(versions),
+                "pack_ids": sorted(versions),
+            },
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "pack.version_pinned telemetry failed (non-blocking)", exc_info=True
+        )
+
+
+def _record_pin_unservable(
+    *, org_id: str, pack_id: str, version: str, run_id: Optional[str]
+) -> None:
+    """Emit a pin that could not be honoured — a stale pin must not be silent."""
+    from .telemetry import record_event
+
+    try:
+        record_event(
+            "pack.version_pin_unservable",
+            {
+                "org_id": org_id,
+                "run_id": run_id,
+                "pack_id": pack_id,
+                "version": version,
+                "reason": "archived_version_unavailable",
+            },
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "pack.version_pin_unservable telemetry failed (non-blocking)",
+            exc_info=True,
+        )
