@@ -97,11 +97,22 @@ const SALESFORCE_CLOUD_IDS = new Set([
   'salesforce_hc',
 ]);
 
+// Which pack a declared Salesforce product activates. MUST agree with the backend
+// declaration in app/salesforce_product_packs.py — a contract test parses this map
+// and pins the two together, because a product honestly gated as FSC-capable in the
+// registry while this map selects service_cloud is the same dishonesty in a
+// different surface (2.0-D1 T5).
+//
+// salesforce_rc / salesforce_hc map to service_cloud DELIBERATELY: neither has a
+// domain pack (Health Cloud is deferred to 2.0.1), so they run generic detection.
 const CLOUD_PACK_REGISTRY: Record<string, string> = {
   salesforce_pss: 'strs_benefits',
   salesforce_sc: 'service_cloud',
   salesforce_ncino: 'ncino',
-  salesforce_fsc: 'service_cloud',
+  // 2.0-D1: FSC now has its own pack (ingest over FinServ__ objects, five
+  // detectors, its own scorer), so declaring Financial Services Cloud activates it
+  // instead of falling back to generic Service Cloud detection.
+  salesforce_fsc: 'financial_services_cloud',
   salesforce_rc: 'service_cloud',
   salesforce_hc: 'service_cloud',
 };
