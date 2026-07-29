@@ -762,6 +762,47 @@ Deletes: `reports_deletes = False` — a cloud event stream is append-only
 observation history; a fired alarm or logged API call is never retracted, so
 there is no deletion to propagate (the limitation is declared, not faked).
 
+Retrieval: `produces_retrieval_content = False` — a cloud event is an observation,
+not an indexed retrieval artifact. Nothing chunks it, nothing resolves it, and it
+can never be updated or deleted upstream, so the change runner emits no per-event
+`ingestion.artifact_changed` telemetry and drives no retrieval-freshness
+invalidation for these records (it reports the volume once per batch instead). At
+event volume the per-record path cost a telemetry row plus a
+mark-stale-and-enqueue transaction per event, and parked unresolvable rows in the
+retrieval refresh queue.
+
+### The poll phase is bounded per run
+
+A scope's backlog can be far larger than one poll — `cloudtrail:LookupEvents`
+retains 90 days and permits only a couple of calls per second — so the
+continuation loop is bounded by three rules, each checked only *between* polls of
+the same scope, and each reported rather than silent:
+
+1. **Event budget.** The B7 per-run budget (§11) stops the *fetching*, via
+   `OpsEventStream.has_capacity()`, not just the admission. Enforcing it at
+   admission alone bounded the data but never the work: once exhausted the
+   connector kept paying for provider pages whose every event it then deferred.
+2. **Per-scope continuation cap** — `max_polls_per_scope`
+   (`CLOUD_EVENT_MAX_POLLS_PER_SCOPE`, default 4): one scope's backlog can never
+   monopolise a run.
+3. **Wall-clock deadline** — `poll_deadline_seconds`
+   (`CLOUD_EVENT_POLL_DEADLINE_SECONDS`, default 180): volume is not time. A
+   throttled provider can spend minutes on a single page, so a volume bound alone
+   does not bound a run. The deadline is consulted for CONTINUATION polls only, so
+   every scope still gets its first poll and a late scope is never starved by an
+   earlier one's backlog.
+
+Stopping early is **resume, not truncation**: the scope's advanced position rides
+the terminal batch's checkpoint, so the next run continues exactly where this one
+stopped. Every early stop logs at WARNING and appears in `poll_report()` — which
+names each undrained scope and the bound that stopped it, and which the runner
+merges into the run's `cloudOpsRuntime.awsEvents.poll` health block, degrading the
+connector's reported status so a partial ingest never reads as a clean one.
+
+Without these bounds a first run against a real multi-account estate walked the
+provider's entire retention inside one ingestion stage: the run's progress froze
+and the discovery run never reached the detectors.
+
 ### AWS instantiation
 
 [`backend/discovery/ingest/aws_event_connector.py`](../backend/discovery/ingest/aws_event_connector.py)
@@ -806,7 +847,16 @@ access model — **one connection, many accounts, each account a scope**:
   ingests **management (audit) events only** — data events are never returned by
   LookupEvents, and `_is_management_event` defensively drops any explicit
   `Data`/`Insight` record; incremental by the same `StartTime` + `ts > watermark`
-  time watermark as CloudWatch. EventBridge: bounded reads over the scoped rule set
+  time watermark as CloudWatch, with `MaxResults` clamped to the documented API
+  maximum of 50. Because `LookupEvents` is newest-first with no sort control, a
+  backlog larger than one poll is walked BACKWARDS (a descending ceiling, with the
+  watermark pinned until the window drains). That walk is bounded in DEPTH by
+  `AWS_EVENT_MAX_BACKFILL_DAYS` (default 30), measured from the backfill's own
+  newest event: an unbounded walk of the full 90-day retention keeps the watermark
+  pinned across many runs, so every NEW event queues behind the entire history.
+  On reaching the depth the window closes, the high-water mark is promoted, normal
+  incremental polling resumes, and the bounded initial load is logged at WARNING —
+  a declared, configurable boundary, never a silent thinning. EventBridge: bounded reads over the scoped rule set
   (`ListRules` + `DescribeRule`) → `map_eventbridge`; because a rule set is
   configuration not a time series, its per-scope checkpoint is a compact
   `{rule_key: signature}` map and a rule is emitted only when NEW or CHANGED — an
@@ -862,6 +912,10 @@ connector-panel artifact (same pattern as the B7 `budget_report`):
   reported, so the back-off is visible and the data is retried, not thinned. A
   throttle budget that is exhausted marks the scope `failed` (status `partial` if
   other scopes succeeded) — loud, never a silent partial that reads as complete.
+  The back-off wraps the **individual API call** (`_ThrottleRetryingClient`), not
+  the multi-page reader: retrying the reader discarded every page already fetched
+  and re-read it, so on an API that permits ~2 calls/second — where throttling is
+  routine, not exceptional — the work became quadratic and the poll appeared hung.
 * **Outbound-only** (AC6): the connector only makes checkpointed polling calls —
   no SNS subscriptions, webhooks, or inbound listeners — so it works by
   construction under `NETWORK_PROFILE=no_public_inbound`. A structural test scans

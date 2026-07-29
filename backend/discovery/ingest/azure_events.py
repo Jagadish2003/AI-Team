@@ -554,6 +554,10 @@ class AzureEventIngestor(ChangeBasedIngestor):
     #: The three native streams are append-only event streams; a native poll has no
     #: deletion to propagate (matches the bridge's declared limitation).
     reports_deletes = False
+    #: A cloud event is an observation, not an indexed retrieval artifact — the change
+    #: runner must not emit per-event artifact_changed/freshness work for it (see
+    #: ChangeBasedIngestor.produces_retrieval_content).
+    produces_retrieval_content = False
 
     def __init__(
         self,

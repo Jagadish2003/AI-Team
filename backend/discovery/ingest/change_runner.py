@@ -50,6 +50,10 @@ Change events (R16-A1 §4, AT-381): for each record in every fully-processed
 batch this runner emits one ``ingestion.artifact_changed`` telemetry event. 1.6
 only EMITS — the Release 1.8 retrieval-freshness layer will consume them. Emission
 is fire-and-forget: it never affects the checkpoint lifecycle or the run outcome.
+A connector whose records are not retrieval artifacts at all (a transport-only
+event connector: ``produces_retrieval_content = False``) is exempt from the
+per-record emission and reports its volume once per batch instead — see
+:attr:`~discovery.ingest.base.ChangeBasedIngestor.produces_retrieval_content`.
 """
 from __future__ import annotations
 
@@ -295,12 +299,27 @@ def ingest_with_checkpoint(
             # checkpoint lifecycle or the run outcome. A connector that manages its
             # own thread-level retrieval freshness (Slack/Teams, R18-A4 T3) still
             # emits the telemetry event but skips the per-record freshness notify.
-            _emit_artifact_changed(
-                org_id,
-                connector_id,
-                batch.records,
-                notify_freshness=not getattr(ingestor, "manages_retrieval_freshness", False),
-            )
+            # A TRANSPORT-ONLY event connector (produces_retrieval_content = False:
+            # the native cloud connectors / the MSP-B8 bridge) emits neither — its
+            # records are not retrieval artifacts, so both per-record paths would be
+            # pure per-event cost at cloud-event volume. The volume is still
+            # reported, per batch, so nothing goes quiet (MSP-B1).
+            if getattr(ingestor, "produces_retrieval_content", True):
+                _emit_artifact_changed(
+                    org_id,
+                    connector_id,
+                    batch.records,
+                    notify_freshness=not getattr(ingestor, "manages_retrieval_freshness", False),
+                )
+            elif batch.records:
+                logger.info(
+                    "change-ingest: connector=%s org=%s — %d transport-only record(s) "
+                    "in this batch; per-record artifact_changed/freshness skipped "
+                    "(the records are observations, not retrieval artifacts).",
+                    connector_id,
+                    org_id,
+                    len(batch.records),
+                )
 
             if is_first_run and _is_persistable_checkpoint(
                 batch.next_checkpoint, connector_id, org_id

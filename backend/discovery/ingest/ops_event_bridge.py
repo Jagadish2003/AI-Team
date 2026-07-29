@@ -109,6 +109,10 @@ class OpsEventBridgeIngestor(ChangeBasedIngestor):
 
     connector_id = "ops_event_bridge"
     reports_deletes = False
+    #: A bridged cloud event is an observation, not an indexed retrieval artifact —
+    #: the change runner must not emit per-event artifact_changed/freshness work for
+    #: it (see ChangeBasedIngestor.produces_retrieval_content).
+    produces_retrieval_content = False
 
     def __init__(
         self,

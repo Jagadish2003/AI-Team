@@ -24,14 +24,18 @@ Across-run resume is by a per-scope **time watermark** (the newest event time se
 for that scope), carried as the skeleton's opaque per-scope checkpoint position.
 Within a run each reader follows the provider's ``NextToken`` internally (bounded
 by :data:`MAX_PAGES_PER_POLL`) and returns everything newer than the watermark in
-one page; the raw provider-side volume is bounded downstream by the B7 admission
-budget, not here.
+one page; how many further continuation polls a run performs is bounded by the
+shared skeleton (per-scope poll cap, wall-clock deadline, and the B7 admission
+budget), and the DEPTH of an initial CloudTrail backfill is bounded by
+:data:`DEFAULT_MAX_BACKFILL_DAYS`. Every one of those bounds reports what it stopped
+— a partial ingest is never allowed to read as a complete one.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -68,12 +72,46 @@ MAX_PAGES_PER_POLL = 50
 #: Default provider page size per surface API call.
 DEFAULT_PAGE_SIZE = 100
 
+#: ``cloudtrail:LookupEvents`` caps ``MaxResults`` at 50 — asking for more is a
+#: request the API is not obliged to honour, so the reader clamps to the documented
+#: maximum rather than relying on provider-side leniency.
+CLOUDTRAIL_MAX_RESULTS = 50
+
 #: Default max throttle back-off retries before a scope is reported failed (loud).
 DEFAULT_MAX_THROTTLE_RETRIES = 5
+
+#: Default DEPTH of an initial CloudTrail backfill, in days, measured from the
+#: backfill's own newest event (see :mod:`discovery.ingest.aws_watermark`). 30 days
+#: matches the month-scale window MSP-B7's volume calibration was derived from
+#: (``docs/MSP-B8_VOLUME_VALIDATION.md``) and keeps a first load convergent instead
+#: of walking the full 90-day LookupEvents retention with the watermark pinned.
+#: ``0`` restores the unbounded walk.
+DEFAULT_MAX_BACKFILL_DAYS = 30
 
 #: Back-off schedule (seconds) — exponential, capped. Tests inject a no-op sleeper.
 _BACKOFF_BASE_SECONDS = 0.5
 _BACKOFF_CAP_SECONDS = 10.0
+
+
+def _configured_max_backfill_days() -> float:
+    """Initial-backfill depth in days from ``AWS_EVENT_MAX_BACKFILL_DAYS``.
+
+    The env name is spelled literally (not via a constant) so the ingest-layer env
+    guard can statically confirm it is a numeric tuning knob and not a credential.
+    """
+    raw = os.environ.get("AWS_EVENT_MAX_BACKFILL_DAYS")
+    if raw is None or not str(raw).strip():
+        return DEFAULT_MAX_BACKFILL_DAYS
+    try:
+        value = float(str(raw).strip())
+    except ValueError:
+        logger.warning(
+            "aws_poll_source: AWS_EVENT_MAX_BACKFILL_DAYS=%r is not a number — "
+            "using the default %s day(s)", raw, DEFAULT_MAX_BACKFILL_DAYS,
+        )
+        return DEFAULT_MAX_BACKFILL_DAYS
+    return max(0.0, value)
+
 
 #: Surface → the boto3 service name whose client reads it.
 _SERVICE_FOR_SURFACE: Dict[str, str] = {
@@ -284,7 +322,13 @@ def read_cloudwatch(
 
 
 def read_cloudtrail(
-    client: Any, *, region: Optional[str], account_id: str, watermark: str, page_size: int
+    client: Any,
+    *,
+    region: Optional[str],
+    account_id: str,
+    watermark: str,
+    page_size: int,
+    max_backfill_seconds: Optional[float] = None,
 ) -> Tuple[List[Dict[str, Any]], str, bool]:
     """Read new CloudTrail **management** events since ``watermark`` (AT-644).
 
@@ -304,6 +348,11 @@ def read_cloudtrail(
     position and promoted to the watermark only once the window drains. See
     :mod:`discovery.ingest.aws_watermark`.
 
+    ``max_backfill_seconds`` bounds how DEEP an initial backfill walks (measured from
+    the backfill's own newest event), so a first load on an account with months of
+    audit history converges instead of pinning the watermark across many runs. It is
+    passed through to :func:`advance_descending`, which closes the window loudly.
+
     Returns ``(events, next_position, truncated)``.
     """
     position = decode_position(watermark)
@@ -315,8 +364,9 @@ def read_cloudtrail(
     end_time = parse_timestamp(position.ceiling) if position.backfilling else None
     token: Optional[str] = None
     truncated = False
+    max_results = min(page_size, CLOUDTRAIL_MAX_RESULTS)
     for page_number in range(MAX_PAGES_PER_POLL):
-        params: Dict[str, Any] = {"MaxResults": page_size}
+        params: Dict[str, Any] = {"MaxResults": max_results}
         if start_time is not None:
             params["StartTime"] = start_time
         if end_time is not None:
@@ -346,9 +396,17 @@ def read_cloudtrail(
                 "walking the remaining backlog backwards (no events dropped)",
                 account_id,
             )
-    advanced = advance_descending(position, seen, truncated=truncated)
+    advanced = advance_descending(
+        position, seen, truncated=truncated, max_backfill_seconds=max_backfill_seconds
+    )
     next_position = encode_position(advanced)
-    return events, next_position, truncated and next_position != watermark
+    # Only report "keep paging" when the position actually moved AND the window is
+    # still open — a backfill closed by the depth bound has nothing left to page.
+    return (
+        events,
+        next_position,
+        truncated and advanced.backfilling and next_position != watermark,
+    )
 
 
 def _is_management_event(record: Dict[str, Any]) -> bool:
@@ -495,6 +553,63 @@ _SURFACE_READERS = {
 }
 
 
+class _ThrottleRetryingClient:
+    """Wraps a boto3-shaped client so EACH API call retries its own throttling.
+
+    Why per call rather than per read: a surface reader follows the provider's
+    pagination internally, so retrying at the reader level throws away every page
+    already fetched and re-reads them — under sustained throttling (``LookupEvents``
+    allows only a couple of calls a second, so throttling is routine, not
+    exceptional) the work becomes quadratic and the poll appears to hang. Retrying
+    the individual call keeps page progress, which is also what "back off and report;
+    do not thin the data quietly" (MSP-B1 failure posture) actually requires.
+
+    Non-throttle errors propagate untouched, so the caller still reports the scope
+    failed. Every back-off is counted in run health (never silent).
+    """
+
+    def __init__(
+        self,
+        client: Any,
+        *,
+        account_id: str,
+        surface: str,
+        health: AWSConnectorHealth,
+        max_retries: int,
+        sleeper: Callable[[float], None],
+    ) -> None:
+        self._client = client
+        self._account_id = account_id
+        self._surface = surface
+        self._health = health
+        self._max_retries = max_retries
+        self._sleeper = sleeper
+        #: Total back-offs performed across every call made through this wrapper.
+        self.throttle_retries = 0
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._client, name)
+        if not callable(attr):
+            return attr
+
+        def _retrying(*args: Any, **kwargs: Any) -> Any:
+            attempt = 0
+            while True:
+                try:
+                    return attr(*args, **kwargs)
+                except Exception as exc:  # noqa: BLE001 — only throttling is retried
+                    if not is_throttle_error(exc) or attempt >= self._max_retries:
+                        raise
+                    attempt += 1
+                    self.throttle_retries += 1
+                    self._health.record_throttle(
+                        self._account_id, self._surface, self.throttle_retries
+                    )
+                    self._sleeper(_backoff_seconds(attempt))
+
+        return _retrying
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # The poll source
 # ─────────────────────────────────────────────────────────────────────────────
@@ -518,6 +633,7 @@ class AWSLivePollSource(CloudPollSource):
         page_size: int = DEFAULT_PAGE_SIZE,
         max_throttle_retries: int = DEFAULT_MAX_THROTTLE_RETRIES,
         sleeper: Optional[Callable[[float], None]] = None,
+        max_backfill_days: Optional[float] = None,
     ) -> None:
         for surface in surfaces:
             if surface not in AWS_SURFACE_MAPPERS:
@@ -528,6 +644,13 @@ class AWSLivePollSource(CloudPollSource):
         self.page_size = page_size
         self.max_throttle_retries = max_throttle_retries
         self._sleeper = sleeper or time.sleep
+        #: Initial-backfill DEPTH in days (0 = unbounded); see
+        #: :data:`DEFAULT_MAX_BACKFILL_DAYS` and :func:`advance_descending`.
+        self.max_backfill_days = (
+            _configured_max_backfill_days()
+            if max_backfill_days is None
+            else max(0.0, float(max_backfill_days))
+        )
         self._by_account: Dict[str, AWSAccountConfig] = {a.account_id: a for a in self.accounts}
         #: Per-account run-health surface (AT-646) — the R18-C2 connector-panel
         #: artifact, accumulated as scopes are polled. Loud, never silent.
@@ -536,6 +659,11 @@ class AWSLivePollSource(CloudPollSource):
         #: "authenticated" line appears once per account rather than once per scope
         #: (an account is polled once per surface/region). Observability only.
         self._authenticated_accounts: set = set()
+
+    @property
+    def max_backfill_seconds(self) -> float:
+        """Initial-backfill depth in seconds (``0.0`` = unbounded walk)."""
+        return self.max_backfill_days * 86400.0
 
     def health_report(self) -> Dict[str, Any]:
         """Per-account run-health report (auth/throttle/partial states)."""
@@ -582,64 +710,75 @@ class AWSLivePollSource(CloudPollSource):
 
         service = _SERVICE_FOR_SURFACE[scope.surface]
         reader = _SURFACE_READERS[scope.surface]
+        reader_kwargs: Dict[str, Any] = {}
+        if scope.surface == SURFACE_CLOUDTRAIL:
+            # Bound the DEPTH of an initial backfill so a first load on an account
+            # with months of audit history converges (see aws_watermark).
+            reader_kwargs["max_backfill_seconds"] = self.max_backfill_seconds
 
-        # Read with throttle back-off: on a rate-limit error we back off and retry
-        # (counted in run health) rather than thinning the data. Any other error —
-        # or throttling that outlasts the retry budget — is reported as a failed
-        # scope (loud), not silently dropped.
-        attempt = 0
-        while True:
-            try:
-                # Pass the account's CONFIGURED partition (AT-645): a GovCloud
-                # connection must resolve aws-us-gov endpoints even when the scope
-                # carries no explicit region, instead of silently falling back to
-                # commercial endpoints derived from an absent region.
-                client = self.authenticator.client_factory.client(
-                    service,
-                    region=scope.region,
-                    credentials=credentials,
-                    partition=account.partition,
-                )
-                events, new_position, has_more = reader(
+        # Read with throttle back-off: on a rate-limit error the individual API call
+        # backs off and retries (counted in run health, page progress preserved)
+        # rather than thinning the data. Any other error — or throttling that
+        # outlasts the retry budget — is reported as a failed scope (loud), not
+        # silently dropped.
+        try:
+            # Pass the account's CONFIGURED partition (AT-645): a GovCloud
+            # connection must resolve aws-us-gov endpoints even when the scope
+            # carries no explicit region, instead of silently falling back to
+            # commercial endpoints derived from an absent region.
+            client = self.authenticator.client_factory.client(
+                service,
+                region=scope.region,
+                credentials=credentials,
+                partition=account.partition,
+            )
+            events, new_position, has_more = reader(
+                _ThrottleRetryingClient(
                     client,
-                    region=scope.region,
                     account_id=scope.account,
-                    watermark=position or "",
-                    page_size=self.page_size,
-                )
-                self.health.mark_scope_ok(scope.account, scope.surface)
-                # Per-surface visibility: which AWS surface was read, for which
-                # account/region, and how many events it returned. This is the log
-                # line that answers "is CloudWatch/EventBridge/CloudTrail actually
-                # being polled?" — previously only failures were observable, so a
-                # surface returning nothing looked identical to one never polled.
-                logger.info(
-                    "aws_poll_source: polled %s account=%s region=%s — %d event(s)%s",
-                    scope.surface,
-                    scope.account,
-                    scope.region or "-",
-                    len(events),
-                    " (more pending)" if has_more else "",
-                )
-                # Pagination up to MAX_PAGES_PER_POLL happens inside the reader.
-                # Beyond that the reader reports has_more so the skeleton polls this
-                # scope again from the advanced position — a large backlog is drained
-                # across several polls instead of being silently truncated. Total
-                # volume stays bounded by the B7 admission budget, which defers
-                # loudly rather than dropping.
-                return PollPage(
-                    events=events, next_position=new_position, has_more=has_more
-                )
-            except Exception as exc:  # noqa: BLE001 — loud per-scope failure, not silent
-                if is_throttle_error(exc) and attempt < self.max_throttle_retries:
-                    attempt += 1
-                    self.health.record_throttle(scope.account, scope.surface, attempt)
-                    self._sleeper(_backoff_seconds(attempt))
-                    continue
-                self.health.mark_scope_failed(
-                    scope.account, scope.surface, f"{type(exc).__name__}: {exc}"
-                )
-                return PollPage(events=[], next_position=position, has_more=False)
+                    surface=scope.surface,
+                    health=self.health,
+                    max_retries=self.max_throttle_retries,
+                    sleeper=self._sleeper,
+                ),
+                region=scope.region,
+                account_id=scope.account,
+                watermark=position or "",
+                page_size=self.page_size,
+                **reader_kwargs,
+            )
+            self.health.mark_scope_ok(scope.account, scope.surface)
+            # Per-surface visibility: which AWS surface was read, for which
+            # account/region, and how many events it returned. This is the log
+            # line that answers "is CloudWatch/EventBridge/CloudTrail actually
+            # being polled?" — previously only failures were observable, so a
+            # surface returning nothing looked identical to one never polled.
+            logger.info(
+                "aws_poll_source: polled %s account=%s region=%s — %d event(s)%s",
+                scope.surface,
+                scope.account,
+                scope.region or "-",
+                len(events),
+                " (more pending)" if has_more else "",
+            )
+            # Pagination up to MAX_PAGES_PER_POLL happens inside the reader.
+            # Beyond that the reader reports has_more so the skeleton polls this
+            # scope again from the advanced position — a large backlog is drained
+            # across several polls instead of being silently truncated. How many
+            # such continuation polls one RUN performs is bounded by the skeleton
+            # (poll cap / deadline / B7 budget), which reports the undrained
+            # remainder loudly and resumes it next run.
+            return PollPage(
+                events=events, next_position=new_position, has_more=has_more
+            )
+        except Exception as exc:  # noqa: BLE001 — loud per-scope failure, not silent
+            # Throttling was already retried per API call inside
+            # _ThrottleRetryingClient (which preserves page progress); reaching here
+            # means the retry budget was exhausted or the failure was not a throttle.
+            self.health.mark_scope_failed(
+                scope.account, scope.surface, f"{type(exc).__name__}: {exc}"
+            )
+            return PollPage(events=[], next_position=position, has_more=False)
 
 
 def _backoff_seconds(attempt: int) -> float:
