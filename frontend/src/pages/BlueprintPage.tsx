@@ -497,7 +497,12 @@ function EvidencePanel({
   // and filter client-side by evidenceIds. Previously this re-fetched ALL
   // evidence on every opportunity switch via a keyed effect; now switching
   // opportunities is instant and makes no network call.
-  const { data: allEvidence } = useResource<EvidenceReview[]>(
+  const {
+    data: allEvidence,
+    loading: evidenceLoading,
+    error: evidenceError,
+    refetch: refetchEvidence,
+  } = useResource<EvidenceReview[]>(
     runId ? cacheKeys.runEvidence(runId) : null,
     () => fetchEvidence(runId as string),
   );
@@ -525,6 +530,22 @@ function EvidencePanel({
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+        {/* A failed evidence load is reported, with a retry — never left looking
+            like an in-progress load. The run-scoped evidence endpoint 404s until
+            the run materialises the artifact, so a fetch started while the run
+            was still finishing legitimately fails; the panel must say so. */}
+        {evidenceError && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+            <div className="text-sm text-text">Evidence could not be loaded for this run.</div>
+            <button
+              type="button"
+              onClick={refetchEvidence}
+              className="mt-2 rounded-md border border-accent/20 bg-accent/5 px-2.5 py-1 text-xs font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
+            >
+              Retry
+            </button>
+          </div>
+        )}
         {evidenceIds.length > 0 ? (
           evidenceIds.map((id) => {
             const ev = evidenceMap[id];
@@ -545,7 +566,18 @@ function EvidencePanel({
                 ) : (
                   <>
                     <div className="font-mono text-xs text-muted">{id}</div>
-                    <div className="mt-1 text-sm text-text">Loading evidence...</div>
+                    {/* Only say "loading" while a fetch is actually in flight.
+                        Once the set has loaded, an id that is not in it is a
+                        genuine miss and is reported as one — the old blanket
+                        "Loading evidence..." hid both a failed fetch and a
+                        missing item behind a spinner that never resolved. */}
+                    <div className="mt-1 text-sm text-text">
+                      {evidenceLoading
+                        ? 'Loading evidence...'
+                        : evidenceError
+                          ? 'Evidence unavailable.'
+                          : 'Evidence not found in this run.'}
+                    </div>
                   </>
                 )}
               </div>

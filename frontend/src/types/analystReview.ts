@@ -47,6 +47,14 @@ export interface OpportunityCandidate {
   // 2.0-A1 — intervention projection, stored with the opportunity by the run
   // pipeline. Absent on older runs and on findings that are not projectable.
   projection?: InterventionProjection | null;
+  // R191-P1 T3 — the pack (and its version at run time) that produced this
+  // finding. Optional/additive: a single-pack run stamps its one pack; a
+  // multi-pack run stamps whichever pack's detector fired. Absent on runs
+  // materialized before this field existed. Also present on opportunities
+  // embedded in PilotRoadmap stages (RoadmapStage.opportunities reuses this
+  // same type), satisfying "every roadmap entry carries its packId".
+  packId?: string;
+  packVersion?: string;
 }
 
 export interface ReviewAuditEvent {

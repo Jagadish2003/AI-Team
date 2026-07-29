@@ -16,6 +16,8 @@ Event type payload schemas (locked — do not change field names):
     user_login:            org_id, user_id, ip_address_hash, timestamp
     setup_state_saved:     org_id, user_id, system_count, pack_id, timestamp
     schema_discovered:     org_id, connector_id, schema_count, table_count, timestamp
+    runbook_match_decided: org_id, user_id, recurrence_id, action,
+                           previous_state, resulting_state, revision
 
 Behaviour difference — schema_discovered vs connector_queried:
     schema_discovered  — connector read system catalogues only (no customer data touched).
@@ -57,6 +59,10 @@ SCHEMA_DISCOVERED = "schema_discovered"
 # ("ingestion.checkpoint_reset", registered in app/telemetry.py). Searching the
 # codebase for "checkpoint_reset" will surface both — that is expected.
 INGESTION_CHECKPOINT_RESET = "ingestion_checkpoint_reset"
+# MSP-B5 T4: an analyst accepted, dismissed, or deferred a proposed runbook
+# match. The dedicated decision-history table is the domain record; this event
+# also places the action in the organisation-wide audit stream.
+RUNBOOK_MATCH_DECIDED = "runbook_match_decided"
 
 # ---------------------------------------------------------------------------
 # Registry — every accepted event type listed here.
@@ -78,6 +84,7 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     SETUP_STATE_SAVED,
     SCHEMA_DISCOVERED,
     INGESTION_CHECKPOINT_RESET,
+    RUNBOOK_MATCH_DECIDED,
 })
 
 # ---------------------------------------------------------------------------

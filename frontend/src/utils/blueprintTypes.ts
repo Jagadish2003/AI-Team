@@ -34,6 +34,7 @@ export interface BlueprintResponse {
   evidenceIds: string[];
   detectorId: string;
   projection?: InterventionProjection | null;
+  packId?: string | null;
 }
 
 /**

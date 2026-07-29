@@ -35,53 +35,111 @@
     "incidents": [
       {
         "id": "INC0000001",
+        "sys_id": "incident-sys-0001",
         "number": "INC0000001",
+        "cmdb_ci": {
+          "value": "ci-app-service-001",
+          "display_value": "Citizen Services Portal"
+        },
+        "source_timestamp": "2026-07-01 12:00:00",
+        "source_url": "https://example.service-now.com/nav_to.do?uri=incident.do%3Fsys_id%3Dincident-sys-0001",
+        "affected_ci_references": [],
         "short_description": "Compliance team cannot update covenant status in nCino",
         "description": "nCino covenant tracking fields not saving. Compliance risk accumulating.",
         "category": "compliance",
         "subcategory": "covenant",
         "priority": "1 - Critical",
-        "state": "New"
+        "state": "Closed",
+        "assignment_group": "Level 2 Support",
+        "opened_at": "2026-06-01 09:00:00",
+        "resolved_at": "2026-06-01 13:00:00",
+        "closed_at": "2026-06-02 13:00:00",
+        "close_code": "Solved (Permanently)",
+        "close_notes": "Restored covenant field mapping in nCino per runbook KB0010234. Cache flushed and validated with compliance."
       },
       {
         "id": "INC0000002",
+        "sys_id": "incident-sys-0002",
         "number": "INC0000002",
         "short_description": "Document exception approval workflow not routing for loan closings",
         "description": "Pre-close checklist exception requests not routing. 2-week closing delays.",
         "category": "loan",
         "subcategory": "checklist",
         "priority": "2 - High",
-        "state": "In Progress"
+        "state": "Resolved",
+        "assignment_group": "Level 2 Support",
+        "opened_at": "2026-06-03 08:30:00",
+        "resolved_at": "2026-06-03 17:30:00",
+        "close_code": "Solved (Work Around)",
+        "close_notes": "Applied temporary routing workaround following RUNBOOK-LOAN-CLOSE; permanent fix tracked separately."
       },
       {
         "id": "INC0000003",
+        "sys_id": "incident-sys-0003",
         "number": "INC0000003",
         "short_description": "nCino spreading module slow \u2014 analysts reporting delays",
         "description": "Financial spreading module degraded. Analysts unable to lock spread periods.",
         "category": "spreading",
         "subcategory": "performance",
         "priority": "2 - High",
-        "state": "New"
+        "state": "In Progress",
+        "assignment_group": "Level 1 Support",
+        "opened_at": "2026-06-05 11:00:00"
       },
       {
         "id": "INC0000004",
+        "sys_id": "incident-sys-0004",
         "number": "INC0000004",
         "short_description": "Loan approval stuck \u2014 no approval notifications sent",
         "description": "Approval process not notifying credit committee. Loans stuck in Pending.",
         "category": "loan",
         "subcategory": "approval",
         "priority": "1 - Critical",
-        "state": "New"
+        "state": "Closed",
+        "assignment_group": "Level 2 Support",
+        "opened_at": "2026-06-07 09:15:00",
+        "resolved_at": "2026-06-07 12:45:00",
+        "closed_at": "2026-06-08 12:45:00",
+        "close_code": "Solved (Permanently)",
+        "close_notes": "Re-enabled approval notification flow and reprocessed the queued approvals."
       },
       {
         "id": "INC0000005",
+        "sys_id": "incident-sys-0005",
         "number": "INC0000005",
         "short_description": "nCino loan routing \u2014 multiple reassignments causing origination delays",
         "description": "CRE loans being reassigned multiple times. Origination cycle extended by 3-5 days.",
         "category": "loan",
         "subcategory": "routing",
         "priority": "2 - High",
-        "state": "New"
+        "state": "Resolved",
+        "assignment_group": "Level 2 Support",
+        "assignment_history": [
+          {
+            "assignment_group": "Level 1 Support",
+            "changed_at": "2026-06-09 10:05:00",
+            "history_sys_id": "audit-assignment-0001"
+          },
+          {
+            "assignment_group": "Loan Operations",
+            "changed_at": "2026-06-09 11:10:00",
+            "history_sys_id": "audit-assignment-0002"
+          },
+          {
+            "assignment_group": "Level 1 Support",
+            "changed_at": "2026-06-09 12:20:00",
+            "history_sys_id": "audit-assignment-0003"
+          },
+          {
+            "assignment_group": "Loan Operations",
+            "changed_at": "2026-06-09 13:30:00",
+            "history_sys_id": "audit-assignment-0004"
+          }
+        ],
+        "opened_at": "2026-06-09 10:00:00",
+        "resolved_at": "2026-06-09 18:00:00",
+        "close_code": "Solved (Permanently)",
+        "close_notes": "Corrected loan routing rule set per runbook KB0010500 and confirmed with origination."
       }
     ]
   },

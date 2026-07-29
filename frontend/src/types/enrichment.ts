@@ -52,6 +52,9 @@ export interface OppEnrichment {
   aiSuggestedNextSteps: string[];
   llmGenerated: boolean;
   llmModel: string | null;
+  /** Explicitly false when the pack's data boundary disallows AI narrative. */
+  aiNarrativeAvailable?: boolean | null;
+  aiModeLabel?: string | null;
   // Temporal fields use snake_case to match the backend JSON response directly.
   // This is an intentional exception to the camelCase frontend convention.
   baseline_context: string | null;

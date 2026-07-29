@@ -4,7 +4,7 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -43,9 +43,10 @@ from .opportunity_display import (
 )
 from .replay import replay_run as replay_run_
 from .roadmap_engine import build_roadmap
-from .terminology import apply_terminology, resolve_run_terminology
+from .terminology import apply_run_terminology
 from .routes_normalization import register_normalization_routes
 from .routes_connector_auth import register_connector_auth_routes
+from .routes_cloud_connectors import register_cloud_connector_routes
 from .routes_stack_builder import register_stack_builder_routes
 from .routes_stack_builder_launch import register_stack_builder_launch_routes
 from .routes_salesforce_products import register_salesforce_products_routes
@@ -76,6 +77,8 @@ from .routes_license import register_license_routes
 from .routes_usage_report import register_usage_report_routes
 from .routes_usage_summary import register_usage_summary_routes
 from .routes_ingestion import register_ingestion_routes
+from .routes_runbook_matches import register_runbook_match_routes
+from .routes_secops_evidence import register_secops_evidence_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
@@ -331,6 +334,7 @@ register_blueprint_routes(app)
 register_normalization_routes(app)
 if not any(r.path == "/api/connectors/oauth/callback" for r in app.routes):
     register_connector_auth_routes(app)
+register_cloud_connector_routes(app)
 register_db_connector_routes(app)
 register_temporal_routes(app)
 register_workspace_routes(app)
@@ -351,6 +355,10 @@ register_usage_report_routes(app)
 register_usage_summary_routes(app)
 # R16-A1 / AT-383 (T7): admin ingestion-checkpoint reset.
 register_ingestion_routes(app)
+# MSP-B5 T4: analyst accept/dismiss/defer lifecycle for proposed runbook matches.
+register_runbook_match_routes(app)
+# MSP-B12 T3: analyst-only, audited resolution of one SecOps evidence pointer.
+register_secops_evidence_routes(app)
 
 origins = [
     o.strip()
@@ -512,13 +520,27 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
     "/api/connectors/{connector_id}/configure",
     dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
-def configure_connector(connector_id: str) -> Dict[str, Any]:
+def configure_connector(
+    connector_id: str,
+    body: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     org_id = get_current_org_id()
     c = org_connector_get(org_id, connector_id)
     if not c:
         raise HTTPException(404, "connector not found")
     if c.get("status") != "connected":
         raise HTTPException(400, "connector must be connected before configuring")
+    if connector_id == "servicenow" and body is not None:
+        if "cmdb_class_scope" in body:
+            try:
+                from discovery.ingest.servicenow import normalize_cmdb_class_scope
+
+                class_scope = normalize_cmdb_class_scope(body["cmdb_class_scope"])
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            # Store the canonical exact list on THIS org's connector override.
+            # An empty list intentionally disables the bounded CMDB read.
+            c["cmdb_class_scope"] = list(class_scope)
     c["configured"] = True
     c["lastSynced"] = "Just now"
     org_connector_set(org_id, connector_id, c)
@@ -746,18 +768,16 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
     # with_display(), so a bubble keeps its coordinates when its decision changes.
     # R18-C1 T4: then adapt the finding WORDING to the run's active template
     # (lending language for Commercial Lending). No-op when no template is active.
-    # Pass the run record we already loaded above so terminology resolution does
-    # not re-read it from the DB (one fewer round-trip per opportunities fetch).
-    terminology = resolve_run_terminology(run_id, run=run)
     # 2.0-A1 T5 / AC3 — "no projection output — API, UI, report, or export".
     # This IS the API output the Opportunity Review renders, so the projection
     # vocabulary guard runs on the way out, uniformly with the executive report.
-    # Applied AFTER terminology so a template's own wording is covered too, and
-    # on copies — the stored opportunity is never rewritten.
+    # Applied AFTER terminology (dev's per-pack apply_run_terminology) so a
+    # template's own wording is covered too, and on copies — the stored
+    # opportunity is never rewritten.
     from .projection_copy_guard import scrub_opportunity_narratives
 
     return scrub_opportunity_narratives(
-        [apply_terminology(with_display(opp), terminology) for opp in opps]
+        apply_run_terminology([with_display(opp) for opp in opps], run_id)
     )
 
 
@@ -812,7 +832,7 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
     # offset as the list endpoint — otherwise the bubble jumps when its decision
     # response replaces the listed opportunity in the UI. R18-C1 T4: same
     # template terminology as the list endpoint so wording stays consistent.
-    return apply_terminology(with_display(o), resolve_run_terminology(run_id))
+    return apply_run_terminology(with_display(o), run_id)
 
 
 @app.post(
@@ -874,7 +894,7 @@ def set_opp_override(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
     # with_display so the override response carries the same stable matrix offset
     # as the list endpoint (keeps the bubble coordinate-stable on override save).
     # R18-C1 T4: same template terminology as the list endpoint.
-    return apply_terminology(with_display(o), resolve_run_terminology(run_id))
+    return apply_run_terminology(with_display(o), run_id)
 
 
 @app.get("/api/runs/{run_id}/audit", dependencies=[Depends(require_auth), Depends(require_role("owner"))])
@@ -889,10 +909,9 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
     run_get(run_id)
     # R18-C1 T4: adapt roadmap wording (embedded finding titles/descriptions,
     # stage summaries) to the run's active template. No-op without a template.
-    terminology = resolve_run_terminology(run_id)
     run_roadmap = run_kv_get("roadmap", run_id, None)
     if run_roadmap is not None:
-        return apply_terminology(with_roadmap_display_titles(run_roadmap), terminology)
+        return apply_run_terminology(with_roadmap_display_titles(run_roadmap), run_id)
     opps = run_kv_get("opps", run_id, None)
     if opps is None:
         raise HTTPException(
@@ -902,7 +921,7 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
                 "T2 materialisation has not completed for this run."
             ),
         )
-    return apply_terminology(build_roadmap(with_display_titles(opps)), terminology)
+    return apply_run_terminology(build_roadmap(with_display_titles(opps)), run_id)
 
 
 @app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
@@ -914,12 +933,10 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
 
     # R18-C1 T4: adapt executive-report wording (the AI executive summary and the
     # embedded quick-win finding titles/descriptions) to the active template.
-    terminology = resolve_run_terminology(run_id)
-
     er = run_kv_get("executive_report", run_id, None)
 
     if er:
-        return apply_terminology(with_exec_report_display_titles(er), terminology)
+        return apply_run_terminology(with_exec_report_display_titles(er), run_id)
 
     inputs = run.get("inputs") or {}
     connected_sources = inputs.get("connectedSources") or []
@@ -957,7 +974,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
     opps = scrub_opportunity_narratives(opps)
     quick_wins = [o for o in opps if o.get("tier") == "Quick Win"]
 
-    return apply_terminology(
+    return apply_run_terminology(
         {
             "confidence": "Moderate",
             "sourcesAnalyzed": sources_analyzed,
@@ -970,7 +987,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
                 "blockerCount": 0,
             },
         },
-        terminology,
+        run_id,
     )
 
 

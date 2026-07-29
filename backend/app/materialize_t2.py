@@ -1,7 +1,14 @@
 import time
 from typing import Any, Dict, List, Tuple
 
+from discovery.packs.security_ops_aggregation_floor import (
+    SecOpsAggregationFloorViolation,
+    assert_output_safe,
+)
+
 from . import db
+
+SECURITY_OPS_PACK_ID = "security_ops"
 
 
 def _now_epoch() -> int:
@@ -34,6 +41,26 @@ def _pack_id_for_run(run: Dict[str, Any] | None) -> str | None:
     inputs = run.get("inputs") or {}
     input_pack_id = inputs.get("packId") if isinstance(inputs, dict) else None
     return input_pack_id or run.get("packId") or None
+
+
+def _pack_ids_for_run(run: Dict[str, Any] | None) -> List[str] | None:
+    """R191-P1 T2: the multi-pack selection for a run, if one was configured.
+
+    Reads the plural ``packIds`` (R191-P1 T1) from the run inputs first, then the
+    run record. Returns ``None`` when no multi-pack selection is present — the
+    runner then falls back to the singular ``pack`` (byte-identical single-pack
+    behaviour for every pre-multi-pack run).
+    """
+    if not run:
+        return None
+    inputs = run.get("inputs") or {}
+    input_pack_ids = inputs.get("packIds") if isinstance(inputs, dict) else None
+    ids = input_pack_ids or run.get("packIds")
+    if isinstance(ids, list):
+        cleaned = [str(p) for p in ids if str(p).strip()]
+        if cleaned:
+            return cleaned
+    return None
 
 
 def resolve_effective_pack(
@@ -170,6 +197,40 @@ def _audit_event(action: str, by: str = "System") -> Dict[str, Any]:
         "action": action,
         "by": by,
     }
+
+
+def _secops_seed_slice(
+    opportunities: List[Dict[str, Any]],
+    evidence: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Return only the Security Operations materialization slice."""
+    secops_opps = [
+        opportunity
+        for opportunity in opportunities
+        if opportunity.get("packId") == SECURITY_OPS_PACK_ID
+    ]
+    evidence_ids = {
+        evidence_id
+        for opportunity in secops_opps
+        for evidence_id in (opportunity.get("evidenceIds") or [])
+    }
+    secops_evidence = [
+        item
+        for item in evidence
+        if item.get("packId") == SECURITY_OPS_PACK_ID
+        or item.get("id") in evidence_ids
+    ]
+    return secops_opps, secops_evidence
+
+
+def _assert_secops_materialized(
+    value: Any,
+    *,
+    where: str,
+    enabled: bool,
+) -> None:
+    if enabled:
+        assert_output_safe(value, where=where)
 
 
 def _ingest_summary_from_payload(
@@ -331,9 +392,19 @@ def run_trackb_and_persist(
             run_id, "EXTRACT", "Extracting entities and identifying patterns..."
         )
         pack_id = _pack_id_for_run(run)
+        # R191-P1 T2: pass the full multi-pack selection when the run configured
+        # one (T1). The runner runs each selected pack's detectors against the ONE
+        # shared normalised signal with per-pack calibration; `pack` stays the
+        # primary alias so a single-pack run is unchanged.
+        pack_ids = _pack_ids_for_run(run)
         run_org_id = _org_id_for_run(run, "demo-org")
         payload = trackb_run(
-            mode=mode, systems=systems, run_id=run_id, org_id=run_org_id, pack=pack_id
+            mode=mode,
+            systems=systems,
+            run_id=run_id,
+            org_id=run_org_id,
+            pack=pack_id,
+            pack_ids=pack_ids,
         )
 
         # R18-C2 T2: preserve the exact pack execution snapshot returned by the
@@ -351,6 +422,19 @@ def run_trackb_and_persist(
                 if str(detector_id).strip()
             ]
             run["packExecutedAt"] = payload.get("packExecutedAt")
+            # R191-P1 T2: preserve the full multi-pack execution snapshot the
+            # runner returns (each selected pack with its version stamp + the
+            # per-pack execution metadata). Scalar fields above stay the PRIMARY
+            # pack for backward compatibility; a single-pack run lists one entry.
+            payload_pack_ids = payload.get("packIds")
+            if isinstance(payload_pack_ids, list) and payload_pack_ids:
+                run["packIds"] = [str(p) for p in payload_pack_ids if str(p).strip()]
+                payload_pack_versions = payload.get("packVersions")
+                if isinstance(payload_pack_versions, dict):
+                    run["packVersions"] = payload_pack_versions
+                payload_packs = payload.get("packs")
+                if isinstance(payload_packs, list):
+                    run["packs"] = payload_packs
 
         per_system, succeeded, ingest_errors = _ingest_summary_from_payload(
             payload, systems
@@ -385,6 +469,16 @@ def run_trackb_and_persist(
 
         opps = seed.get("opportunities", [])
         ev = seed.get("evidence", [])
+        secops_opps, secops_ev = _secops_seed_slice(opps, ev)
+        selected_pack_ids = payload.get("packIds") or (
+            [payload.get("packId")] if payload.get("packId") else []
+        )
+        secops_enabled = SECURITY_OPS_PACK_ID in selected_pack_ids
+        _assert_secops_materialized(
+            {"opportunities": secops_opps, "evidence": secops_ev},
+            where="Track-A Security Operations seed",
+            enabled=secops_enabled,
+        )
 
         # R16-B1 (§2): stamp the stable cross-run opportunity_identity onto each
         # stored opportunity BEFORE it is persisted, so the served record carries
@@ -407,6 +501,8 @@ def run_trackb_and_persist(
 
         db.run_kv_set("opps", run_id, opps)
         db.run_kv_set("evidence", run_id, ev)
+        if payload.get("secopsVolume") is not None:
+            db.run_kv_set("secops_volume", run_id, payload["secopsVolume"])
 
         # R16-B1 (T4): persist one per-run opportunity_instance per opportunity.
         # Built from the RAW runner opportunities, which keep orgId/detector_id/
@@ -467,7 +563,21 @@ def run_trackb_and_persist(
             _emit_event(run_id, "PLAN", "Generating implementation roadmap...")
             from .roadmap_engine import build_roadmap
 
-            db.run_kv_set("roadmap", run_id, build_roadmap(opps))
+            roadmap = build_roadmap(opps)
+            if secops_enabled:
+                secops_roadmap = (
+                    roadmap
+                    if len(secops_opps) == len(opps)
+                    else build_roadmap(secops_opps)
+                )
+                _assert_secops_materialized(
+                    secops_roadmap,
+                    where="Security Operations roadmap",
+                    enabled=True,
+                )
+            db.run_kv_set("roadmap", run_id, roadmap)
+        except SecOpsAggregationFloorViolation:
+            raise
         except Exception as e:
             errors["roadmap"] = str(e)
 
@@ -495,7 +605,26 @@ def run_trackb_and_persist(
             )
             er["sourcesAnalyzed"] = sa
 
+            if secops_enabled:
+                if len(secops_opps) == len(opps):
+                    secops_report = er
+                else:
+                    secops_roadmap = build_roadmap(secops_opps)
+                    secops_report = build_executive_report(
+                        run_id=run_id,
+                        opps=secops_opps,
+                        roadmap=secops_roadmap,
+                        selected_system_ids=selected_system_ids,
+                    )
+                _assert_secops_materialized(
+                    secops_report,
+                    where="Security Operations executive report",
+                    enabled=True,
+                )
+
             db.run_kv_set("executive_report", run_id, er)
+        except SecOpsAggregationFloorViolation:
+            raise
         except Exception as e:
             errors["exec_report"] = str(e)
             db.run_kv_set(
@@ -530,15 +659,32 @@ def run_trackb_and_persist(
 
             exec_report = db.run_kv_get("executive_report", run_id, {})
             sources_analyzed = exec_report.get("sourcesAnalyzed", {})
-            # ENG-AIQ-NC-5: pass pack_id for banking language prompts
-            pack_id = _pack_id_for_run(run)
-            enrichment = run_llm_enrichment(
+            from .pack_aware_enrichment import run_pack_aware_enrichment
+
+            execution_pack_ids = list(payload.get("packIds") or pack_ids or [])
+            if not execution_pack_ids and pack_id:
+                execution_pack_ids = [pack_id]
+            enrichment = run_pack_aware_enrichment(
                 run_id=run_id,
-                opps=opps,
+                opportunities=opps,
                 evidence=ev,
                 sources_analyzed=sources_analyzed,
-                pack_id=pack_id,
+                pack_ids=execution_pack_ids,
                 org_id=run_org_id,
+                enrichment_fn=run_llm_enrichment,
+            )
+            if enrichment.get("ai_mode_label"):
+                _emit_event(run_id, "AI_ANALYZE", enrichment["ai_mode_label"])
+            secops_enrichment = [
+                result
+                for result in (enrichment.get("packResults") or [])
+                if isinstance(result, dict)
+                and result.get("packId") == SECURITY_OPS_PACK_ID
+            ]
+            _assert_secops_materialized(
+                secops_enrichment,
+                where="Security Operations enrichment",
+                enabled=secops_enabled,
             )
             db.run_kv_set(KV_LLM_ENRICHMENT, run_id, enrichment)
             if enrichment.get("executiveSummary"):
@@ -552,6 +698,8 @@ def run_trackb_and_persist(
                 )
                 db.run_kv_set("executive_report", run_id, exec_report)
             _emit_event(run_id, "COMPLETE", "AI analysis and enrichment completed")
+        except SecOpsAggregationFloorViolation:
+            raise
         except Exception as e:
             errors["llm_enrichment"] = str(e)
             _emit_event(run_id, "AI_ERROR", f"AI analysis failed: {e}", level="WARNING")
@@ -569,11 +717,28 @@ def run_trackb_and_persist(
             # orgId write under "demo-org" but read under "default", so it
             # would never find its own history.
             _org_id = run_org_id
-            _pack_id = _pack_id_for_run(run)
             # AT-158: baselines are computed per-org; pass the run's org explicitly
             # (the old no-arg calculate_baselines() was removed in that refactor).
             calculate_baselines_for_org(_org_id)
-            opps = enrich_opportunities_with_temporal_context(run_id, _org_id, _pack_id or "", opps)
+            _fallback_pack_id = _pack_id_for_run(run) or ""
+            _opps_by_pack: Dict[str, List[Dict[str, Any]]] = {}
+            for _opp in opps:
+                _opp_pack_id = str(
+                    _opp.get("packId") or _opp.get("pack_id") or _fallback_pack_id
+                )
+                _opps_by_pack.setdefault(_opp_pack_id, []).append(_opp)
+            if len(_opps_by_pack) == 1:
+                _current_pack_id, _pack_opps = next(iter(_opps_by_pack.items()))
+                # Preserve the original single-pack assignment contract while
+                # multi-pack runs below remain isolated by their own pack id.
+                opps = enrich_opportunities_with_temporal_context(
+                    run_id, _org_id, _current_pack_id, _pack_opps
+                )
+            else:
+                for _current_pack_id, _pack_opps in _opps_by_pack.items():
+                    enrich_opportunities_with_temporal_context(
+                        run_id, _org_id, _current_pack_id, _pack_opps
+                    )
 
             _temporal_keys = (
                 "baseline_context", "trend_direction", "anomaly_score",

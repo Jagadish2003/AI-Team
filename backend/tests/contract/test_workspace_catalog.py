@@ -15,6 +15,7 @@ CATEGORIES = [
     "operational_systems",
     "comms_knowledge",
     "data_engineering",
+    "cloud_operations",
 ]
 
 
@@ -167,6 +168,70 @@ class TestCategoryRouting:
         assert _ids(data, "data_engineering") == ["snowflake"]
 
 
+class TestCloudOperationsRouting:
+    """MSP-B13: multi-account/subscription cloud connectors route to the
+    cloud_operations bucket via the connector's ``multiScope`` flag — the same
+    registry-driven rule the Integration Hub uses — not a hardcoded id list."""
+
+    def test_azure_events_in_cloud_operations(self, client, monkeypatch):
+        _install_connectors(
+            monkeypatch,
+            [{"id": "azure_events", "name": "Azure Events",
+              "status": "connected", "multiScope": True}],
+        )
+
+        data = _get(client).json()
+
+        assert "azure_events" in _ids(data, "cloud_operations")
+
+    def test_aws_events_in_cloud_operations(self, client, monkeypatch):
+        _install_connectors(
+            monkeypatch,
+            [{"id": "aws_events", "name": "AWS Events",
+              "status": "needs_auth", "multiScope": True}],
+        )
+
+        data = _get(client).json()
+
+        assert "aws_events" in _ids(data, "cloud_operations")
+
+    def test_multiscope_flag_drives_membership_not_id(self, client, monkeypatch):
+        # A future cloud connector with an unknown id still buckets here purely
+        # from the multiScope flag — no id list to maintain.
+        _install_connectors(
+            monkeypatch,
+            [{"id": "gcp_events", "name": "GCP Events",
+              "status": "connected", "multiScope": True}],
+        )
+
+        data = _get(client).json()
+
+        assert "gcp_events" in _ids(data, "cloud_operations")
+
+    def test_connected_cloud_connector_clears_missing(self, client, monkeypatch):
+        _install_connectors(
+            monkeypatch,
+            [{"id": "azure_events", "name": "Azure Events",
+              "status": "connected", "multiScope": True}],
+        )
+
+        data = _get(client).json()
+
+        assert "cloud_operations" not in data["missing_categories"]
+
+    def test_not_configured_cloud_connector_is_excluded(self, client, monkeypatch):
+        _install_connectors(
+            monkeypatch,
+            [{"id": "azure_events", "name": "Azure Events",
+              "status": "not_configured", "multiScope": True}],
+        )
+
+        data = _get(client).json()
+
+        assert data["cloud_operations"] == []
+        assert "cloud_operations" in data["missing_categories"]
+
+
 class TestStatusNormalization:
     def test_live_status_normalises_to_connected(self, client, monkeypatch):
         _install_connectors(monkeypatch, [_connector("jira", "Jira", "live")])
@@ -245,7 +310,11 @@ class TestMissingCategories:
 
         data = _get(client).json()
 
-        assert data["missing_categories"] == ["comms_knowledge", "data_engineering"]
+        assert data["missing_categories"] == [
+            "comms_knowledge",
+            "data_engineering",
+            "cloud_operations",
+        ]
 
     def test_not_configured_peer_does_not_make_present_category_missing(
         self,

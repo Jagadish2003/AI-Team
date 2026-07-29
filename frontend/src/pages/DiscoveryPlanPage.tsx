@@ -21,6 +21,7 @@ import {
 } from '../types/stack_builder';
 import { useSetupState } from '../components/stack_builder';
 import type { LendingGuideLaunchState } from '../components/stack_builder';
+import { ANALYSIS_PACKS, analysisPackLabelFor } from '../data/analysisPacks';
 
 const SYSTEM_META: Record<string, { name: string }> = {
   sap: { name: 'SAP' },
@@ -72,13 +73,6 @@ function getSystemName(id: string) {
   return SYSTEM_META[id]?.name ?? id;
 }
 
-function packLabel(packId: string) {
-  if (packId === 'ncino') return 'nCino lending';
-  return packId
-    .split(/[_-]+/)
-    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
-}
 
 function calcQualityRows(
   selectedIds: string[],
@@ -256,6 +250,12 @@ interface Props {
   industries: IndustryListItem[];
   templates: TemplateListItem[];
   activePackId: string;
+  // R191-P1: the FULL set of packs this run will activate (order-preserving) —
+  // the union of the fixed Salesforce packs and the chosen analysis packs.
+  activePackIds?: string[];
+  // R191-P1: the SALESFORCE packs, fixed by the Integration Hub product
+  // declaration. Shown read-only here — they are NOT chosen in the Discovery Plan.
+  salesforcePacks?: string[];
   onLaunch: () => void;
   launchState?: LendingGuideLaunchState;
 }
@@ -265,6 +265,8 @@ export default function DiscoveryPlanPage({
   industries,
   templates,
   activePackId,
+  activePackIds = [activePackId],
+  salesforcePacks = [],
   onLaunch,
   launchState = 'ready',
 }: Props) {
@@ -300,15 +302,44 @@ export default function DiscoveryPlanPage({
     ? industries.find(item => item.industry_id === state.industryId)?.label
       ?? state.industryId
     : '-';
-  const templateLabel = state.templateId
-    ? templates.find(item => item.template_id === state.templateId)?.label
-      ?? state.templateId
+  const selectedTemplateIds = state.templateIds?.length
+    ? state.templateIds
+    : (state.templateId ? [state.templateId] : []);
+  const templateLabel = selectedTemplateIds.length
+    ? selectedTemplateIds
+        .map(id => templates.find(item => item.template_id === id)?.label ?? id)
+        .join(' + ')
     : '-';
-  const packOptions = Array.from(new Set([
-    activePackId,
-    ...industries.flatMap(item => item.pack_hints),
-    ...templates.map(item => item.pack_id),
-  ].filter(Boolean)));
+  // Salesforce packs are FIXED by the Integration Hub product declaration — shown
+  // read-only; they are not chosen here.
+  void activePackId; void activePackIds;
+  const salesforcePackLabel =
+    salesforcePacks.length > 0
+      ? salesforcePacks.map(analysisPackLabelFor).join(', ')
+      : '-';
+  // The analysis pack is chosen per run in this panel — ONE pack at most, with
+  // "None" as the default. It is a single-select over the ANALYSIS_PACKS options
+  // only, so the dropdown never has to represent a pack it does not offer:
+  //   • the fixed Salesforce packs (declared in the Integration Hub) are shown in
+  //     the read-only row above and are never dropped by a change here, and
+  //   • a pack a TEMPLATE contributed that is not an offered analysis option
+  //     (e.g. 'ncino') stays on state.packIds untouched.
+  // Both live on state.packIds alongside the chosen analysis pack, and
+  // resolvePackIds unions them for the run — unchanged by this control.
+  const analysisPackIdSet = new Set(ANALYSIS_PACKS.map(pack => pack.id));
+  const selectedAnalysisId =
+    (state.packIds ?? []).find(id => analysisPackIdSet.has(id)) ?? '';
+  const selectAnalysisPack = (packId: string) => {
+    // Replace whatever analysis pack was selected (single-select), preserving
+    // every non-analysis entry. '' is the "None" option — it clears the slot.
+    const preserved = (state.packIds ?? []).filter(
+      id => id && !analysisPackIdSet.has(id),
+    );
+    setupState.setPackIds(packId ? [...preserved, packId] : preserved);
+  };
+  const selectedAnalysisPack = ANALYSIS_PACKS.find(
+    pack => pack.id === selectedAnalysisId,
+  );
 
   return (
     <div className="space-y-5">
@@ -332,21 +363,38 @@ export default function DiscoveryPlanPage({
               label="Template"
               value={templateLabel}
             />
-            <div className="flex items-center justify-between gap-4 border-b border-border/70 py-2">
-              <label htmlFor="analysis-pack" className="text-xs text-muted">
-                Analysis pack
-              </label>
-              <select
-                id="analysis-pack"
-                aria-label="Analysis pack"
-                value={activePackId}
-                onChange={event => setupState.setPack(event.target.value)}
-                className="max-w-[220px] rounded-md border border-border bg-panel px-2 py-1 text-right text-xs font-medium text-text"
-              >
-                {packOptions.map(packId => (
-                  <option key={packId} value={packId}>{packLabel(packId)}</option>
-                ))}
-              </select>
+            {salesforcePacks.length > 0 && (
+              <SummaryRow
+                label="Salesforce packs"
+                value={salesforcePackLabel}
+              />
+            )}
+            {/* Analysis pack — chosen per run (non-Salesforce). SINGLE-select
+                dropdown, defaulting to None. */}
+            <div className="border-b border-border/70 py-2">
+              <div className="flex items-center justify-between gap-3">
+                <label htmlFor="analysis-pack-select" className="text-xs text-muted">
+                  Analysis pack
+                </label>
+                <select
+                  id="analysis-pack-select"
+                  value={selectedAnalysisId}
+                  onChange={e => selectAnalysisPack(e.target.value)}
+                  className="max-w-[60%] cursor-pointer truncate rounded-lg border border-border bg-panel px-2.5 py-1.5 text-xs text-text focus:outline-none focus:ring-1 focus:ring-accent"
+                >
+                  <option value="">None</option>
+                  {ANALYSIS_PACKS.map(pack => (
+                    <option key={pack.id} value={pack.id}>
+                      {pack.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {selectedAnalysisPack && (
+                <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
+                  {selectedAnalysisPack.description}
+                </p>
+              )}
             </div>
             <SummaryRow
               label="Total systems"

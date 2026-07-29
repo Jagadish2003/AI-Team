@@ -1,12 +1,33 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0025.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0030.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
 -- 03_lazy_runtime_tables.sql. Creates the agentiq role, all tables (incl.
--- org_licenses, ingestion_checkpoints, opportunity_instances, and the R18-B1/B2
--- pgvector-backed retrieval_chunks + retrieval_refresh_queue),
--- indexes/constraints/rules, seeds the core reference rows, grants the app login
--- role(s) privileges on the schema, and stamps alembic_version to head 0025.
+-- org_licenses, ingestion_checkpoints, opportunity_instances, the R18-B1/B2
+-- pgvector-backed retrieval_chunks + retrieval_refresh_queue, the MSP-B8
+-- ops_event_staging + ops_event_load_batches, the MSP-B5 runbook_matches /
+-- runbook_match_decision_history / runbook_match_feedback, and the R-1.9.1-L3
+-- vendor-side license_registry + append-only issuance_audit),
+-- indexes/constraints/rules, seeds the connector catalog, grants the app login
+-- role(s) privileges on the schema, and stamps alembic_version to head 0030.
+--
+-- BEFORE RUNNING ON PRODUCTION — two values in this file are dev defaults and
+-- MUST be set for the target environment. Both are marked "TODO(deploy)" below:
+--   1. the agentiq role password (search: TODO(deploy) role password), and
+--   2. the app login role(s) in the grants block (search: TODO(deploy) app roles) —
+--      the role in the app's DATABASE_URL must appear there or the application
+--      hits "permission denied for table ..." on its first write.
+--
+-- SEED POLICY (production): this file seeds ONLY the connector catalog, which the
+-- Integration Hub reads to render its tiles — without it no system can be
+-- connected. The dev seed's demo `mappings` and `permissions` rows are
+-- deliberately NOT seeded here: nothing in the application ever writes those two
+-- tables, so seeding them would display synthetic field mappings / permission
+-- checks as if they were the customer's own. Consequence: those views start
+-- empty. Per-connector `metrics` are likewise left empty — they are per-org,
+-- run-derived values (app/connector_metrics.py writes them to the ORG overlay
+-- after a real run), so a shared-catalog metric would show fabricated numbers
+-- until the first run completes.
 --
 -- Requires the pgvector extension for the retrieval_chunks vector column
 -- (CREATE EXTENSION below); the provisioning connection must be permitted to
@@ -53,7 +74,11 @@ SET default_table_access_method = "heap";
 -- Run 01_schema.sql connected to the target database (e.g. agentiqdev) as a
 -- superuser or the schema owner. The database itself must already exist.
 -- CREATE ROLE has no IF NOT EXISTS, so the DO block makes it idempotent.
--- CHANGE THE PASSWORD below before running on any shared/production server.
+--
+-- TODO(deploy) role password: the literal below is a DEV default and is committed
+-- to source control — treat it as public. Replace it with the environment's real
+-- secret before running anywhere shared or production. If the role already exists
+-- in the target database this block is a no-op and the password is untouched.
 --
 DO
 $$
@@ -203,7 +228,7 @@ CREATE TABLE "public"."entity_relationships" (
     "last_seen_run_id" character varying(64) NOT NULL,
     "run_count" integer NOT NULL,
     "created_at" timestamp without time zone NOT NULL,
-    CONSTRAINT "entity_relationships_relationship_type_check" CHECK ((("relationship_type")::"text" = ANY ((ARRAY['depends_on'::character varying, 'escalates_to'::character varying, 'member_of'::character varying, 'owns'::character varying, 'routes_to'::character varying])::"text"[])))
+    CONSTRAINT "entity_relationships_relationship_type_check" CHECK ((("relationship_type")::"text" = ANY ((ARRAY['connects_to'::character varying, 'depends_on'::character varying, 'escalates_to'::character varying, 'member_of'::character varying, 'owns'::character varying, 'routes_to'::character varying, 'runs_on'::character varying, 'used_by'::character varying])::"text"[])))
 );
 
 
@@ -503,6 +528,58 @@ CREATE TABLE "public"."telemetry_events" (
 
 
 --
+-- Name: license_registry; Type: TABLE; Schema: public; Owner: -
+-- R-1.9.1-L3 (AT-715 / T1): CloudFulcrum vendor-side license issuance registry.
+--
+
+CREATE TABLE "public"."license_registry" (
+    "license_id" "text" NOT NULL,
+    "customer" "text" NOT NULL,
+    "org_id" "text" NOT NULL,
+    "contract_ref" "text" NOT NULL,
+    "deployment_type" "text" NOT NULL,
+    "max_systems" integer,
+    "expires_at" "date" NOT NULL,
+    "grace_days" integer DEFAULT 14 NOT NULL,
+    "kid" "text" NOT NULL,
+    "issued_by" "text" NOT NULL,
+    "issued_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "status" "text" DEFAULT 'active'::"text" NOT NULL,
+    "supersedes" "text",
+    "notes" "text",
+    "deployment_fee_collected" boolean DEFAULT false NOT NULL,
+    "deployment_fee_collected_at" timestamp with time zone,
+    "payload_version" integer DEFAULT 2 NOT NULL,
+    "license_key" "text" NOT NULL,
+    CONSTRAINT "license_registry_status_check" CHECK (("status" = ANY (ARRAY['active'::"text", 'superseded'::"text", 'revoked_at_next_rotation'::"text"])))
+);
+
+
+--
+-- Name: issuance_audit; Type: TABLE; Schema: public; Owner: -
+-- R-1.9.1-L3 (AT-717 / T3): append-only issuance ledger (see the rewrite rules
+-- issuance_audit_no_update / issuance_audit_no_delete below).
+--
+
+CREATE TABLE "public"."issuance_audit" (
+    "audit_id" "text" NOT NULL,
+    "license_id" "text" NOT NULL,
+    "action" "text" NOT NULL,
+    "actor" "text" NOT NULL,
+    "occurred_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "customer" "text",
+    "org_id" "text",
+    "contract_ref" "text",
+    "kid" "text",
+    "deployment_type" "text",
+    "terms" "text",
+    "supersedes" "text",
+    "notes" "text",
+    CONSTRAINT "issuance_audit_action_check" CHECK (("action" = ANY (ARRAY['issue'::"text", 'renew'::"text", 'regenerate'::"text"])))
+);
+
+
+--
 -- Name: uploads; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -746,6 +823,22 @@ ALTER TABLE ONLY "public"."telemetry_events"
 
 
 --
+-- Name: license_registry license_registry_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."license_registry"
+    ADD CONSTRAINT "license_registry_pkey" PRIMARY KEY ("license_id");
+
+
+--
+-- Name: issuance_audit issuance_audit_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."issuance_audit"
+    ADD CONSTRAINT "issuance_audit_pkey" PRIMARY KEY ("audit_id");
+
+
+--
 -- Name: uploads uploads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -959,6 +1052,41 @@ CREATE INDEX "idx_telemetry_org_ts" ON "public"."telemetry_events" USING "btree"
 
 
 --
+-- Name: idx_license_registry_customer; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_license_registry_customer" ON "public"."license_registry" USING "btree" ("customer");
+
+
+--
+-- Name: idx_license_registry_org; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_license_registry_org" ON "public"."license_registry" USING "btree" ("org_id");
+
+
+--
+-- Name: idx_license_registry_expiry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_license_registry_expiry" ON "public"."license_registry" USING "btree" ("status", "expires_at");
+
+
+--
+-- Name: idx_license_registry_supersedes; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_license_registry_supersedes" ON "public"."license_registry" USING "btree" ("supersedes");
+
+
+--
+-- Name: idx_issuance_audit_license; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_issuance_audit_license" ON "public"."issuance_audit" USING "btree" ("license_id");
+
+
+--
 -- Name: idx_users_email_unique; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -987,6 +1115,23 @@ CREATE RULE "trg_telemetry_no_delete" AS
 
 CREATE RULE "trg_telemetry_no_update" AS
     ON UPDATE TO "public"."telemetry_events" DO INSTEAD NOTHING;
+
+
+--
+-- Name: issuance_audit issuance_audit_no_delete; Type: RULE; Schema: public; Owner: -
+-- R-1.9.1-L3 (AC2): the issuance audit ledger is append-only.
+--
+
+CREATE RULE "issuance_audit_no_delete" AS
+    ON DELETE TO "public"."issuance_audit" DO INSTEAD NOTHING;
+
+
+--
+-- Name: issuance_audit issuance_audit_no_update; Type: RULE; Schema: public; Owner: -
+--
+
+CREATE RULE "issuance_audit_no_update" AS
+    ON UPDATE TO "public"."issuance_audit" DO INSTEAD NOTHING;
 
 
 --
@@ -1113,24 +1258,148 @@ CREATE INDEX "idx_refresh_queue_org_status" ON "public"."retrieval_refresh_queue
 
 
 --
+-- MSP-B8 — Event-History Bridge staging schema (migrations 0027, 0028).
+--
+-- SOURCE OF TRUTH: database/models/ops_event_staging.py
+-- (ALL_OPS_EVENT_STAGING_DDL, staging schema contract v1.1.0), applied by
+-- migrations 0027 (create) and 0028 (add event_time). The statements below are
+-- copied VERBATIM from that module — the same text alembic executes — so the two
+-- paths cannot diverge; keep them identical when the model changes.
+--
+-- Applies when AgentIQ's own PostgreSQL hosts the staging store. A
+-- partner-provisioned store instead applies database/staging/*.sql; the shape is
+-- identical either way. event_time is folded in here (0028) rather than added by
+-- a separate ALTER, which yields the same final column order.
+--
+
+CREATE TABLE IF NOT EXISTS ops_event_staging (
+    row_id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    org_id            VARCHAR(64)             NOT NULL,
+    provider          VARCHAR(32)             NOT NULL,
+    source_format     VARCHAR(64)             NOT NULL,
+    batch_id          VARCHAR(128)            NOT NULL,
+    provider_event_id VARCHAR(256)            NOT NULL,
+    raw               JSONB                   NOT NULL,
+    loaded_at         TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    event_time        TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT uq_ops_event_staging_provider_event
+        UNIQUE (org_id, provider, provider_event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ops_event_staging_org_row
+    ON ops_event_staging (org_id, row_id);
+
+CREATE INDEX IF NOT EXISTS idx_ops_event_staging_org_batch
+    ON ops_event_staging (org_id, batch_id);
+
+CREATE INDEX IF NOT EXISTS idx_ops_event_staging_org_format
+    ON ops_event_staging (org_id, provider, source_format);
+
+CREATE TABLE IF NOT EXISTS ops_event_load_batches (
+    org_id           VARCHAR(64)              NOT NULL,
+    batch_id         VARCHAR(128)             NOT NULL,
+    provider         VARCHAR(32)              NOT NULL,
+    source_format    VARCHAR(64)              NOT NULL,
+    source_reference TEXT,
+    record_count     INTEGER                  NOT NULL DEFAULT 0,
+    skipped_count    INTEGER                  NOT NULL DEFAULT 0,
+    loaded_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    PRIMARY KEY (org_id, batch_id)
+);
+
+
+--
+-- MSP-B5 — runbook-match lifecycle, decision history, and labelled feedback
+-- (migration 0029).
+--
+-- SOURCE OF TRUTH: database/models/runbook_match_decisions.py
+-- (ALL_RUNBOOK_MATCH_DDL), applied by migration 0029. Copied VERBATIM below —
+-- keep identical when the model changes.
+--
+-- These three tables have NO runtime ensure_* helper: app/runbook_match_decisions.py
+-- only reads and writes them. Provisioning is therefore the only thing that can
+-- create them, and without them the runbook-match decision API fails with
+-- 'relation "runbook_matches" does not exist'.
+--
+
+CREATE TABLE IF NOT EXISTS runbook_matches (
+    org_id          VARCHAR(64)  NOT NULL,
+    recurrence_id   VARCHAR(128) NOT NULL,
+    base_state      VARCHAR(16)  NOT NULL,
+    current_state   VARCHAR(16)  NOT NULL,
+    current_action  VARCHAR(16),
+    match_payload   TEXT         NOT NULL,
+    revision        INTEGER      NOT NULL DEFAULT 0,
+    updated_by      VARCHAR(128),
+    created_at      TIMESTAMPTZ  NOT NULL,
+    updated_at      TIMESTAMPTZ  NOT NULL,
+    PRIMARY KEY (org_id, recurrence_id)
+);
+
+CREATE TABLE IF NOT EXISTS runbook_match_decision_history (
+    id                  VARCHAR(64)  PRIMARY KEY,
+    org_id              VARCHAR(64)  NOT NULL,
+    recurrence_id       VARCHAR(128) NOT NULL,
+    revision            INTEGER      NOT NULL,
+    action              VARCHAR(16)  NOT NULL,
+    previous_action     VARCHAR(16),
+    previous_state      VARCHAR(16)  NOT NULL,
+    resulting_state     VARCHAR(16)  NOT NULL,
+    actor_id            VARCHAR(128) NOT NULL,
+    decided_at          TIMESTAMPTZ  NOT NULL,
+    UNIQUE (org_id, recurrence_id, revision)
+);
+
+CREATE TABLE IF NOT EXISTS runbook_match_feedback (
+    id                  VARCHAR(64)  PRIMARY KEY,
+    decision_history_id VARCHAR(64)  NOT NULL UNIQUE,
+    org_id              VARCHAR(64)  NOT NULL,
+    recurrence_id       VARCHAR(128) NOT NULL,
+    feedback_label      VARCHAR(32)  NOT NULL,
+    features_payload    TEXT         NOT NULL,
+    actor_id            VARCHAR(128) NOT NULL,
+    created_at          TIMESTAMPTZ  NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_runbook_match_history_org_recurrence
+    ON runbook_match_decision_history (org_id, recurrence_id, revision DESC);
+
+CREATE INDEX IF NOT EXISTS idx_runbook_match_feedback_org_created
+    ON runbook_match_feedback (org_id, created_at DESC);
+
+
+--
 -- PostgreSQL database dump complete
 --
 
 
 --
--- Seed: core reference rows (connectors, mappings, permissions, uploads).
--- Idempotent via ON CONFLICT DO NOTHING. Sourced from the provisioned schema.
+-- Seed: the connector catalog — the ONE table the application cannot start
+-- usefully without (the Integration Hub renders its tiles from these rows, and
+-- org_connectors_list overlays each org's connection state on top).
+--
+-- Idempotent via ON CONFLICT DO NOTHING. Mirrors database/seed/connectors.json
+-- (28 rows) with one deliberate production difference: every `metrics` array is
+-- empty. Metrics are per-org, run-derived values written to the ORG-namespaced
+-- overlay by app/connector_metrics.py after a real discovery run; the dev seed's
+-- illustrative numbers (e.g. Slack "Messages (7d): 12840") would otherwise render
+-- as this customer's real figures until their first run completes.
+--
+-- The dev seed's `mappings` (17) and `permissions` (5) rows are NOT seeded — see
+-- the SEED POLICY note in the file header.
 --
 
--- connectors (26 rows)
+-- connectors (28 rows)
+INSERT INTO "public"."connectors" ("id", "payload") VALUES ('aws_events', '{"id": "aws_events", "name": "AWS Events", "category": "Cloud Operations - Multi-account", "tier": "standard", "status": "not_configured", "configured": false, "multiScope": true, "scopeNoun": "account", "metrics": [], "lastSynced": "\u2014", "reads": ["CloudWatch Alarms", "EventBridge Rules", "CloudTrail Management Events"], "signalStrength": 55}') ON CONFLICT ("id") DO NOTHING;
+INSERT INTO "public"."connectors" ("id", "payload") VALUES ('azure_events', '{"id": "azure_events", "name": "Azure Events", "category": "Cloud Operations - Multi-subscription", "tier": "standard", "status": "not_configured", "configured": false, "multiScope": true, "scopeNoun": "subscription", "metrics": [], "lastSynced": "\u2014", "reads": ["Monitor Alerts", "Activity Log (Administrative)", "Service Health"], "signalStrength": 55}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('azure_devops', '{"id": "azure_devops", "name": "Azure DevOps", "category": "ALM / CI/CD", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Work Items", "Pipelines", "Repos"], "signalStrength": 62}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('azure_repos', '{"id": "azure_repos", "name": "Azure Repos", "category": "Source control", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Commits", "Pull Requests", "Branches"], "signalStrength": 55}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('bitbucket', '{"id": "bitbucket", "name": "Bitbucket", "category": "Source control", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Pull Requests", "Repos", "Pipelines"], "signalStrength": 55}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('confluence', '{"id": "confluence", "name": "Confluence", "category": "Docs / knowledge", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Pages", "Spaces", "Templates"], "signalStrength": 58}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."connectors" ("id", "payload") VALUES ('databricks', '{"id": "databricks", "name": "Databricks", "category": "Data \u00b7 Platform", "tier": "standard", "status": "disconnected", "configured": false, "metrics": [{"label": "Job Runs", "value": "184"}, {"label": "Pipelines", "value": "27"}], "lastSynced": "\u2014", "reads": ["Job Runs", "Pipelines", "Notebooks"], "signalStrength": 52}') ON CONFLICT ("id") DO NOTHING;
+INSERT INTO "public"."connectors" ("id", "payload") VALUES ('databricks', '{"id": "databricks", "name": "Databricks", "category": "Data \u00b7 Platform", "tier": "standard", "status": "disconnected", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Job Runs", "Pipelines", "Notebooks"], "signalStrength": 52}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('dbt', '{"id": "dbt", "name": "dbt", "category": "Transforms", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Models", "Tests", "Lineage"], "signalStrength": 42}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('dynamics365', '{"id": "dynamics365", "name": "Dynamics 365", "category": "ERP / CRM", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Accounts", "Opportunities", "Work Orders"], "signalStrength": 65}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."connectors" ("id", "payload") VALUES ('github', '{"id": "github", "name": "GitHub", "category": "Engineering \u00b7 Delivery", "tier": "standard", "status": "disconnected", "configured": false, "metrics": [{"label": "Pull Requests", "value": "248"}, {"label": "Review Comments", "value": "913"}], "lastSynced": "\u2014", "reads": ["Pull Requests", "Review Comments", "Commits"], "signalStrength": 81}') ON CONFLICT ("id") DO NOTHING;
+INSERT INTO "public"."connectors" ("id", "payload") VALUES ('github', '{"id": "github", "name": "GitHub", "category": "Engineering \u00b7 Delivery", "tier": "standard", "status": "disconnected", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Pull Requests", "Review Comments", "Commits"], "signalStrength": 81}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('gitlab', '{"id": "gitlab", "name": "GitLab", "category": "DevOps", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Merge Requests", "Pipelines", "Issues"], "signalStrength": 60}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('jira', '{"id": "jira", "name": "Jira", "category": "Issues / backlog", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Issues", "Sprints", "Epics"], "signalStrength": 78}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('linear', '{"id": "linear", "name": "Linear", "category": "Product / issues", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Issues", "Projects", "Cycles"], "signalStrength": 55}') ON CONFLICT ("id") DO NOTHING;
@@ -1139,46 +1408,30 @@ INSERT INTO "public"."connectors" ("id", "payload") VALUES ('notion', '{"id": "n
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('oracle_db', '{"id": "oracle_db", "name": "Oracle DB", "category": "Database", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Tables", "Procedures", "AWR Reports"], "signalStrength": 48}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('oracle_ebs', '{"id": "oracle_ebs", "name": "Oracle EBS", "category": "Finance / HR", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["GL Journals", "AP Invoices", "Cost Centers"], "signalStrength": 72}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('postgresql', '{"id": "postgresql", "name": "PostgreSQL", "category": "Database", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Tables", "Views", "Query Logs"], "signalStrength": 48}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."connectors" ("id", "payload") VALUES ('salesforce', '{"id": "salesforce", "name": "Salesforce", "category": "CRM \u00b7 Salesforce / nCino", "tier": "recommended", "recommendedRank": 1, "status": "disconnected", "configured": false, "metrics": [{"label": "Accounts", "value": "\u2014"}, {"label": "Opportunities", "value": "\u2014"}], "lastSynced": "\u2014", "reads": ["Accounts", "Opportunities", "Cases"], "signalStrength": 94, "products": []}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."connectors" ("id", "payload") VALUES ('sap', '{"id": "sap", "name": "SAP", "category": "ERP \u00b7 Process", "tier": "standard", "status": "disconnected", "configured": false, "metrics": [{"label": "Change Documents", "value": "1420"}, {"label": "Approvals", "value": "312"}], "lastSynced": "\u2014", "reads": ["Change Documents", "Approvals", "Transports (if available)"], "signalStrength": 76}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."connectors" ("id", "payload") VALUES ('servicenow', '{"id": "servicenow", "name": "ServiceNow", "category": "Operations \u00b7 Incidents", "tier": "recommended", "recommendedRank": 2, "status": "disconnected", "configured": false, "metrics": [{"label": "Incidents (90d)", "value": "5"}, {"label": "Change requests", "value": "5"}], "lastSynced": "\u2014", "reads": ["Incident Tickets", "Change Requests", "SLA Definitions"], "signalStrength": 88}') ON CONFLICT ("id") DO NOTHING;
+INSERT INTO "public"."connectors" ("id", "payload") VALUES ('salesforce', '{"id": "salesforce", "name": "Salesforce", "category": "CRM \u00b7 Salesforce / nCino", "tier": "recommended", "recommendedRank": 1, "status": "disconnected", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Accounts", "Opportunities", "Cases"], "signalStrength": 94, "products": []}') ON CONFLICT ("id") DO NOTHING;
+INSERT INTO "public"."connectors" ("id", "payload") VALUES ('sap', '{"id": "sap", "name": "SAP", "category": "ERP \u00b7 Process", "tier": "standard", "status": "disconnected", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Change Documents", "Approvals", "Transports (if available)"], "signalStrength": 76}') ON CONFLICT ("id") DO NOTHING;
+INSERT INTO "public"."connectors" ("id", "payload") VALUES ('servicenow', '{"id": "servicenow", "name": "ServiceNow", "category": "Operations \u00b7 Incidents", "tier": "recommended", "recommendedRank": 2, "status": "disconnected", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Incident Tickets", "Change Requests", "SLA Definitions"], "signalStrength": 88}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('sharepoint', '{"id": "sharepoint", "name": "SharePoint", "category": "Docs / intranet", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Documents", "Lists", "Sites"], "signalStrength": 52}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."connectors" ("id", "payload") VALUES ('slack', '{"id": "slack", "name": "Slack", "category": "Comms \u00b7 Ops", "tier": "standard", "status": "disconnected", "configured": false, "metrics": [{"label": "Channels", "value": "34"}, {"label": "Messages (7d)", "value": "12840"}], "lastSynced": "\u2014", "reads": ["Channels", "Threads", "Mentions"], "signalStrength": 79}') ON CONFLICT ("id") DO NOTHING;
+INSERT INTO "public"."connectors" ("id", "payload") VALUES ('slack', '{"id": "slack", "name": "Slack", "category": "Comms \u00b7 Ops", "tier": "standard", "status": "disconnected", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Channels", "Threads", "Mentions"], "signalStrength": 79}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('snowflake', '{"id": "snowflake", "name": "Snowflake", "category": "Data warehouse", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Schemas", "Query History", "Warehouses"], "signalStrength": 50}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('sql_server', '{"id": "sql_server", "name": "SQL Server", "category": "Database", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Tables", "Stored Procedures", "Query Plans"], "signalStrength": 48}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('teams', '{"id": "teams", "name": "Microsoft Teams", "category": "Comms / docs", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Channels", "Messages", "Meetings"], "signalStrength": 50}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('workday', '{"id": "workday", "name": "Workday", "category": "HR / finance", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Workers", "Business Processes", "Compensation"], "signalStrength": 68}') ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "public"."connectors" ("id", "payload") VALUES ('zendesk', '{"id": "zendesk", "name": "Zendesk", "category": "Support", "tier": "standard", "status": "not_configured", "configured": false, "metrics": [], "lastSynced": "\u2014", "reads": ["Tickets", "Agents", "SLA Policies"], "signalStrength": 60}') ON CONFLICT ("id") DO NOTHING;
 
--- mappings (17 rows)
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map1', '{"id": "map1", "sourceSystem": "ServiceNow", "sourceField": "incident.number", "sourceType": "string", "commonField": "ticket.id", "status": "MAPPED", "confidence": "HIGH", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map10', '{"id": "map10", "sourceSystem": "Jira", "sourceField": "field_10", "sourceType": "string", "commonField": "common_10", "status": "AMBIGUOUS", "confidence": "MEDIUM", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map11', '{"id": "map11", "sourceSystem": "Jira", "sourceField": "field_11", "sourceType": "string", "commonField": "common_11", "status": "UNMAPPED", "confidence": "LOW", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map12', '{"id": "map12", "sourceSystem": "ServiceNow", "sourceField": "field_12", "sourceType": "string", "commonField": "common_12", "status": "MAPPED", "confidence": "HIGH", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map13', '{"id": "map13", "sourceSystem": "Jira", "sourceField": "field_13", "sourceType": "string", "commonField": "common_13", "status": "AMBIGUOUS", "confidence": "MEDIUM", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map14', '{"id": "map14", "sourceSystem": "Jira", "sourceField": "field_14", "sourceType": "string", "commonField": "common_14", "status": "UNMAPPED", "confidence": "LOW", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map15', '{"id": "map15", "sourceSystem": "ServiceNow", "sourceField": "field_15", "sourceType": "string", "commonField": "common_15", "status": "MAPPED", "confidence": "HIGH", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map16', '{"id": "map16", "sourceSystem": "Jira", "sourceField": "field_16", "sourceType": "string", "commonField": "common_16", "status": "AMBIGUOUS", "confidence": "MEDIUM", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map17', '{"id": "map17", "sourceSystem": "Jira", "sourceField": "field_17", "sourceType": "string", "commonField": "common_17", "status": "UNMAPPED", "confidence": "LOW", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map2', '{"id": "map2", "sourceSystem": "ServiceNow", "sourceField": "incident.assigned_to", "sourceType": "reference", "commonField": "ticket.owner", "status": "MAPPED", "confidence": "MEDIUM", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map3', '{"id": "map3", "sourceSystem": "Jira", "sourceField": "issue.status", "sourceType": "string", "commonField": "ticket.status", "status": "MAPPED", "confidence": "HIGH", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map4', '{"id": "map4", "sourceSystem": "Jira", "sourceField": "issue.approvals", "sourceType": "array", "commonField": "ticket.approvals", "status": "AMBIGUOUS", "confidence": "MEDIUM", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map5', '{"id": "map5", "sourceSystem": "Databricks", "sourceField": "job_run.state", "sourceType": "string", "commonField": "pipeline.runStatus", "status": "UNMAPPED", "confidence": "LOW", "commonEntity": "Pipeline"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map6', '{"id": "map6", "sourceSystem": "ServiceNow", "sourceField": "field_6", "sourceType": "string", "commonField": "common_6", "status": "MAPPED", "confidence": "HIGH", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map7', '{"id": "map7", "sourceSystem": "Jira", "sourceField": "field_7", "sourceType": "string", "commonField": "common_7", "status": "AMBIGUOUS", "confidence": "MEDIUM", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map8', '{"id": "map8", "sourceSystem": "Jira", "sourceField": "field_8", "sourceType": "string", "commonField": "common_8", "status": "UNMAPPED", "confidence": "LOW", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."mappings" ("id", "payload") VALUES ('map9', '{"id": "map9", "sourceSystem": "ServiceNow", "sourceField": "field_9", "sourceType": "string", "commonField": "common_9", "status": "MAPPED", "confidence": "HIGH", "commonEntity": "Ticket"}') ON CONFLICT ("id") DO NOTHING;
+-- mappings / permissions: intentionally NOT seeded in production (see the SEED
+-- POLICY note in the file header). Nothing in the application writes these two
+-- tables, so the dev seed rows would surface synthetic field mappings and
+-- permission checks as if they were this customer's own. The dev/demo rows live
+-- in database/seed/mappings.json and database/seed/permissions.json if a
+-- non-production environment wants them (via seed_loader.py).
 
--- permissions (5 rows)
-INSERT INTO "public"."permissions" ("id", "payload") VALUES ('p_conf_pages', '{"id": "p_conf_pages", "label": "Confluence: read pages", "sourceSystem": "Jira", "satisfied": false, "required": false}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."permissions" ("id", "payload") VALUES ('p_jira_iss', '{"id": "p_jira_iss", "label": "Jira: read issues", "sourceSystem": "Jira", "satisfied": true, "required": true}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."permissions" ("id", "payload") VALUES ('p_m365_teams', '{"id": "p_m365_teams", "label": "Microsoft 365: read Teams channel metadata", "sourceSystem": "Microsoft 365", "satisfied": false, "required": true}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."permissions" ("id", "payload") VALUES ('p_sn_cmdb', '{"id": "p_sn_cmdb", "label": "ServiceNow: read CMDB", "sourceSystem": "ServiceNow", "satisfied": true, "required": true}') ON CONFLICT ("id") DO NOTHING;
-INSERT INTO "public"."permissions" ("id", "payload") VALUES ('p_sn_inc', '{"id": "p_sn_inc", "label": "ServiceNow: read incidents", "sourceSystem": "ServiceNow", "satisfied": true, "required": true}') ON CONFLICT ("id") DO NOTHING;
-
--- uploads (0 rows)
-
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0025') ON CONFLICT DO NOTHING;
+--
+-- Alembic head this file provisions. Must equal the newest revision in
+-- backend/migrations/versions/ — a DB stamped lower will have `alembic upgrade
+-- head` re-run intervening migrations against tables that already exist.
+--
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0030') ON CONFLICT DO NOTHING;
 
 
 --
@@ -1198,11 +1451,20 @@ INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0025') ON CONFLI
 -- it to the array below. Pure SQL (no psql \set), so this runs identically via
 -- `psql -f` and via a psycopg2 loader.
 --
+-- TODO(deploy) app roles: the array below lists DEV roles. 'aiqdevusr' is the dev
+-- app login; a production database is reached with a different role (see
+-- PROD_DATABASE_URL in .env.template). ADD THE PRODUCTION APP ROLE — the username
+-- from the DATABASE_URL the application will actually use — before running this
+-- file. Because each role is guarded by an existence check, a role that is absent
+-- is silently skipped: leaving the prod role out fails SILENTLY here and then
+-- surfaces at runtime as "permission denied for table ..." on the app's first
+-- write (e.g. seed_owner -> workspace_members at startup).
+--
 DO
 $$
 DECLARE
     r text;
-    app_roles text[] := ARRAY['agentiq', 'aiqdevusr'];
+    app_roles text[] := ARRAY['agentiq', 'aiqdevusr'];  -- TODO(deploy): add the prod app role
 BEGIN
     FOREACH r IN ARRAY app_roles LOOP
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN

@@ -19,7 +19,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 
 from app.telemetry import record_event
@@ -393,6 +393,459 @@ def _surface_operational_credential_health(
             "run=%s: [%s]",
             run_id, type(e).__name__,
         )
+
+
+def _ingest_ops_event_bridge(org_id: str, run_id: str) -> Dict[str, Any]:
+    """Drive MSP-B8 on the shared checkpoint path and validate each batch.
+
+    Validation happens inside ``process_batch`` so a malformed or cross-org
+    normalised event cannot advance the staging row checkpoint. Runtime failures
+    remain non-blocking for the wider discovery run; the returned health block
+    makes the degradation explicit.
+    """
+    try:
+        from .cloud_ops_runtime import operational_event_from_bridge_record
+        from .ingest import change_runner
+        from .ingest.ops_event_bridge import OpsEventBridgeIngestor
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Ops event bridge import failed (non-blocking): [%s]",
+            type(exc).__name__,
+        )
+        return {
+            "records": [],
+            "health": {
+                "status": "unavailable",
+                "reason": type(exc).__name__,
+                "records": 0,
+            },
+        }
+
+    collected: List[Dict[str, Any]] = []
+
+    def _process_batch(batch: Any) -> None:
+        validated: List[Dict[str, Any]] = []
+        for record in batch.records:
+            if not isinstance(record, dict):
+                raise TypeError("ops event bridge emitted a non-mapping record")
+            operational_event_from_bridge_record(record, org_id=org_id)
+            validated.append(dict(record))
+        collected.extend(validated)
+
+    try:
+        result = change_runner.ingest_with_checkpoint(
+            OpsEventBridgeIngestor(),
+            org_id,
+            process_batch=_process_batch,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Ops event bridge failed (non-blocking) org=%s run=%s: [%s]",
+            org_id,
+            run_id,
+            type(exc).__name__,
+        )
+        return {
+            "records": collected,
+            "health": {
+                "status": "unavailable",
+                "reason": type(exc).__name__,
+                "records": len(collected),
+            },
+        }
+
+    status = "degraded" if result.error is not None else "ok"
+    health: Dict[str, Any] = {
+        "status": status,
+        "records": len(collected),
+        "reported_records": int(result.records),
+        "batches": int(result.batches),
+        "complete": bool(result.complete),
+        "first_run": bool(result.first_run),
+        "checkpoint_advanced": bool(result.checkpoint_advanced),
+    }
+    if result.error is not None:
+        health["reason"] = type(result.error).__name__
+        logger.warning(
+            "Ops event bridge degraded org=%s run=%s: [%s]",
+            org_id,
+            run_id,
+            type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "Ops event bridge: %d event(s), %d batch(es), checkpoint_advanced=%s",
+            len(collected),
+            result.batches,
+            result.checkpoint_advanced,
+        )
+    return {"records": collected, "health": health}
+
+
+def _ingest_aws_events(org_id: str, run_id: str) -> Dict[str, Any]:
+    """Drive the native MSP-B1 AWS Event Connector on the shared checkpoint path.
+
+    The AWS half of the MSP-B1/B2 matched pair, and the live counterpart of the
+    MSP-B8 Event-History Bridge for AWS: it polls CloudWatch alarm history, the
+    bounded EventBridge rule set, and CloudTrail management events for the pinned
+    managed accounts, normalises each through its MSP-B0 mapper, and emits the SAME
+    OperationalEvent record shape the bridge emits (AC4 transport equivalence).
+    Records are validated inside ``process_batch`` (a malformed or cross-org record
+    raises before the ``(org, "aws_events")`` checkpoint can advance), and the
+    collected records are merged into the cloud-ops assembly alongside the bridge
+    and Azure records — where the OpsEventStream folds duplicate signatures, so a
+    native event and its bridged twin never double-count.
+
+    Mirrors :func:`_ingest_azure_events` exactly (same change-runner path, same
+    non-blocking posture, same health-block shape), plus the AWS connector's
+    per-account health report (AT-646 / AC8), which is also merged into the run's
+    ``connector_health`` so a revoked role on one account is visible in run health
+    rather than only inside the connector object. Returns ``{"records", "health"}``.
+    """
+    try:
+        from .cloud_ops_runtime import operational_event_from_bridge_record
+        from .ingest import change_runner
+        from .ingest.aws_event_connector import build_ingestor as build_aws_ingestor
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "AWS event connector import failed (non-blocking): [%s]",
+            type(exc).__name__,
+        )
+        return {
+            "records": [],
+            "health": {"status": "unavailable", "reason": type(exc).__name__, "records": 0},
+        }
+
+    try:
+        ingestor = build_aws_ingestor(org_id)
+    except Exception as exc:  # noqa: BLE001 — a present-but-invalid config must not crash the run
+        logger.warning(
+            "AWS event connector config invalid (non-blocking) org=%s: [%s]",
+            org_id,
+            type(exc).__name__,
+        )
+        return {
+            "records": [],
+            "health": {"status": "unavailable", "reason": type(exc).__name__, "records": 0},
+        }
+
+    if ingestor is None:
+        # Not configured for this org (no pinned accounts / no config) — the
+        # connector simply contributes nothing, exactly like an unconfigured source.
+        return {"records": [], "health": {"status": "not_configured", "records": 0}}
+
+    collected: List[Dict[str, Any]] = []
+
+    def _process_batch(batch: Any) -> None:
+        for record in batch.records:
+            if not isinstance(record, dict):
+                raise TypeError("aws event connector emitted a non-mapping record")
+            # Validate (and org-scope) each event exactly as the bridge does, so a
+            # bad record cannot advance the checkpoint.
+            operational_event_from_bridge_record(record, org_id=org_id)
+            collected.append(dict(record))
+
+    try:
+        result = change_runner.ingest_with_checkpoint(
+            ingestor,
+            org_id,
+            process_batch=_process_batch,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "AWS event connector failed (non-blocking) org=%s run=%s: [%s]",
+            org_id,
+            run_id,
+            type(exc).__name__,
+        )
+        return {
+            "records": collected,
+            "health": {
+                "status": "unavailable",
+                "reason": type(exc).__name__,
+                "records": len(collected),
+                "accounts": _aws_account_health(ingestor),
+            },
+        }
+
+    status = "degraded" if result.error is not None else "ok"
+    accounts = _aws_account_health(ingestor)
+    poll = _cloud_poll_health(ingestor)
+    # AC8: a per-account auth/throttle failure is LOUD. Even when the run itself
+    # succeeded, an account that failed degrades the connector's reported status —
+    # a partial ingest must never read as a clean one.
+    if accounts and not accounts.get("all_healthy", True):
+        status = "degraded"
+    # Same rule for an undrained backlog: a scope that stopped on the per-run poll
+    # bound (poll cap / deadline / B7 budget) resumes next run, but this run's ingest
+    # was partial and must say so rather than reporting a clean pass.
+    if poll and not poll.get("complete", True):
+        status = "degraded"
+    health: Dict[str, Any] = {
+        "status": status,
+        "records": len(collected),
+        "reported_records": int(result.records),
+        "batches": int(result.batches),
+        "complete": bool(result.complete),
+        "first_run": bool(result.first_run),
+        "checkpoint_advanced": bool(result.checkpoint_advanced),
+        "accounts": accounts,
+        "poll": poll,
+    }
+    if result.error is not None:
+        health["reason"] = type(result.error).__name__
+        logger.warning(
+            "AWS event connector degraded org=%s run=%s: [%s]",
+            org_id,
+            run_id,
+            type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "AWS event connector: %d event(s), %d batch(es), checkpoint_advanced=%s",
+            len(collected),
+            result.batches,
+            result.checkpoint_advanced,
+        )
+    _surface_cloud_account_health(org_id, run_id, "aws_events", accounts)
+    return {"records": collected, "health": health}
+
+
+def _cloud_poll_health(ingestor: Any) -> Dict[str, Any]:
+    """The native cloud connector's poll-phase report, or ``{}`` when unavailable.
+
+    Names the scopes whose backlog did NOT drain this run and the per-run bound that
+    stopped each (MSP-B1: an early stop is resume, not truncation — but it must be
+    visible). Never raises: reporting must not be able to fail a good run.
+    """
+    try:
+        report = getattr(ingestor, "poll_report", None)
+        return dict(report()) if callable(report) else {}
+    except Exception:  # noqa: BLE001 — health is advisory, never fatal
+        logger.debug("Could not read cloud connector poll report (non-blocking)", exc_info=True)
+        return {}
+
+
+def _aws_account_health(ingestor: Any) -> Dict[str, Any]:
+    """The AWS connector's per-account health report, or ``{}`` when unavailable.
+
+    Offline/static poll sources report no health; a live source reports one entry
+    per managed account (AT-646). Never raises — health surfacing must not be able
+    to fail an otherwise-good run.
+    """
+    try:
+        report = getattr(ingestor, "health_report", None)
+        return dict(report()) if callable(report) else {}
+    except Exception:  # noqa: BLE001 — health is advisory, never fatal
+        logger.debug("Could not read AWS connector health (non-blocking)", exc_info=True)
+        return {}
+
+
+def _surface_cloud_account_health(
+    org_id: str, run_id: str, connector_id: str, report: Dict[str, Any]
+) -> None:
+    """Merge a cloud connector's per-account health into the run's connector_health.
+
+    Closes the AC8 loop: the connector already records a revoked role / throttled
+    account loudly, but that report lived only on the connector object and never
+    reached run health, so the R18-C2 connector panel could not show it. Each
+    account is surfaced under its own key ("AWS Events (111122223333)") so a
+    partial multi-account ingest is visible per account, and the pinned scope on
+    the Integration Hub record is updated to the same vocabulary so the card and
+    run health read the same word (MSP-B13 AC7).
+
+    Entirely non-blocking: any failure is logged and swallowed.
+    """
+    accounts = (report or {}).get("accounts") or []
+    if not accounts:
+        return
+    try:
+        from app.db import run_kv_get, run_kv_set
+        from app.source_keys import source_key_for
+    except ModuleNotFoundError:  # project-root execution uses backend as package
+        from backend.app.db import run_kv_get, run_kv_set  # type: ignore
+        from backend.app.source_keys import source_key_for  # type: ignore
+
+    system = source_key_for(connector_id)
+    try:
+        existing = run_kv_get("connector_health", run_id, None) or {}
+        if not isinstance(existing, dict):
+            existing = {}
+        for account in accounts:
+            account_id = str(account.get("account_id") or "").strip()
+            key = f"{system} ({account_id})" if account_id else system
+            existing[key] = {
+                "system": system,
+                "connectorId": connector_id,
+                "scopeId": account_id,
+                "status": account.get("status"),
+                "message": account.get("message") or "",
+                "surfacesOk": list(account.get("surfaces_ok") or []),
+                "surfacesFailed": dict(account.get("surfaces_failed") or {}),
+                "throttleEvents": int(account.get("throttle_events") or 0),
+            }
+        run_kv_set("connector_health", run_id, existing)
+    except Exception as exc:  # noqa: BLE001 — health surfacing is non-blocking.
+        logger.warning(
+            "Could not surface %s per-account health (non-blocking) run=%s: [%s]",
+            connector_id, run_id, type(exc).__name__,
+        )
+
+    _update_pinned_scope_health(org_id, connector_id, accounts)
+
+
+def _update_pinned_scope_health(
+    org_id: str, connector_id: str, accounts: List[Dict[str, Any]]
+) -> None:
+    """Write each account's outcome back onto its pinned Integration Hub scope.
+
+    So the connector card stops showing a freshly-pinned account as ``pending``
+    forever, and shows ``auth_failed`` the moment a role is revoked — the same
+    vocabulary run health uses (MSP-B13 AC7). Scopes that were not polled are left
+    untouched. Non-blocking.
+    """
+    try:
+        from app import db
+
+        record = db.org_connector_get(org_id, connector_id)
+        if not isinstance(record, dict):
+            return
+        scopes = record.get("scopes")
+        if not isinstance(scopes, list) or not scopes:
+            return
+        by_account = {
+            str(a.get("account_id") or ""): a for a in accounts if a.get("account_id")
+        }
+        changed = False
+        for scope in scopes:
+            if not isinstance(scope, dict):
+                continue
+            account = by_account.get(str(scope.get("scope_id") or ""))
+            if account is None:
+                continue
+            scope["status"] = account.get("status") or scope.get("status")
+            scope["health_message"] = account.get("message") or ""
+            scope["surfaces_ok"] = list(account.get("surfaces_ok") or [])
+            scope["surfaces_failed"] = dict(account.get("surfaces_failed") or {})
+            scope["last_checkpoint_at"] = datetime.now(timezone.utc).isoformat()
+            changed = True
+        if changed:
+            record["scopes"] = scopes
+            db.org_connector_set(org_id, connector_id, record)
+    except Exception as exc:  # noqa: BLE001 — card refresh is advisory
+        logger.warning(
+            "Could not refresh %s pinned-scope health (non-blocking) org=%s: [%s]",
+            connector_id, org_id, type(exc).__name__,
+        )
+
+
+def _ingest_azure_events(org_id: str, run_id: str) -> Dict[str, Any]:
+    """Drive the native MSP-B2 Azure Event Connector on the shared checkpoint path.
+
+    The live counterpart of the MSP-B8 Event-History Bridge: it polls Azure Monitor
+    Alerts, the Activity Log (Administrative only), and Service Health for the pinned
+    subscriptions, normalises each through its MSP-B0 mapper, and emits the SAME
+    OperationalEvent record shape the bridge emits. Records are validated inside
+    ``process_batch`` (a malformed or cross-org record raises before the
+    ``(org, "azure_events")`` checkpoint can advance), and the collected records are
+    merged into the cloud-ops assembly alongside the bridge records — where the
+    OpsEventStream folds duplicate signatures, so a native event and its bridged twin
+    never double-count.
+
+    Mirrors :func:`_ingest_ops_event_bridge` exactly (same change-runner path, same
+    non-blocking posture, same health-block shape). Returns ``{"records", "health"}``.
+    """
+    try:
+        from .cloud_ops_runtime import operational_event_from_bridge_record
+        from .ingest import change_runner
+        from .ingest.azure_events import build_ingestor as build_azure_ingestor
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Azure event connector import failed (non-blocking): [%s]",
+            type(exc).__name__,
+        )
+        return {
+            "records": [],
+            "health": {"status": "unavailable", "reason": type(exc).__name__, "records": 0},
+        }
+
+    try:
+        ingestor = build_azure_ingestor(org_id)
+    except Exception as exc:  # noqa: BLE001 — a present-but-invalid config must not crash the run
+        logger.warning(
+            "Azure event connector config invalid (non-blocking) org=%s: [%s]",
+            org_id,
+            type(exc).__name__,
+        )
+        return {
+            "records": [],
+            "health": {"status": "unavailable", "reason": type(exc).__name__, "records": 0},
+        }
+
+    if ingestor is None:
+        # Not configured for this org (no pinned subscriptions / no config) — the
+        # connector simply contributes nothing, exactly like an unconfigured source.
+        return {"records": [], "health": {"status": "not_configured", "records": 0}}
+
+    collected: List[Dict[str, Any]] = []
+
+    def _process_batch(batch: Any) -> None:
+        for record in batch.records:
+            if not isinstance(record, dict):
+                raise TypeError("azure event connector emitted a non-mapping record")
+            # Validate (and org-scope) each event exactly as the bridge does, so a
+            # bad record cannot advance the checkpoint.
+            operational_event_from_bridge_record(record, org_id=org_id)
+            collected.append(dict(record))
+
+    try:
+        result = change_runner.ingest_with_checkpoint(
+            ingestor,
+            org_id,
+            process_batch=_process_batch,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Azure event connector failed (non-blocking) org=%s run=%s: [%s]",
+            org_id,
+            run_id,
+            type(exc).__name__,
+        )
+        return {
+            "records": collected,
+            "health": {
+                "status": "unavailable",
+                "reason": type(exc).__name__,
+                "records": len(collected),
+            },
+        }
+
+    status = "degraded" if result.error is not None else "ok"
+    health: Dict[str, Any] = {
+        "status": status,
+        "records": len(collected),
+        "reported_records": int(result.records),
+        "batches": int(result.batches),
+        "complete": bool(result.complete),
+        "first_run": bool(result.first_run),
+        "checkpoint_advanced": bool(result.checkpoint_advanced),
+    }
+    if result.error is not None:
+        health["reason"] = type(result.error).__name__
+        logger.warning(
+            "Azure event connector degraded org=%s run=%s: [%s]",
+            org_id,
+            run_id,
+            type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "Azure ingestion: %d event(s), %d batch(es), checkpoint_advanced=%s",
+            len(collected),
+            result.batches,
+            result.checkpoint_advanced,
+        )
+    return {"records": collected, "health": health}
 
 
 def _ingest_java_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
@@ -1040,23 +1493,67 @@ def run(
     org_id: str = "demo-org",
     systems: Optional[List[str]] = None,
     pack: Optional[str] = None,
+    pack_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     # ENG-SHARED-1: resolve pack config — replaces temporary is_ncino_pack conditional
+    # R191-P1 T2: a run selects one OR MORE packs. `pack_ids` (plural, R191-P1 T1)
+    # is the multi-pack selection; the singular `pack` stays accepted as the
+    # primary alias (CLI / older callers). Both fold into ONE order-preserving,
+    # de-duplicated selection via the shared primitive. Each selected pack runs its
+    # own detectors against the ONE shared normalised signal and is scored with its
+    # OWN calibration (AC3); a single selection is byte-identical to the former
+    # single-pack pipeline (AC2).
     from .packs.pack_config import (
         get_pack,
-        get_pack_domain,
         get_pack_version,
+        normalize_pack_ids,
         is_ncino_pack,
         is_sqlserver_opsignal_pack,
         is_github_engineering_pack,
         is_enterprise_ops_pack,
+        is_cloud_ops_pack,
+        is_security_ops_pack,
     )
-    pack_config = get_pack(pack)
-    pack_id     = pack_config["packId"]
+    _selected_pack_args = normalize_pack_ids(
+        list(pack_ids or []) + ([pack] if pack else [])
+    )
+    if not _selected_pack_args:
+        # No selection → the historical default pack (get_pack(None)).
+        _selected_pack_args = [None]
+
+    # Resolve each selection to its REGISTERED config, de-duplicated by the
+    # resolved packId (two unknown ids both fall back to the default → one pass),
+    # order preserved. The first entry is the primary pack — every backward-
+    # compatible scalar (packId / packVersion / detectorsExecuted / …) reports it,
+    # so a single-pack run is unchanged.
+    _pack_configs: List[Tuple[Optional[str], Dict[str, Any]]] = []
+    _seen_pack_ids: set = set()
+    for _sel in _selected_pack_args:
+        _cfg = get_pack(_sel)
+        _pid = _cfg["packId"]
+        if _pid in _seen_pack_ids:
+            continue
+        _seen_pack_ids.add(_pid)
+        _pack_configs.append((_sel, _cfg))
+
+    primary_pack_arg, pack_config = _pack_configs[0]
+    pack_id = pack_config["packId"]
     # R16-B1 §4: stamp the pack VERSION (not just the id) onto every opportunity
     # so governance/debugging can later tell a data change from a pack change.
-    pack_version = get_pack_version(pack)
-    pack_domain = pack_config["pack_domain"]
+    pack_version = get_pack_version(primary_pack_arg)
+    primary_pack_id = pack_id
+
+    # Union of pack DOMAINS across the whole selection drives the shared, run-once
+    # ingestion below: ingest a pack-specific source when ANY selected pack needs
+    # it (for a single pack this is identical to the former per-pack gate).
+    _selected_domains = {cfg["domain"] for _, cfg in _pack_configs}
+    _any_ncino = "ncino" in _selected_domains
+    _any_strs = "strs_benefits" in _selected_domains
+    _any_github = "github_engineering" in _selected_domains
+    _any_enterprise_ops = "enterprise_ops" in _selected_domains
+    _any_db_opsignal = "sqlserver_opsignal" in _selected_domains
+    _any_security_ops = "security_ops" in _selected_domains
+    _any_cloud_ops = "cloud_ops" in _selected_domains
 
     # Default to all systems if None
     if mode is None:
@@ -1109,6 +1606,22 @@ def run(
     teams_data: Dict[str, Any] = {}
     confluence_data: Dict[str, Any] = {}
     sharepoint_data: Dict[str, Any] = {}
+    secops_volume_measurements: Optional[Dict[str, Any]] = None
+    ops_event_bridge_data: Dict[str, Any] = {
+        "records": [],
+        "health": {"status": "not_selected", "records": 0},
+    }
+    # MSP-B2: native Azure Event Connector output (same record shape as the bridge).
+    azure_events_data: Dict[str, Any] = {
+        "records": [],
+        "health": {"status": "not_selected", "records": 0},
+    }
+    # MSP-B1: native AWS Event Connector output (same record shape as the bridge).
+    aws_events_data: Dict[str, Any] = {
+        "records": [],
+        "health": {"status": "not_selected", "records": 0},
+    }
+    cloud_ops_runtime_health: Dict[str, Any] = {"status": "not_selected"}
     logger.info(f"Systems: {sorted(list(_systems))}")
 
     # CS-4 / AT-313: each ingest stage reports success to update_run_step via
@@ -1140,8 +1653,146 @@ def run(
     try:
         if "servicenow" in _systems:
             update_run_step(run_id, "sn")
-            sn_data = servicenow.ingest()
-            if sn_data: logger.info("ServiceNow ingestion: OK")
+            # MSP-B3 T5: regular ServiceNow data is still ingested once, while
+            # CMDB CIs and relationships run through independent incremental
+            # checkpoints whose callbacks persist graph state before advancing.
+            sn_data = servicenow.ingest(include_cmdb=False)
+            if sn_data:
+                cmdb_data = servicenow.ingest_cmdb_changes(
+                    org_id=org_id,
+                    run_id=run_id,
+                    class_scope=(
+                        servicenow.DEFAULT_CMDB_CLASSES
+                        if mode == "offline"
+                        else None
+                    ),
+                )
+                sn_data["cmdb"] = cmdb_data
+                stream_errors = [
+                    stream.get("error")
+                    for stream in (cmdb_data.get("streams") or {}).values()
+                    if stream.get("error")
+                ]
+                if stream_errors:
+                    sn_ok = False
+                    sn_err = "; ".join(stream_errors)
+                from .signals.secops_volume import SecOpsVolumeStream
+
+                cmdb_index = {
+                    str(ci.get("sys_id")): {
+                        "ci_class": ci.get("ci_class") or ci.get("sys_class_name")
+                    }
+                    for ci in (cmdb_data.get("configuration_items") or [])
+                    if isinstance(ci, dict) and ci.get("sys_id")
+                }
+                secops_volume_stream = SecOpsVolumeStream(cmdb_index=cmdb_index)
+                # MSP-B11 T1: Security Operations SIR workflow signal, on the
+                # same incremental sys_updated_on rails. Additive (a new
+                # sn_data["secops"] key, no existing consumer) and non-blocking:
+                # a stream failure degrades ServiceNow to partial, never aborts.
+                secops_data = servicenow.ingest_sir_changes(
+                    org_id=org_id,
+                    run_id=run_id,
+                    volume_stream=secops_volume_stream,
+                    handoff_security_notes=_any_security_ops,
+                )
+                sn_data["secops"] = secops_data
+                # MSP-B11 T2: Vulnerability Response workflow signal — three
+                # independently-checkpointed VR streams, same non-blocking rails.
+                vr_data = servicenow.ingest_vr_changes(
+                    org_id=org_id,
+                    run_id=run_id,
+                    volume_stream=secops_volume_stream,
+                )
+                sn_data["vulnerability_response"] = vr_data
+                secops_volume_measurements = secops_volume_stream.measurements(
+                    org_id
+                ).to_dict()
+                secops_data["volume"] = secops_volume_measurements
+                vr_data["volume"] = secops_volume_measurements
+                sn_data["secops_volume"] = secops_volume_measurements
+
+                # MSP-B12 T3: persist the bounded B11 records behind their lean
+                # evidence pointers. The API resolves one record at a time under
+                # org + analyst RBAC and emits an audit event.
+                if _any_security_ops:
+                    try:
+                        from .packs.security_ops_evidence_resolver import (
+                            RunKVEvidenceRecordStore,
+                            index_signal_records,
+                        )
+
+                        evidence_store = RunKVEvidenceRecordStore(run_id, org_id)
+                        indexed = index_signal_records(
+                            evidence_store, org_id, sn_data
+                        )
+                        evidence_store.flush()
+                        sn_data["secops_evidence_resolution"] = {
+                            "available": True,
+                            "records_indexed": indexed,
+                        }
+                    except Exception as evidence_exc:  # noqa: BLE001
+                        sn_data["secops_evidence_resolution"] = {
+                            "available": False,
+                            "records_indexed": 0,
+                            "error": str(evidence_exc),
+                        }
+                        secops_data.setdefault("streams", {})[
+                            "evidence_record_store"
+                        ] = {"error": str(evidence_exc)}
+                secops_streams = [
+                    stream
+                    for streams in (
+                        secops_data.get("streams") or {},
+                        vr_data.get("streams") or {},
+                    )
+                    for stream in streams.values()
+                    if isinstance(stream, dict)
+                ]
+                secops_errors = [
+                    stream.get("error")
+                    for stream in secops_streams
+                    if stream.get("error")
+                ]
+                # A table this instance does not expose (an unactivated
+                # ServiceNow module such as Security Incident Response, or one
+                # the integration role cannot read) is REPORTED, never counted
+                # as a failure: no re-run fixes it, so failing the stage every
+                # run would bury the conditions that do need attention.
+                sn_unavailable = [
+                    f"{stream.get('table') or stream.get('connector_id')}: "
+                    f"{stream.get('unavailable_reason')}"
+                    for stream in (
+                        *(
+                            s
+                            for s in (cmdb_data.get("streams") or {}).values()
+                            if isinstance(s, dict)
+                        ),
+                        *secops_streams,
+                    )
+                    if stream.get("status") == "unavailable"
+                ]
+                if sn_unavailable:
+                    sn_data["servicenow_unavailable_tables"] = sn_unavailable
+                    logger.info(
+                        "ServiceNow: %d table(s) not available on this instance — %s",
+                        len(sn_unavailable),
+                        "; ".join(sn_unavailable),
+                    )
+                if secops_errors:
+                    sn_ok = False
+                    sn_err = "; ".join(
+                        part for part in [sn_err, *secops_errors] if part
+                    )
+            if sn_data and sn_ok:
+                logger.info("ServiceNow ingestion: OK")
+            elif sn_data:
+                logger.warning("ServiceNow ingestion: partial (%s)", sn_err)
+            # Ingestion ran without an auth error (a genuine auth failure raises
+            # SNError → the except branch below flags it), so clear any prior
+            # connector auth-failure flag — a recovered ServiceNow stops prompting
+            # Reconnect (dev: connector-auth-failure tracking), matching the
+            # salesforce/jira clear calls above/below.
             clear_connector_auth_failure(org_id, "servicenow")
     except SNError as e:
         sn_ok = False
@@ -1164,12 +1815,47 @@ def run(
         flag_connector_auth_failure(org_id, "jira", e)
     update_run_step(run_id, "jira", ok=jira_ok)
 
+    # MSP-B8: staged AWS/Azure event histories are an internal Cloud Operations
+    # source. Drive them whenever any selected pack needs cloud_ops, independent
+    # of the external systems list, and before the no-data guard so a bridge-only
+    # cloud run is still allowed to reach detector evaluation.
+    if _any_cloud_ops:
+        ops_event_bridge_data = _ingest_ops_event_bridge(org_id, run_id)
+
+    # MSP-B2: the NATIVE Azure Event Connector is the live counterpart of the B8
+    # bridge — the SAME OperationalEvent record shape, its own (org, "azure_events")
+    # checkpoint. It runs only when the Azure connector is connected+selected AND a
+    # cloud_ops pack is selected (so its events are actually consumed), and its
+    # records feed the SAME cloud-ops assembly seam as the bridge, where the
+    # OpsEventStream folds duplicate signatures — so native + bridge never
+    # double-count. Non-blocking, exactly like the bridge.
+    if _any_cloud_ops and "azure_events" in _systems:
+        azure_events_data = _ingest_azure_events(org_id, run_id)
+
+    # MSP-B1: the NATIVE AWS Event Connector — the AWS half of the B1/B2 pair, and
+    # the live counterpart of the B8 bridge for AWS. Identical gating and posture
+    # to Azure above: it runs only when the AWS connector is connected+selected AND
+    # a cloud_ops pack is selected (so its events are actually consumed), its own
+    # (org, "aws_events") checkpoint, and its records feed the SAME cloud-ops
+    # assembly seam — where the OpsEventStream folds duplicate signatures, so a
+    # native event and its bridged twin never double-count. Non-blocking.
+    if _any_cloud_ops and "aws_events" in _systems:
+        aws_events_data = _ingest_aws_events(org_id, run_id)
+
     # Single-ingest: materialization now hands the runner ALL connected systems
     # (not just the ones a probe pre-pass confirmed had data), so guard against
     # aborting a run that still has usable data. Abort only when NO system of
     # record produced anything — the same net outcome the old probe+succeeded
     # path produced (a Salesforce-empty run still ran ServiceNow/Jira detectors).
-    if "salesforce" in _systems and not sf_data and not sn_data and not jira_data:
+    if (
+        "salesforce" in _systems
+        and not sf_data
+        and not sn_data
+        and not jira_data
+        and not ops_event_bridge_data.get("records")
+        and not azure_events_data.get("records")
+        and not aws_events_data.get("records")
+    ):
         logger.error("No system-of-record data available — cannot run detectors. Aborting.")
         try:
             _elapsed_ms = int((datetime.now(timezone.utc) - _run_started_dt).total_seconds() * 1000)
@@ -1205,7 +1891,36 @@ def run(
             ],
         )
         empty["perSystem"], empty["succeeded"], empty["ingestErrors"] = _ps, _succ, _errs
+        empty["cloudOpsRuntime"] = {
+            "eventBridge": dict(ops_event_bridge_data.get("health") or {}),
+            "azureEvents": dict(azure_events_data.get("health") or {}),
+            "awsEvents": dict(aws_events_data.get("health") or {}),
+            "assembly": cloud_ops_runtime_health,
+        }
         return empty
+
+    # MSP-B3 T4: current-scope CMDB nodes must exist before detector evaluation
+    # so ServiceNow incident signals can carry an exact CI entity identifier.
+    # The later full extraction pass confirms the same source entities without
+    # duplicating them. Failure is non-blocking and leaves incidents unresolved;
+    # it must never trigger a guessed name- or text-based join.
+    if sn_data:
+        try:
+            from app.entity_extractor import prepare_servicenow_ci_resolution
+
+            prepare_servicenow_ci_resolution(
+                org_id=org_id,
+                run_id=run_id,
+                sn_data=sn_data,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "ServiceNow incident-to-CI preparation failed (non-blocking): "
+                "run_id=%s org_id=%s error=%s",
+                run_id,
+                org_id,
+                exc,
+            )
 
     # 2-pre. Slack change ingest — R16-A2 / AT-421 (T6) + AT-419 (T4).
     # Slack is a connected SOURCE, so it ingests here — after the systems of
@@ -1268,7 +1983,7 @@ def run(
 
     # 2a. nCino ingest — if ncino pack, fetch lending signals from nCino objects
     from .packs.pack_config import is_ncino_pack as _is_ncino
-    if _is_ncino(pack_id) and "salesforce" in _systems:
+    if _any_ncino and "salesforce" in _systems:
         ncino_ok = True
         try:
             from .ingest.ncino import ingest as ncino_ingest
@@ -1297,7 +2012,7 @@ def run(
 
     # 2b. STRS Benefits ingest — if strs_benefits pack
     from .packs.pack_config import is_strs_benefits_pack as _is_strs
-    if _is_strs(pack_id) and "salesforce" in _systems:
+    if _any_strs and "salesforce" in _systems:
         try:
             from .ingest.strs_benefits import ingest as strs_ingest
             strs_data = strs_ingest()
@@ -1317,7 +2032,7 @@ def run(
     # source payloads / corroboration. Non-blocking: ingest failure never aborts
     # the run. Jira is still ingested above when in _systems so the pack's
     # confidence-elevation corroboration can run.
-    if is_github_engineering_pack(pack_id) or "github" in _systems:
+    if _any_github or "github" in _systems:
         update_run_step(run_id, "github")
         github_data = _ingest_github(org_id, run_id) or {}
         if github_data:
@@ -1350,7 +2065,7 @@ def run(
     # ServiceNow/Jira data — no fixture seeding — so these detectors fire only
     # once the live block computation exists. Real computed data always wins:
     # the seed fills only blocks not already present.
-    if is_enterprise_ops_pack(pack_id) and str(mode).strip().lower() != "live":
+    if _any_enterprise_ops and str(mode).strip().lower() != "live":
         sn_data, jira_data = _attach_enterprise_ops_demo(sn_data, jira_data)
 
     # 2d. Oracle DB ingest  — T2-S12-A: sqlserver_opsignal pack + oracle_db connector.
@@ -1359,7 +2074,7 @@ def run(
     db_data: Dict[str, Any] = {}
     _db_connector_id: Optional[str] = None
 
-    if _is_db_opsignal(pack_id):
+    if _any_db_opsignal:
         active_db_connectors = sorted(_systems & _DB_CONNECTOR_IDS)
         if len(active_db_connectors) > 1:
             logger.warning(
@@ -1440,210 +2155,81 @@ def run(
         else:
             logger.info(".NET app corroboration: no operational friction this run")
 
+    # MSP-B4/B5/B8 production seam. B3 CI resolution has already run above, and
+    # connected knowledge sources have now ingested, so recurrence enrichment and
+    # runbook matching see the fullest current-run context. The assembled block is
+    # exactly what the existing Cloud Operations detectors consume.
+    if _any_cloud_ops:
+        try:
+            from .cloud_ops_runtime import build_cloud_ops_runtime
+
+            if not isinstance(sn_data, dict):
+                sn_data = {}
+            sn_data.setdefault("org_id", org_id)
+            # Native Azure events (MSP-B2) and staged bridge events (MSP-B8) are the
+            # SAME OperationalEvent record shape and are merged into ONE assembly
+            # call. The runtime's OpsEventStream folds identical event_signatures, so
+            # a native event and its bridged twin collapse to one signal rather than
+            # double-counting (MSP §15 transport equivalence).
+            _cloud_event_records = (
+                list(ops_event_bridge_data.get("records") or ())
+                + list(azure_events_data.get("records") or ())
+                + list(aws_events_data.get("records") or ())
+            )
+            runtime = build_cloud_ops_runtime(
+                org_id,
+                sn_data,
+                bridge_records=_cloud_event_records,
+                bridge_health=ops_event_bridge_data.get("health"),
+            )
+            sn_data["cloud_ops"] = runtime.block
+            cloud_ops_runtime_health = runtime.health
+            logger.info(
+                "Cloud Operations runtime assembly: status=%s recurrences=%d "
+                "routing_loops=%d event_signatures=%d",
+                runtime.health.get("status"),
+                len(runtime.block.get("recurrence_records") or ()),
+                len(runtime.block.get("oscillation_records") or ()),
+                len(runtime.block.get("event_signatures") or ()),
+            )
+        except Exception as exc:  # noqa: BLE001
+            cloud_ops_runtime_health = {
+                "status": "unavailable",
+                "reason": type(exc).__name__,
+            }
+            logger.warning(
+                "Cloud Operations runtime assembly failed (non-blocking): [%s]",
+                type(exc).__name__,
+            )
+
     # 2. Context
     org_ctx = build_org_context(sf_data, sn_data, jira_data)
 
-    # 3. Detect — ENG-AIQ-NC-4: pack-driven detector selection
-    # Replaces hardcoded Service Cloud detector list.
-    # pack_config.py (ENG-SHARED-1) defines which detectors each pack activates.
+    # 3. Detect + Score — R191-P1 T2: multi-pack execution.
+    # Each selected pack runs its OWN detectors against the ONE shared normalised
+    # signal ingested above, and its OWN scorer calibration is applied to its OWN
+    # findings — the impact scorer NEVER blends calibrations across packs (AC3).
+    # A single-pack run is byte-identical to the former pipeline (AC2): the pass
+    # body below is exactly the previous single-pack logic with `pack_id` bound to
+    # the current pack. Overlapping opportunities from two packs stay two findings,
+    # each carrying its own packId — no cross-pack merging (AC4, explicit non-goal).
     from .packs.pack_config import is_ncino_pack
 
-    if _is_db_opsignal(pack_id):
-        # DB operational signal detectors — shared across SQL Server, Oracle, PostgreSQL (T2-S12-A)
-        from .detectors import (
-            db_ticket_volume_surge,
-            db_sla_breach_rate,
-            db_queue_depth_elevated,
-        )
-        all_detectors = [
-            db_ticket_volume_surge,
-            db_sla_breach_rate,
-            db_queue_depth_elevated,
-        ]
-        logger.info("Pack: sqlserver_opsignal — 3 DB operational signal detectors active (connector=%s)", _db_connector_id or "none")
-    elif is_ncino_pack(pack_id):
-        # nCino lending detectors — confirmed objects from SF-NC-2
-        from .detectors import (
-            loan_origination_routing_friction,
-            covenant_tracking_gap,
-            checklist_bottleneck,
-            spreading_bottleneck,
-            approval_bottleneck,
-        )
-        all_detectors = [
-            loan_origination_routing_friction,
-            covenant_tracking_gap,
-            checklist_bottleneck,
-            spreading_bottleneck,
-            approval_bottleneck,
-        ]
-        logger.info("Pack: ncino — 5 lending detectors active")
-    elif _is_strs(pack_id):
-        from .detectors import (
-            application_stall,
-            benefit_election_deadline,
-            disbursement_overdue,
-            disability_review_bottleneck,
-        )
-        all_detectors = [
-            application_stall,
-            benefit_election_deadline,
-            disbursement_overdue,
-            disability_review_bottleneck,
-        ]
-        logger.info("Pack: strs_benefits — 4 benefit detectors active")
-    elif is_github_engineering_pack(pack_id):
-        from .detectors import (
-            github_pr_bottleneck,
-            github_commit_concentration,
-            github_stale_branches,
-        )
-        all_detectors = [
-            github_pr_bottleneck,
-            github_commit_concentration,
-            github_stale_branches,
-        ]
-        logger.info("Pack: github_engineering — 3 engineering signal detectors active")
-    elif is_enterprise_ops_pack(pack_id):
-        from .detectors import (
-            ent_incident_resolution_lag,
-            ent_change_incident_correlation,
-            ent_sla_breach_by_team,
-        )
-        all_detectors = [
-            ent_incident_resolution_lag,
-            ent_change_incident_correlation,
-            ent_sla_breach_by_team,
-        ]
-        logger.info("Pack: enterprise_ops — 3 cross-system detectors active")
-    else:
-        # Service Cloud detectors — default
-        from .detectors import (
-            repetition, handoff_friction, approval_delay,
-            knowledge_gap, integration_concentration,
-            permission_bottleneck, cross_system_echo,
-        )
-        all_detectors = [repetition, handoff_friction, approval_delay, knowledge_gap,
-                         integration_concentration, permission_bottleneck, cross_system_echo]
-        logger.info("Pack: service_cloud — 7 SC detectors active")
-
-    # Capture fired and non-firing detector evaluations before scoring.
-    # DB and GitHub packs read their signal from the first positional arg.
-    # Keep Service Cloud, nCino, and STRS on Salesforce-shaped data.
-    if _is_db_opsignal(pack_id):
-        primary_data = db_data
-    elif is_github_engineering_pack(pack_id):
-        primary_data = github_data
-    else:
-        primary_data = sf_data
-
-    # Mark "detect" before the phase so the Pattern Detection step shows as
-    # in-progress while detectors run (it renders completed once "enrich" starts).
-    update_run_step(run_id, "detect")
-    detector_results, all_evaluated = _run_detector_phase(
-        all_detectors,
-        primary_data,
-        sn_data,
-        jira_data,
-    )
-
-    pack_executed_at = _snapshot_detector_evaluations(
-        org_id=org_id,
-        run_id=run_id,
-        pack_id=pack_id,
-        detector_results=detector_results,
-        all_evaluated=all_evaluated,
-    )
-    executed_detector_ids = _record_pack_execution(
-        org_id=org_id,
-        run_id=run_id,
-        pack_id=pack_id,
-        pack_name=str(pack_config.get("packName") or pack_id),
-        pack_version=pack_version,
-        detectors=all_detectors,
-        evaluated_count=len(all_evaluated),
-        executed_at=pack_executed_at,
-    )
-
-    update_run_step(run_id, "enrich")
-
-    try:
-        # Entity extraction is synchronous and DB-safe in this context: every
-        # resolve_or_create_entity() opens its own short-lived raw sqlite3
-        # connection via db.connect(), commits, and closes it (see
-        # entity_resolution._connect). There is no SQLAlchemy session or
-        # thread-local state to leak across an async boundary — unlike the
-        # GitHub ingest above, this call needs no event-loop isolation.
-        from app.entity_extractor import extract_entities
-        entities = extract_entities(
-            org_id=org_id,
-            run_id=run_id,
-            pack_id=pack_id,
-            detector_results=detector_results,
-            ingestor_data={
-                "salesforce": sf_data,
-                "servicenow": sn_data,
-                "jira": jira_data,
-            },
-        ) or []
-    except Exception as e:
-        entities = []
-        logger.warning(
-            "Entity extraction failed (non-blocking): run_id=%s error=%s",
-            run_id,
-            e,
-        )
-
-    # T3-S13-A T6: map relationships AFTER extract_entities() — both mapping
-    # passes draw edges only between the resolved entity rows written during
-    # extraction. map_relationships() is the single entry point (it calls
-    # map_directly_observed() + map_inferred_from_detectors() and emits the
-    # relationship.mapping_completed telemetry on success). Non-blocking: a
-    # failure here must never break opportunity delivery, so the run still
-    # completes and OppEnrichment.relationships simply defaults to empty (AC9).
-    try:
-        from app.relationship_mapper import map_relationships
-        if not entities:
-            logger.warning("map_relationships skipped: no entities from extraction")
-        map_relationships(
-            org_id=org_id,
-            run_id=run_id,
-            ingestor_data={
-                "salesforce": sf_data,
-                "servicenow": sn_data,
-                "jira": jira_data,
-            },
-            detector_results=detector_results,
-            entities=entities,
-        )
-    except Exception as e:
-        logger.warning(
-            "Relationship mapping failed (non-blocking): run_id=%s org_id=%s error=%s",
-            run_id,
-            org_id,
-            e,
-        )
-
-    # R16-C1 T1: load Stack Builder weighting context from run KV store.
-    # Falls back to neutral (no-op) for older runs that pre-date R16-C1 or
-    # for runs started outside the Stack Builder flow. Never raises.
+    # ── Shared, pack-independent setup (runs ONCE for the whole run) ──
+    # R16-C1 T1: Stack Builder weighting context (run-level, pack-independent).
     from .weighting_context import load_for_run as _load_weighting_context
     _weighting_ctx = _load_weighting_context(run_id)
 
-    # R16-C2 T2: load the selected Discovery Focus from the run KV store and
-    # annotate each opportunity with additive focus-emphasis metadata, so the
-    # shared ranking utility can emphasise findings matching the focus affinity.
-    # Emphasis, not exclusion: this only reorders; it never filters detectors or
-    # mutates impact/effort/confidence/tier. None / enterprise_wide / unknown
-    # focus => no bias => unchanged ordering. Never raises.
+    # R16-C2 T2: selected Discovery Focus (run-level, pack-independent). Additive
+    # emphasis annotation only — never mutates a scoring field.
     from .packs.focus_affinity import (
         load_focus_for_run as _load_focus_for_run,
         build_focus_emphasis as _build_focus_emphasis,
     )
     _focus_id = _load_focus_for_run(run_id)
 
-    # 4. Score + Evidence
-    # ENG-AIQ-NC-4: use lending_scorer for ncino pack, SC scorer for service_cloud
+    # Scorers — one family per pack; each pack selects its own inside the pass so
+    # calibrations never mix (AC3). ENG-AIQ-NC-4.
     from .scorer import score as sc_score
     from .lending_scorer import score_lending, is_lending_detector
     from .strs_benefits_scorer import score_strs_benefits, is_strs_benefits_detector
@@ -1658,6 +2244,16 @@ def run(
     from .packs.enterprise_ops_scorer import (
         score_enterprise_ops,
         is_enterprise_ops_detector,
+    )
+    from .packs.cloud_ops_scorer import (
+        score_cloud_ops,
+        is_cloud_ops_detector,
+        rank_cloud_ops_findings,
+    )
+    from .packs.security_ops_scorer import (
+        score_security_ops,
+        is_security_ops_detector,
+        rank_security_ops_findings,
     )
     from .evidence_builder import build_evidence
     # R16-B1 (T3): stable cross-run opportunity identity, computed at assembly.
@@ -1684,243 +2280,573 @@ def run(
     except Exception as _corr_imp_err:  # noqa: BLE001 — corroboration is optional.
         logger.warning("ENT-2 corroboration engine unavailable (non-blocking): %s", _corr_imp_err)
         _corroboration_available = False
+
+    # ONE shared evidence-id counter for the whole run so evidence ids stay
+    # globally unique ACROSS packs (a multi-pack run must never collide ids).
     id_counter = itertools.count(1)
     def id_factory() -> str: return f"{run_id[-6:]}_{next(id_counter):04d}"
 
-    # Issue 3 fix: collect Jira/SN lending correlation by detector for ncino pack.
-    # Wave 2 (ENG-AIQ-NC-2/NC-3) built lending_correlation — wire it into evidence here.
-    jira_by_detector: Dict[str, List[str]] = {}
-    sn_by_detector:   Dict[str, List[str]] = {}
-    if is_ncino_pack(pack_id):
-        if jira_data:
-            jira_by_detector = (
-                jira_data.get("lending_correlation", {}).get("by_detector", {})
-            )
-        if sn_data:
-            sn_by_detector = (
-                sn_data.get("lending_correlation", {}).get("by_detector", {})
-            )
-
-    # ── STRS Benefits corroboration — ENG-STRS-CORR-1/2 (Fix Pack Sprint 7) ──
-    # Same pattern as nCino above. strs_benefits.py ingest() now returns
-    # jira_strs_correlation and sn_strs_correlation inside the metrics dict,
-    # which is merged into sf_data["strs_benefits"]. Extract by_detector here.
-    if _is_strs(pack_id):
-        strs_metrics = sf_data.get("strs_benefits", {})
-        jira_by_detector = (
-            strs_metrics.get("jira_strs_correlation", {}).get("by_detector", {})
-        )
-        sn_by_detector = (
-            strs_metrics.get("sn_strs_correlation", {}).get("by_detector", {})
-        )
-        if jira_by_detector:
-            logger.info(
-                "STRS Jira corroboration: %d detectors have Jira evidence",
-                len(jira_by_detector),
-            )
-        if sn_by_detector:
-            logger.info(
-                "STRS ServiceNow corroboration: %d detectors have SN evidence",
-                len(sn_by_detector),
-            )
-
-    # ── ENT-2: build the shared corroboration run_data once for this run ──
-    # Maps already-extracted Jira/ServiceNow correlation by detector and carries
-    # Slack (AT-419 / T4) / Confluence corroboration blocks through when an
-    # upstream connector payload provides them. connected_systems drives COR-08
-    # (single-source no elevation). This only ever ELEVATES confidence downstream
-    # — it never downgrades.
     _run_ts_iso = _run_started_dt.isoformat()
-    _corr_run_data: Dict[str, Any] = {"connected_systems": sorted(_systems)}
-    if _corroboration_available:
-        try:
-            _corr_run_data = build_corroboration_run_data(
-                systems=_systems,
-                sn_by_detector=sn_by_detector,
-                jira_by_detector=jira_by_detector,
-                run_timestamp_iso=_run_ts_iso,
-                source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data, teams_data, java_data, dotnet_data],
-            )
-        except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
-            logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)
 
-    opportunities = []
-    for dr in detector_results:
-        # Select scorer based on pack
-        if is_ncino_pack(pack_id) and is_lending_detector(dr.detector_id):
-            scored = score_lending(dr)
-        elif _is_strs(pack_id) and is_strs_benefits_detector(dr.detector_id):
-            scored = score_strs_benefits(dr)
-        elif is_sqlserver_opsignal_pack(pack_id) and is_sqlserver_opsignal_detector(dr.detector_id):
-            scored = score_sqlserver_opsignal(dr)
-        elif is_github_engineering_pack(pack_id) and is_github_engineering_detector(dr.detector_id):
-            # T7/AT-191: PR-bottleneck confidence elevates MEDIUM->HIGH when Jira
-            # corroborates. jira_connected mirrors how sources_connected.jira is derived.
-            scored = score_github_engineering(
-                dr,
-                jira_data=jira_data,
-                org_id=org_id,
-                jira_connected=bool(jira_data),
+    # ── Per-pack execution pass ──
+    # Runs ONE selected pack end-to-end against the shared signal and returns its
+    # findings plus its execution metadata. Everything here is scoped to the
+    # current pack (`pack_id`/`pack_version`/`pack_config`) so two packs in one run
+    # never share detector lists, calibration, or by-detector corroboration maps.
+    def _run_pack_pass(
+        current_pack: Optional[str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        pack_config = get_pack(current_pack)
+        pack_id = pack_config["packId"]
+        pack_version = get_pack_version(current_pack)
+
+        # pack-driven detector selection — pack_config.py (ENG-SHARED-1) defines
+        # which detectors each pack activates.
+        if _is_db_opsignal(pack_id):
+            # DB operational signal detectors — shared across SQL Server, Oracle, PostgreSQL (T2-S12-A)
+            from .detectors import (
+                db_ticket_volume_surge,
+                db_sla_breach_rate,
+                db_queue_depth_elevated,
             )
-        elif is_enterprise_ops_pack(pack_id) and is_enterprise_ops_detector(dr.detector_id):
-            # AT-266 T5: ENT_INCIDENT_RESOLUTION_LAG elevates MEDIUM->HIGH via COR-06
-            # (ENT-2); ENT_SLA_BREACH_BY_TEAM elevates via ENT-1 entity overlay
-            # (result already in dr.raw_evidence, read by scorer).
-            scored = score_enterprise_ops(
-                dr,
-                sn_data=sn_data,
-                jira_data=jira_data,
-                org_id=org_id,
+            all_detectors = [
+                db_ticket_volume_surge,
+                db_sla_breach_rate,
+                db_queue_depth_elevated,
+            ]
+            logger.info("Pack: sqlserver_opsignal — 3 DB operational signal detectors active (connector=%s)", _db_connector_id or "none")
+        elif is_ncino_pack(pack_id):
+            # nCino lending detectors — confirmed objects from SF-NC-2
+            from .detectors import (
+                loan_origination_routing_friction,
+                covenant_tracking_gap,
+                checklist_bottleneck,
+                spreading_bottleneck,
+                approval_bottleneck,
             )
+            all_detectors = [
+                loan_origination_routing_friction,
+                covenant_tracking_gap,
+                checklist_bottleneck,
+                spreading_bottleneck,
+                approval_bottleneck,
+            ]
+            logger.info("Pack: ncino — 5 lending detectors active")
+        elif _is_strs(pack_id):
+            from .detectors import (
+                application_stall,
+                benefit_election_deadline,
+                disbursement_overdue,
+                disability_review_bottleneck,
+            )
+            all_detectors = [
+                application_stall,
+                benefit_election_deadline,
+                disbursement_overdue,
+                disability_review_bottleneck,
+            ]
+            logger.info("Pack: strs_benefits — 4 benefit detectors active")
+        elif is_github_engineering_pack(pack_id):
+            from .detectors import (
+                github_pr_bottleneck,
+                github_commit_concentration,
+                github_stale_branches,
+            )
+            all_detectors = [
+                github_pr_bottleneck,
+                github_commit_concentration,
+                github_stale_branches,
+            ]
+            logger.info("Pack: github_engineering — 3 engineering signal detectors active")
+        elif is_enterprise_ops_pack(pack_id):
+            from .detectors import (
+                ent_incident_resolution_lag,
+                ent_change_incident_correlation,
+                ent_sla_breach_by_team,
+            )
+            all_detectors = [
+                ent_incident_resolution_lag,
+                ent_change_incident_correlation,
+                ent_sla_breach_by_team,
+            ]
+            logger.info("Pack: enterprise_ops — 3 cross-system detectors active")
+        elif is_cloud_ops_pack(pack_id):
+            from .detectors import (
+                cloud_ops_recurring_resolution_loop,
+                cloud_ops_alert_triage_toil,
+                cloud_ops_reassignment_ping_pong,
+                cloud_ops_queue_ageing,
+                cloud_ops_shared_ci_hotspot,
+                cloud_ops_runbook_documentation_gap,
+            )
+            all_detectors = [
+                cloud_ops_recurring_resolution_loop,
+                cloud_ops_alert_triage_toil,
+                cloud_ops_reassignment_ping_pong,
+                cloud_ops_queue_ageing,
+                cloud_ops_shared_ci_hotspot,
+                cloud_ops_runbook_documentation_gap,
+            ]
+            logger.info("Pack: cloud_ops — 6 operations detectors active")
+        elif is_security_ops_pack(pack_id):
+            from .detectors import (
+                security_ops_remediation_recurrence,
+                security_ops_security_it_pingpong,
+                security_ops_sla_deferral_ageing,
+                security_ops_shared_infra_concentration,
+                security_ops_sir_triage_toil,
+            )
+            all_detectors = [
+                security_ops_remediation_recurrence,
+                security_ops_security_it_pingpong,
+                security_ops_sla_deferral_ageing,
+                security_ops_shared_infra_concentration,
+                security_ops_sir_triage_toil,
+            ]
+            logger.info("Pack: security_ops — 5 SecOps detectors active")
         else:
-            # R16-C1 T1: pass weighting context so the scorer can read
-            # role/priority for dr.signal_source (modulation is T2 work).
-            scored = sc_score(dr, weighting_context=_weighting_ctx)
+            # Service Cloud detectors — default
+            from .detectors import (
+                repetition, handoff_friction, approval_delay,
+                knowledge_gap, integration_concentration,
+                permission_bottleneck, cross_system_echo,
+            )
+            all_detectors = [repetition, handoff_friction, approval_delay, knowledge_gap,
+                             integration_concentration, permission_bottleneck, cross_system_echo]
+            logger.info("Pack: service_cloud — 7 SC detectors active")
 
-        # ── ENT-2: cross-system corroboration (shared engine, non-blocking) ──
-        # Evaluate corroboration AFTER the detector fired and the scorer ran,
-        # BEFORE final confidence is locked into the opportunity. Corroboration
-        # may only ELEVATE confidence (apply_corroboration_confidence never
-        # downgrades), so existing pack behaviour is preserved. Any failure is
-        # logged and the scorer's confidence is used unchanged (AC10).
-        corr_fields = {
-            "corroboration_sources": [],
-            "corroboration_label": None,
-            "triple_corroboration": False,
-            "corroboration_rule_ids": [],
-        }
+        # Capture fired and non-firing detector evaluations before scoring.
+        # DB and GitHub packs read their signal from the first positional arg.
+        # Keep Service Cloud, nCino, and STRS on Salesforce-shaped data.
+        if _is_db_opsignal(pack_id):
+            primary_data = db_data
+        elif is_github_engineering_pack(pack_id):
+            primary_data = github_data
+        else:
+            primary_data = sf_data
+
+        # Mark "detect" before the phase so the Pattern Detection step shows as
+        # in-progress while detectors run (it renders completed once "enrich" starts).
+        update_run_step(run_id, "detect")
+        detector_results, all_evaluated = _run_detector_phase(
+            all_detectors,
+            primary_data,
+            sn_data,
+            jira_data,
+        )
+
+        # Preserve each operational pack's contract boundary independently. A
+        # combined run must not let one pack weaken or replace the other.
+        if is_cloud_ops_pack(pack_id):
+            from .packs.cloud_ops_finding import enforce_pack_findings
+
+            _validated = enforce_pack_findings(detector_results)
+            logger.info(
+                "Pack: cloud_ops — four-part contract enforced on %d finding(s)",
+                _validated,
+            )
+
+        if is_security_ops_pack(pack_id):
+            from .packs.security_ops_ai_mode import apply_ai_mode_gate
+
+            _gate = apply_ai_mode_gate(detector_results)
+            logger.info(
+                "Pack: security_ops — AI-mode gate: mode=%s ai_assembly=%s labelled=%d/%d",
+                _gate["mode"],
+                _gate["ai_assembly_allowed"],
+                _gate["labelled"],
+                _gate["count"],
+            )
+
+            from .packs.security_ops_finding import enforce_pack_findings
+
+            _validated = enforce_pack_findings(detector_results)
+            logger.info(
+                "Pack: security_ops — four-part contract enforced on %d finding(s)",
+                _validated,
+            )
+
+            from .packs.security_ops_aggregation_floor import enforce_pack_output
+
+            _swept = enforce_pack_output(detector_results)
+            logger.info(
+                "Pack: security_ops — aggregation floor swept %d output(s)",
+                _swept,
+            )
+
+        pack_executed_at = _snapshot_detector_evaluations(
+            org_id=org_id,
+            run_id=run_id,
+            pack_id=pack_id,
+            detector_results=detector_results,
+            all_evaluated=all_evaluated,
+        )
+        # Snapshot persistence is deliberately non-blocking and test/integration
+        # adapters may return None. Pack provenance must still receive a stable,
+        # valid timestamp instead of failing the otherwise successful run.
+        if not isinstance(pack_executed_at, datetime):
+            pack_executed_at = datetime.now(timezone.utc)
+        executed_detector_ids = _record_pack_execution(
+            org_id=org_id,
+            run_id=run_id,
+            pack_id=pack_id,
+            pack_name=str(pack_config.get("packName") or pack_id),
+            pack_version=pack_version,
+            detectors=all_detectors,
+            evaluated_count=len(all_evaluated),
+            executed_at=pack_executed_at,
+        )
+
+        update_run_step(run_id, "enrich")
+
+        try:
+            # Entity extraction is synchronous and DB-safe in this context: every
+            # resolve_or_create_entity() opens its own short-lived raw sqlite3
+            # connection via db.connect(), commits, and closes it (see
+            # entity_resolution._connect). There is no SQLAlchemy session or
+            # thread-local state to leak across an async boundary — unlike the
+            # GitHub ingest above, this call needs no event-loop isolation.
+            from app.entity_extractor import extract_entities
+            entities = extract_entities(
+                org_id=org_id,
+                run_id=run_id,
+                pack_id=pack_id,
+                detector_results=detector_results,
+                ingestor_data={
+                    "salesforce": sf_data,
+                    "servicenow": sn_data,
+                    "jira": jira_data,
+                },
+            ) or []
+        except Exception as e:
+            entities = []
+            logger.warning(
+                "Entity extraction failed (non-blocking): run_id=%s error=%s",
+                run_id,
+                e,
+            )
+
+        # T3-S13-A T6: map relationships AFTER extract_entities() — both mapping
+        # passes draw edges only between the resolved entity rows written during
+        # extraction. map_relationships() is the single entry point (it calls
+        # map_directly_observed() + map_inferred_from_detectors() and emits the
+        # relationship.mapping_completed telemetry on success). Non-blocking: a
+        # failure here must never break opportunity delivery, so the run still
+        # completes and OppEnrichment.relationships simply defaults to empty (AC9).
+        try:
+            from app.relationship_mapper import map_relationships
+            if not entities:
+                logger.warning("map_relationships skipped: no entities from extraction")
+            map_relationships(
+                org_id=org_id,
+                run_id=run_id,
+                ingestor_data={
+                    "salesforce": sf_data,
+                    "servicenow": sn_data,
+                    "jira": jira_data,
+                },
+                detector_results=detector_results,
+                entities=entities,
+            )
+        except Exception as e:
+            logger.warning(
+                "Relationship mapping failed (non-blocking): run_id=%s org_id=%s error=%s",
+                run_id,
+                org_id,
+                e,
+            )
+
+        # Issue 3 fix: collect Jira/SN lending correlation by detector for ncino pack.
+        # Wave 2 (ENG-AIQ-NC-2/NC-3) built lending_correlation — wire it into evidence here.
+        jira_by_detector: Dict[str, List[str]] = {}
+        sn_by_detector:   Dict[str, List[str]] = {}
+        if is_ncino_pack(pack_id):
+            if jira_data:
+                jira_by_detector = (
+                    jira_data.get("lending_correlation", {}).get("by_detector", {})
+                )
+            if sn_data:
+                sn_by_detector = (
+                    sn_data.get("lending_correlation", {}).get("by_detector", {})
+                )
+
+        # ── STRS Benefits corroboration — ENG-STRS-CORR-1/2 (Fix Pack Sprint 7) ──
+        # Same pattern as nCino above. strs_benefits.py ingest() now returns
+        # jira_strs_correlation and sn_strs_correlation inside the metrics dict,
+        # which is merged into sf_data["strs_benefits"]. Extract by_detector here.
+        if _is_strs(pack_id):
+            strs_metrics = sf_data.get("strs_benefits", {})
+            jira_by_detector = (
+                strs_metrics.get("jira_strs_correlation", {}).get("by_detector", {})
+            )
+            sn_by_detector = (
+                strs_metrics.get("sn_strs_correlation", {}).get("by_detector", {})
+            )
+            if jira_by_detector:
+                logger.info(
+                    "STRS Jira corroboration: %d detectors have Jira evidence",
+                    len(jira_by_detector),
+                )
+            if sn_by_detector:
+                logger.info(
+                    "STRS ServiceNow corroboration: %d detectors have SN evidence",
+                    len(sn_by_detector),
+                )
+
+        # ── ENT-2: build the corroboration run_data for THIS pack ──
+        # Scoped per pack: shared connected-systems + source payloads combined with
+        # this pack's own by-detector maps (detector ids are disjoint across packs,
+        # so no cross-pack blending is possible). Maps already-extracted Jira/
+        # ServiceNow correlation by detector and carries Slack (AT-419 / T4) /
+        # Confluence corroboration blocks through when an upstream connector payload
+        # provides them. connected_systems drives COR-08 (single-source no
+        # elevation). This only ever ELEVATES confidence downstream — never downgrades.
+        _corr_run_data: Dict[str, Any] = {"connected_systems": sorted(_systems)}
         if _corroboration_available:
             try:
-                _corr = evaluate_corroboration(
-                    detector_id=dr.detector_id,
-                    pack_id=pack_id,
-                    run_data=_corr_run_data,
-                    run_timestamp=_run_started_dt,
-                    org_id=org_id,
-                    # R16-C1 T1: pass weighting context so the corroboration
-                    # engine can read role/priority per system.
-                    weighting_context=_weighting_ctx,
+                _corr_run_data = build_corroboration_run_data(
+                    systems=_systems,
+                    sn_by_detector=sn_by_detector,
+                    jira_by_detector=jira_by_detector,
+                    run_timestamp_iso=_run_ts_iso,
+                    source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data, teams_data, java_data, dotnet_data],
                 )
-                scored["confidence"] = apply_corroboration_confidence(
-                    scored.get("confidence", "MEDIUM"), _corr
-                )
-                corr_fields = {
-                    "corroboration_sources": list(_corr.corroboration_sources),
-                    "corroboration_label": _corr.corroboration_label,
-                    "triple_corroboration": bool(_corr.triple_corroboration),
-                    "corroboration_rule_ids": list(_corr.rule_ids),
-                }
-                if _corr.corroboration_sources:
-                    logger.info(
-                        "  %s: corroboration %s -> %s via %s",
-                        dr.detector_id,
-                        _corr.original_confidence,
-                        scored.get("confidence"),
-                        _corr.rule_ids,
-                    )
-            except Exception as _corr_err:  # noqa: BLE001 — corroboration is optional.
+            except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
+                logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)
+
+        _cloud_ops_ranking: Dict[int, Dict[str, Any]] = {}
+        if is_cloud_ops_pack(pack_id):
+            try:
+                _cloud_ops_ranking = rank_cloud_ops_findings(detector_results)
+            except Exception as _rank_err:  # noqa: BLE001 — ranking is non-blocking.
                 logger.warning(
-                    "ENT-2 corroboration failed for %s (non-blocking): %s",
-                    dr.detector_id, _corr_err,
+                    "cloud_ops ops-impact ranking failed (non-blocking): %s",
+                    _rank_err,
                 )
 
-        # Pass packId so build_evidence uses nCino banking-language builders
-        scored_with_pack = {**scored, "packId": pack_id}
-        evidence_list = build_evidence(dr, scored_with_pack, id_factory=id_factory)
+        _security_ops_ranking: Dict[int, Dict[str, Any]] = {}
+        if is_security_ops_pack(pack_id):
+            try:
+                _security_ops_ranking = rank_security_ops_findings(detector_results)
+            except Exception as _rank_err:  # noqa: BLE001 - ranking is non-blocking.
+                logger.warning(
+                    "security_ops impact ranking failed (non-blocking): %s",
+                    _rank_err,
+                )
 
-        # Issue 3 fix: attach Jira/SN corroboration evidence for ncino pack.
-        # These appear as additional evidence items in S4 alongside nCino evidence.
-        # Does not yet modulate confidence — deferred to post-Sprint 5.
-        if is_ncino_pack(pack_id) or _is_strs(pack_id):
-            corroboration_count = 0
-            for snippet in jira_by_detector.get(dr.detector_id, []):
-                ev_id = id_factory()
-                evidence_list.append({
-                    "id":          ev_id,
-                    "tsLabel":     "",
-                    "source":      "Jira",
-                    "detectorId":  dr.detector_id,
-                    "evidenceType":"Metric",
-                    "title":       f"Jira corroboration: {dr.detector_id}",
-                    "snippet":     snippet,
-                    "entities":    [],
-                    "confidence":  "MEDIUM",
-                    "decision":    "UNREVIEWED",
-                })
-                corroboration_count += 1
-            for snippet in sn_by_detector.get(dr.detector_id, []):
-                ev_id = id_factory()
-                evidence_list.append({
-                    "id":          ev_id,
-                    "tsLabel":     "",
-                    "source":      "ServiceNow",
-                    "detectorId":  dr.detector_id,
-                    "evidenceType":"Metric",
-                    "title":       f"ServiceNow corroboration: {dr.detector_id}",
-                    "snippet":     snippet,
-                    "entities":    [],
-                    "confidence":  "MEDIUM",
-                    "decision":    "UNREVIEWED",
-                })
-                corroboration_count += 1
-            if corroboration_count > 0:
-                logger.info("  %s: +%d corroborating evidence items (Jira/SN)",
-                            dr.detector_id, corroboration_count)
-        # ── R16-B1 (T3): stable, cross-run opportunity identity ──
-        # Derived ONLY from run-invariant inputs (org, pack, detector/signal,
-        # resolved primary entity keys) so the same real-world problem carries
-        # the same id run after run. Deliberately excludes score, confidence,
-        # run timestamp, and narrative — those drift between runs for the SAME
-        # opportunity and must not change its identity, or outcome tracking and
-        # feedback history (1.9/2.0) would treat every run as a brand-new find.
-        opportunity_identity = compute_opportunity_identity(
-            org_id=org_id,
-            pack_id=pack_id,
-            signal_key=dr.detector_id,
-            primary_entity_ids=primary_entity_keys_for_detector(
-                dr.detector_id, dr.signal_source
-            ),
-        )
+        pack_opportunities: List[Dict[str, Any]] = []
+        for dr in detector_results:
+            # Select scorer based on pack — this pack scores ONLY its own detectors
+            # with its OWN calibration; a two-key guard (pack AND detector family)
+            # means no pack ever applies another pack's calibration (AC3, no blending).
+            if is_ncino_pack(pack_id) and is_lending_detector(dr.detector_id):
+                scored = score_lending(dr)
+            elif _is_strs(pack_id) and is_strs_benefits_detector(dr.detector_id):
+                scored = score_strs_benefits(dr)
+            elif is_sqlserver_opsignal_pack(pack_id) and is_sqlserver_opsignal_detector(dr.detector_id):
+                scored = score_sqlserver_opsignal(dr)
+            elif is_github_engineering_pack(pack_id) and is_github_engineering_detector(dr.detector_id):
+                # T7/AT-191: PR-bottleneck confidence elevates MEDIUM->HIGH when Jira
+                # corroborates. jira_connected mirrors how sources_connected.jira is derived.
+                scored = score_github_engineering(
+                    dr,
+                    jira_data=jira_data,
+                    org_id=org_id,
+                    jira_connected=bool(jira_data),
+                )
+            elif is_enterprise_ops_pack(pack_id) and is_enterprise_ops_detector(dr.detector_id):
+                # AT-266 T5: ENT_INCIDENT_RESOLUTION_LAG elevates MEDIUM->HIGH via COR-06
+                # (ENT-2); ENT_SLA_BREACH_BY_TEAM elevates via ENT-1 entity overlay
+                # (result already in dr.raw_evidence, read by scorer).
+                scored = score_enterprise_ops(
+                    dr,
+                    sn_data=sn_data,
+                    jira_data=jira_data,
+                    org_id=org_id,
+                )
+            elif is_cloud_ops_pack(pack_id) and is_cloud_ops_detector(dr.detector_id):
+                scored = score_cloud_ops(dr, ranking=_cloud_ops_ranking)
+            elif is_security_ops_pack(pack_id) and is_security_ops_detector(dr.detector_id):
+                scored = score_security_ops(dr, ranking=_security_ops_ranking)
+            else:
+                # R16-C1 T1: pass weighting context so the scorer can read
+                # role/priority for dr.signal_source (modulation is T2 work).
+                scored = sc_score(dr, weighting_context=_weighting_ctx)
 
-        opp = {
-            "runId": run_id, "orgId": org_id, "detector_id": dr.detector_id,
-            "packId": pack_id, "opportunity_identity": opportunity_identity,
+            # ── ENT-2: cross-system corroboration (shared engine, non-blocking) ──
+            # Evaluate corroboration AFTER the detector fired and the scorer ran,
+            # BEFORE final confidence is locked into the opportunity. Corroboration
+            # may only ELEVATE confidence (apply_corroboration_confidence never
+            # downgrades), so existing pack behaviour is preserved. Any failure is
+            # logged and the scorer's confidence is used unchanged (AC10).
+            corr_fields = {
+                "corroboration_sources": [],
+                "corroboration_label": None,
+                "triple_corroboration": False,
+                "corroboration_rule_ids": [],
+            }
+            if _corroboration_available:
+                try:
+                    _corr = evaluate_corroboration(
+                        detector_id=dr.detector_id,
+                        pack_id=pack_id,
+                        run_data=_corr_run_data,
+                        run_timestamp=_run_started_dt,
+                        org_id=org_id,
+                        # R16-C1 T1: pass weighting context so the corroboration
+                        # engine can read role/priority per system.
+                        weighting_context=_weighting_ctx,
+                    )
+                    scored["confidence"] = apply_corroboration_confidence(
+                        scored.get("confidence", "MEDIUM"), _corr
+                    )
+                    corr_fields = {
+                        "corroboration_sources": list(_corr.corroboration_sources),
+                        "corroboration_label": _corr.corroboration_label,
+                        "triple_corroboration": bool(_corr.triple_corroboration),
+                        "corroboration_rule_ids": list(_corr.rule_ids),
+                    }
+                    if _corr.corroboration_sources:
+                        logger.info(
+                            "  %s: corroboration %s -> %s via %s",
+                            dr.detector_id,
+                            _corr.original_confidence,
+                            scored.get("confidence"),
+                            _corr.rule_ids,
+                        )
+                except Exception as _corr_err:  # noqa: BLE001 — corroboration is optional.
+                    logger.warning(
+                        "ENT-2 corroboration failed for %s (non-blocking): %s",
+                        dr.detector_id, _corr_err,
+                    )
+
+            # Pass packId so build_evidence uses nCino banking-language builders
+            scored_with_pack = {**scored, "packId": pack_id}
+            evidence_list = build_evidence(dr, scored_with_pack, id_factory=id_factory)
+
+            # Issue 3 fix: attach Jira/SN corroboration evidence for ncino pack.
+            # These appear as additional evidence items in S4 alongside nCino evidence.
+            # Does not yet modulate confidence — deferred to post-Sprint 5.
+            if is_ncino_pack(pack_id) or _is_strs(pack_id):
+                corroboration_count = 0
+                for snippet in jira_by_detector.get(dr.detector_id, []):
+                    ev_id = id_factory()
+                    evidence_list.append({
+                        "id":          ev_id,
+                        "tsLabel":     "",
+                        "source":      "Jira",
+                        "detectorId":  dr.detector_id,
+                        "evidenceType":"Metric",
+                        "title":       f"Jira corroboration: {dr.detector_id}",
+                        "snippet":     snippet,
+                        "entities":    [],
+                        "confidence":  "MEDIUM",
+                        "decision":    "UNREVIEWED",
+                        # R191-P1 T3: this evidence item is constructed inline
+                        # (not via evidence_builder.build_evidence()), so it
+                        # needs its own packId stamp for the same provenance
+                        # guarantee every other evidence item carries.
+                        "packId":      pack_id,
+                    })
+                    corroboration_count += 1
+                for snippet in sn_by_detector.get(dr.detector_id, []):
+                    ev_id = id_factory()
+                    evidence_list.append({
+                        "id":          ev_id,
+                        "tsLabel":     "",
+                        "source":      "ServiceNow",
+                        "detectorId":  dr.detector_id,
+                        "evidenceType":"Metric",
+                        "title":       f"ServiceNow corroboration: {dr.detector_id}",
+                        "snippet":     snippet,
+                        "entities":    [],
+                        "confidence":  "MEDIUM",
+                        "decision":    "UNREVIEWED",
+                        "packId":      pack_id,
+                    })
+                    corroboration_count += 1
+                if corroboration_count > 0:
+                    logger.info("  %s: +%d corroborating evidence items (Jira/SN)",
+                                dr.detector_id, corroboration_count)
+            # ── R16-B1 (T3): stable, cross-run opportunity identity ──
+            # Derived ONLY from run-invariant inputs (org, pack, detector/signal,
+            # resolved primary entity keys) so the same real-world problem carries
+            # the same id run after run. Because pack_id is an identity input, the
+            # same detector under two packs yields two distinct identities — the
+            # no-cross-pack-merge guarantee at the identity layer (AC4).
+            opportunity_identity = compute_opportunity_identity(
+                org_id=org_id,
+                pack_id=pack_id,
+                signal_key=dr.detector_id,
+                primary_entity_ids=primary_entity_keys_for_detector(
+                    dr.detector_id, dr.signal_source
+                ),
+            )
+
+            opp = {
+                "runId": run_id, "orgId": org_id, "detector_id": dr.detector_id,
+                "packId": pack_id, "opportunity_identity": opportunity_identity,
+                "packVersion": pack_version,
+                "signal_source": dr.signal_source, "metric_value": dr.metric_value,
+                "threshold": dr.threshold, "impact": scored["impact"], "effort": scored["effort"],
+                "confidence": scored["confidence"], "tier": scored["tier"],
+                "roadmap_stage": scored["roadmap_stage"], "evidenceIds": [e["id"] for e in evidence_list],
+                "evidence": evidence_list, "raw_evidence": dr.raw_evidence, "score_debug": scored["score_debug"],
+                # ENT-2 cross-system corroboration fields (always present; safe defaults).
+                "corroboration_sources": corr_fields["corroboration_sources"],
+                "corroboration_label": corr_fields["corroboration_label"],
+                "triple_corroboration": corr_fields["triple_corroboration"],
+                "corroboration_rule_ids": corr_fields["corroboration_rule_ids"],
+                # R16-C2 T2: additive Discovery Focus emphasis annotation (always
+                # present; descriptive only — never mutates scoring fields).
+                "focus_emphasis": _build_focus_emphasis(_focus_id, dr.detector_id),
+            }
+            if "ops_impact_score" in scored:
+                opp["ops_impact_score"] = scored["ops_impact_score"]
+                opp["ops_impact_rank"] = scored.get("ops_impact_rank")
+            # ENG-AIQ-NC-5 Issue 1: inject approved UI labels from pack UI label files.
+            # Deterministic config text — not LLM generated:
+            #   title      → s6_title   (S6 opportunity card heading)
+            #   category   → s7_category (S7 detail panel category)
+            #   description → s6_desc   (S6 one-line description)
+            # LLM-generated narrative (from run_llm_enrichment):
+            #   aiSummary / aiWhyBullets / aiRisks / aiSuggestedNextSteps → S4
+            #   s9_roadmap label seeds the LLM blueprint prompt → S9
+            #   s10_exec label seeds the LLM exec summary prompt → S10
+            from .packs.pack_config import get_ui_labels
+            ui_labels = get_ui_labels(pack_id) or {}
+            if ui_labels:
+                det_labels = ui_labels.get(dr.detector_id, {})
+                opp["title"]       = det_labels.get("s6_title", dr.detector_id)
+                opp["category"]    = det_labels.get("s7_category", "Automation Opportunity")
+                opp["description"] = det_labels.get("s6_desc", "")
+                opp["s9_roadmap"]  = det_labels.get("s9_roadmap", "")
+                opp["s10_exec"]    = det_labels.get("s10_exec", "")
+                opp["compliance_guardrail"] = det_labels.get("compliance_guardrail")
+
+            pack_opportunities.append(opp)
+
+        return pack_opportunities, {
+            "packId": pack_id,
+            "packName": str(pack_config.get("packName") or pack_id),
             "packVersion": pack_version,
-            "signal_source": dr.signal_source, "metric_value": dr.metric_value,
-            "threshold": dr.threshold, "impact": scored["impact"], "effort": scored["effort"],
-            "confidence": scored["confidence"], "tier": scored["tier"],
-            "roadmap_stage": scored["roadmap_stage"], "evidenceIds": [e["id"] for e in evidence_list],
-            "evidence": evidence_list, "raw_evidence": dr.raw_evidence, "score_debug": scored["score_debug"],
-            # ENT-2 cross-system corroboration fields (always present; safe defaults).
-            "corroboration_sources": corr_fields["corroboration_sources"],
-            "corroboration_label": corr_fields["corroboration_label"],
-            "triple_corroboration": corr_fields["triple_corroboration"],
-            "corroboration_rule_ids": corr_fields["corroboration_rule_ids"],
-            # R16-C2 T2: additive Discovery Focus emphasis annotation (always
-            # present; descriptive only — never mutates scoring fields).
-            "focus_emphasis": _build_focus_emphasis(_focus_id, dr.detector_id),
+            "detectorsExecuted": executed_detector_ids,
+            "packExecutedAt": pack_executed_at.isoformat(),
         }
-        # ENG-AIQ-NC-5 Issue 1: inject approved UI labels from pack UI label files.
-        # Deterministic config text — not LLM generated:
-        #   title      → s6_title   (S6 opportunity card heading)
-        #   category   → s7_category (S7 detail panel category)
-        #   description → s6_desc   (S6 one-line description)
-        # LLM-generated narrative (from run_llm_enrichment):
-        #   aiSummary / aiWhyBullets / aiRisks / aiSuggestedNextSteps → S4
-        #   s9_roadmap label seeds the LLM blueprint prompt → S9
-        #   s10_exec label seeds the LLM exec summary prompt → S10
-        from .packs.pack_config import get_ui_labels
-        ui_labels = get_ui_labels(pack_id) or {}
-        if ui_labels:
-            det_labels = ui_labels.get(dr.detector_id, {})
-            opp["title"]       = det_labels.get("s6_title", dr.detector_id)
-            opp["category"]    = det_labels.get("s7_category", "Automation Opportunity")
-            opp["description"] = det_labels.get("s6_desc", "")
-            opp["s9_roadmap"]  = det_labels.get("s9_roadmap", "")
-            opp["s10_exec"]    = det_labels.get("s10_exec", "")
-            opp["compliance_guardrail"] = det_labels.get("compliance_guardrail")
 
-        opportunities.append(opp)
+    # ── Run every selected pack against the ONE shared normalised signal ──
+    # Each pass returns its own findings (each stamped with its packId) and its
+    # execution metadata; the findings concatenate — no cross-pack merging (AC4).
+    opportunities: List[Dict[str, Any]] = []
+    pack_execution_meta: List[Dict[str, Any]] = []
+    for _pack_arg, _ in _pack_configs:
+        _pack_opps, _pack_meta = _run_pack_pass(_pack_arg)
+        opportunities.extend(_pack_opps)
+        pack_execution_meta.append(_pack_meta)
+
+    # Primary pack = first selection. The backward-compatible scalar fields below
+    # report it, so a single-pack run is byte-identical to the former pipeline (AC2).
+    _primary_meta = pack_execution_meta[0]
 
     try:
         _elapsed_ms = int((datetime.now(timezone.utc) - _run_started_dt).total_seconds() * 1000)
@@ -1933,7 +2859,7 @@ def run(
         "duration_ms": _elapsed_ms,
         "success": True,
         "count": len(opportunities),
-        "pack_id": pack_id,
+        "pack_id": primary_pack_id,
         "system_count": len(_systems),
         "deployment_type": _deployment_type,
     })
@@ -1962,19 +2888,31 @@ def run(
 
     return {
         "runId": run_id, "orgId": org_id, "mode": mode,
-        "packId": pack_id,
+        "packId": _primary_meta["packId"],
         # R16-C2 T2: surface the selected focus so the seed/ranking path can
         # apply focus emphasis deterministically (None => unbiased view).
         "focusId": _focus_id,
-        "packVersion": pack_version,
-        "packName": pack_config.get("packName") or pack_id,
-        "detectorsExecuted": executed_detector_ids,
-        "packExecutedAt": pack_executed_at.isoformat(),
+        "packVersion": _primary_meta["packVersion"],
+        "packName": _primary_meta["packName"],
+        "detectorsExecuted": _primary_meta["detectorsExecuted"],
+        "packExecutedAt": _primary_meta["packExecutedAt"],
+        # R191-P1 T2: full multi-pack execution surface. For a single-pack run
+        # these carry exactly one entry and the scalar fields above mirror it.
+        "packIds": [m["packId"] for m in pack_execution_meta],
+        "packVersions": {m["packId"]: m["packVersion"] for m in pack_execution_meta},
+        "packs": pack_execution_meta,
         "startedAt": started_at, "completedAt": datetime.now(timezone.utc).isoformat(),
         "inputs": org_ctx, "opportunities": opportunities,
         "perSystem": _per_system,
         "succeeded": _succeeded,
         "ingestErrors": _ingest_errors,
+        "secopsVolume": secops_volume_measurements,
+        "cloudOpsRuntime": {
+            "eventBridge": dict(ops_event_bridge_data.get("health") or {}),
+            "azureEvents": dict(azure_events_data.get("health") or {}),
+            "awsEvents": dict(aws_events_data.get("health") or {}),
+            "assembly": cloud_ops_runtime_health,
+        },
     }
 
 def _empty_run(run_id: str, org_id: str, mode: str, started_at: str) -> Dict:
@@ -1993,6 +2931,7 @@ def main():
     parser.add_argument("--mode", choices=["offline", "live"], default=default_mode)
     parser.add_argument("--systems", help="Comma-separated list of systems (e.g. salesforce,jira)")
     parser.add_argument("--pack", default=None, help="Pack ID: service_cloud (default) or ncino")
+    parser.add_argument("--pack-ids", default=None, help="R191-P1: comma-separated pack IDs for a multi-pack run (e.g. service_cloud,github_engineering)")
     parser.add_argument("--output", help="Output JSON file path")
     parser.add_argument("--run-id", help="Explicit run ID")
     parser.add_argument("--org-id", default="demo-org")
@@ -2005,12 +2944,18 @@ def main():
     if args.systems:
         systems_list =[s.strip().lower() for s in args.systems.split(",") if s.strip()]
 
+    # R191-P1 T2: parse an optional multi-pack selection.
+    pack_ids_list = None
+    if args.pack_ids:
+        pack_ids_list = [p.strip() for p in args.pack_ids.split(",") if p.strip()]
+
     payload = run(
         mode=args.mode,
         run_id=args.run_id,
         org_id=args.org_id,
         systems=systems_list,
         pack=args.pack,
+        pack_ids=pack_ids_list,
     )
 
     if args.output_format == "track_a_seed":
@@ -2026,4 +2971,3 @@ def main():
 
 if __name__ == "__main__":
     main()
- 

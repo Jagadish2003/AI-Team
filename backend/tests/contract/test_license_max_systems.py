@@ -289,12 +289,13 @@ def test_unlicensed_limit_state_shows_cap(monkeypatch):
     _seed_catalog(["a"])
     db.org_connector_set(org, "a", {"id": "a", "status": "connected"})
     state = license_limits.get_limit_state(org)
-    assert state == {
-        "systemsUsed": 1,
-        "systemsLicensed": 2,
-        "unlimited": False,
-        "canConnectMore": True,
-    }
+    # Subset check (not exact-equality): MSP-B13 / T4 (AT-746) added the additive
+    # approachingCap/atCap/notice keys to the limit state, which must not break
+    # this AC4 core-shape assertion.
+    assert state["systemsUsed"] == 1
+    assert state["systemsLicensed"] == 2
+    assert state["unlimited"] is False
+    assert state["canConnectMore"] is True
 
 
 def test_ac4_unlicensed_connect_up_to_cap_then_blocked(client: TestClient, monkeypatch):

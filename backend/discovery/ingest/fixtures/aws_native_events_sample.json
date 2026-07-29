@@ -1,0 +1,805 @@
+{
+  "_comment": "MSP-B1 offline fixture for the native AWS event connector. Each scope's `events` are RAW provider payloads in the NATIVE shapes the MSP-B0 mappers consume (CloudWatch/EventBridge Alarm State Change envelopes, EventBridge event envelopes, CloudTrail records) \u2014 NOT the DescribeAlarmHistory export shapes used by the B8 export loaders. TWO accounts are seeded so the offline path exercises the MSP 'one connection, many accounts, each account a scope' model (AC1). Recurrence volumes are deliberate: each recurring signature fires 6x, which clears the B7 noise floor of 5 for the state_change/audit/access classes (discovery/signals/ops_calibration.py) so offline runs actually reach the Cloud Operations detectors instead of being suppressed as noise \u2014 while still demonstrating B7 admission folding the re-fires into ONE active signal with a count. The denied TerminateInstances event is event_class 'error', which is never floored. LIVE DATA NEEDED: this file is a demo estate only; a live run polls the customer's real accounts declared in AWS_EVENT_ACCOUNTS or pinned on the aws_events Integration Hub connector record.",
+  "scopes": [
+    {
+      "account": "111122223333",
+      "region": "us-east-1",
+      "surface": "cloudwatch",
+      "label": "prod CloudWatch alarms (us-east-1)",
+      "events": [
+        {
+          "version": "0",
+          "id": "cw-111122223333-1",
+          "detail-type": "CloudWatch Alarm State Change",
+          "source": "aws.cloudwatch",
+          "account": "111122223333",
+          "time": "2026-07-14T01:05:00Z",
+          "region": "us-east-1",
+          "resources": [
+            "arn:aws:cloudwatch:us-east-1:111122223333:alarm:HighCPU"
+          ],
+          "detail": {
+            "alarmName": "HighCPU",
+            "state": {
+              "value": "ALARM",
+              "reason": "Threshold Crossed: 1 datapoint"
+            },
+            "previousState": {
+              "value": "OK"
+            }
+          }
+        },
+        {
+          "version": "0",
+          "id": "cw-111122223333-2",
+          "detail-type": "CloudWatch Alarm State Change",
+          "source": "aws.cloudwatch",
+          "account": "111122223333",
+          "time": "2026-07-14T01:10:00Z",
+          "region": "us-east-1",
+          "resources": [
+            "arn:aws:cloudwatch:us-east-1:111122223333:alarm:HighCPU"
+          ],
+          "detail": {
+            "alarmName": "HighCPU",
+            "state": {
+              "value": "ALARM",
+              "reason": "Threshold Crossed: 1 datapoint"
+            },
+            "previousState": {
+              "value": "ALARM"
+            }
+          }
+        },
+        {
+          "version": "0",
+          "id": "cw-111122223333-3",
+          "detail-type": "CloudWatch Alarm State Change",
+          "source": "aws.cloudwatch",
+          "account": "111122223333",
+          "time": "2026-07-14T01:15:00Z",
+          "region": "us-east-1",
+          "resources": [
+            "arn:aws:cloudwatch:us-east-1:111122223333:alarm:HighCPU"
+          ],
+          "detail": {
+            "alarmName": "HighCPU",
+            "state": {
+              "value": "ALARM",
+              "reason": "Threshold Crossed: 1 datapoint"
+            },
+            "previousState": {
+              "value": "ALARM"
+            }
+          }
+        },
+        {
+          "version": "0",
+          "id": "cw-111122223333-4",
+          "detail-type": "CloudWatch Alarm State Change",
+          "source": "aws.cloudwatch",
+          "account": "111122223333",
+          "time": "2026-07-14T01:20:00Z",
+          "region": "us-east-1",
+          "resources": [
+            "arn:aws:cloudwatch:us-east-1:111122223333:alarm:HighCPU"
+          ],
+          "detail": {
+            "alarmName": "HighCPU",
+            "state": {
+              "value": "ALARM",
+              "reason": "Threshold Crossed: 1 datapoint"
+            },
+            "previousState": {
+              "value": "ALARM"
+            }
+          }
+        },
+        {
+          "version": "0",
+          "id": "cw-111122223333-5",
+          "detail-type": "CloudWatch Alarm State Change",
+          "source": "aws.cloudwatch",
+          "account": "111122223333",
+          "time": "2026-07-14T01:25:00Z",
+          "region": "us-east-1",
+          "resources": [
+            "arn:aws:cloudwatch:us-east-1:111122223333:alarm:HighCPU"
+          ],
+          "detail": {
+            "alarmName": "HighCPU",
+            "state": {
+              "value": "ALARM",
+              "reason": "Threshold Crossed: 1 datapoint"
+            },
+            "previousState": {
+              "value": "ALARM"
+            }
+          }
+        },
+        {
+          "version": "0",
+          "id": "cw-111122223333-6",
+          "detail-type": "CloudWatch Alarm State Change",
+          "source": "aws.cloudwatch",
+          "account": "111122223333",
+          "time": "2026-07-14T01:30:00Z",
+          "region": "us-east-1",
+          "resources": [
+            "arn:aws:cloudwatch:us-east-1:111122223333:alarm:HighCPU"
+          ],
+          "detail": {
+            "alarmName": "HighCPU",
+            "state": {
+              "value": "ALARM",
+              "reason": "Threshold Crossed: 1 datapoint"
+            },
+            "previousState": {
+              "value": "ALARM"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "account": "111122223333",
+      "region": "us-east-1",
+      "surface": "eventbridge",
+      "label": "prod EventBridge operational events (us-east-1)",
+      "events": [
+        {
+          "version": "0",
+          "id": "eb-111122223333-1",
+          "detail-type": "EC2 Instance State-change Notification",
+          "source": "aws.ec2",
+          "account": "111122223333",
+          "time": "2026-07-14T02:07:00Z",
+          "region": "us-east-1",
+          "resources": [
+            "arn:aws:ec2:us-east-1:111122223333:instance/i-abc33"
+          ],
+          "detail": {
+            "instance-id": "i-abc33",
+            "state": "stopped"
+          }
+        },
+        {
+          "version": "0",
+          "id": "eb-111122223333-2",
+          "detail-type": "EC2 Instance State-change Notification",
+          "source": "aws.ec2",
+          "account": "111122223333",
+          "time": "2026-07-14T02:14:00Z",
+          "region": "us-east-1",
+          "resources": [
+            "arn:aws:ec2:us-east-1:111122223333:instance/i-abc33"
+          ],
+          "detail": {
+            "instance-id": "i-abc33",
+            "state": "stopped"
+          }
+        },
+        {
+          "version": "0",
+          "id": "eb-111122223333-3",
+          "detail-type": "EC2 Instance State-change Notification",
+          "source": "aws.ec2",
+          "account": "111122223333",
+          "time": "2026-07-14T02:21:00Z",
+          "region": "us-east-1",
+          "resources": [
+            "arn:aws:ec2:us-east-1:111122223333:instance/i-abc33"
+          ],
+          "detail": {
+            "instance-id": "i-abc33",
+            "state": "stopped"
+          }
+        },
+        {
+          "version": "0",
+          "id": "eb-111122223333-4",
+          "detail-type": "EC2 Instance State-change Notification",
+          "source": "aws.ec2",
+          "account": "111122223333",
+          "time": "2026-07-14T02:28:00Z",
+          "region": "us-east-1",
+          "resources": [
+            "arn:aws:ec2:us-east-1:111122223333:instance/i-abc33"
+          ],
+          "detail": {
+            "instance-id": "i-abc33",
+            "state": "stopped"
+          }
+        },
+        {
+          "version": "0",
+          "id": "eb-111122223333-5",
+          "detail-type": "EC2 Instance State-change Notification",
+          "source": "aws.ec2",
+          "account": "111122223333",
+          "time": "2026-07-14T02:35:00Z",
+          "region": "us-east-1",
+          "resources": [
+            "arn:aws:ec2:us-east-1:111122223333:instance/i-abc33"
+          ],
+          "detail": {
+            "instance-id": "i-abc33",
+            "state": "stopped"
+          }
+        },
+        {
+          "version": "0",
+          "id": "eb-111122223333-6",
+          "detail-type": "EC2 Instance State-change Notification",
+          "source": "aws.ec2",
+          "account": "111122223333",
+          "time": "2026-07-14T02:42:00Z",
+          "region": "us-east-1",
+          "resources": [
+            "arn:aws:ec2:us-east-1:111122223333:instance/i-abc33"
+          ],
+          "detail": {
+            "instance-id": "i-abc33",
+            "state": "stopped"
+          }
+        }
+      ]
+    },
+    {
+      "account": "111122223333",
+      "region": "us-east-1",
+      "surface": "cloudtrail",
+      "label": "prod CloudTrail management events (us-east-1)",
+      "events": [
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-111122223333-assume-1",
+          "eventTime": "2026-07-14T03:11:00Z",
+          "eventSource": "sts.amazonaws.com",
+          "eventName": "AssumeRole",
+          "awsRegion": "us-east-1",
+          "readOnly": false,
+          "errorCode": null,
+          "eventCategory": "Management",
+          "managementEvent": true,
+          "userIdentity": {
+            "type": "IAMUser",
+            "arn": "arn:aws:iam::111122223333:user/alice"
+          },
+          "resources": [
+            {
+              "ARN": "arn:aws:iam::111122223333:role/admin",
+              "type": "AWS::IAM::Role"
+            }
+          ]
+        },
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-111122223333-assume-2",
+          "eventTime": "2026-07-14T03:22:00Z",
+          "eventSource": "sts.amazonaws.com",
+          "eventName": "AssumeRole",
+          "awsRegion": "us-east-1",
+          "readOnly": false,
+          "errorCode": null,
+          "eventCategory": "Management",
+          "managementEvent": true,
+          "userIdentity": {
+            "type": "IAMUser",
+            "arn": "arn:aws:iam::111122223333:user/alice"
+          },
+          "resources": [
+            {
+              "ARN": "arn:aws:iam::111122223333:role/admin",
+              "type": "AWS::IAM::Role"
+            }
+          ]
+        },
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-111122223333-assume-3",
+          "eventTime": "2026-07-14T03:33:00Z",
+          "eventSource": "sts.amazonaws.com",
+          "eventName": "AssumeRole",
+          "awsRegion": "us-east-1",
+          "readOnly": false,
+          "errorCode": null,
+          "eventCategory": "Management",
+          "managementEvent": true,
+          "userIdentity": {
+            "type": "IAMUser",
+            "arn": "arn:aws:iam::111122223333:user/alice"
+          },
+          "resources": [
+            {
+              "ARN": "arn:aws:iam::111122223333:role/admin",
+              "type": "AWS::IAM::Role"
+            }
+          ]
+        },
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-111122223333-assume-4",
+          "eventTime": "2026-07-14T03:44:00Z",
+          "eventSource": "sts.amazonaws.com",
+          "eventName": "AssumeRole",
+          "awsRegion": "us-east-1",
+          "readOnly": false,
+          "errorCode": null,
+          "eventCategory": "Management",
+          "managementEvent": true,
+          "userIdentity": {
+            "type": "IAMUser",
+            "arn": "arn:aws:iam::111122223333:user/alice"
+          },
+          "resources": [
+            {
+              "ARN": "arn:aws:iam::111122223333:role/admin",
+              "type": "AWS::IAM::Role"
+            }
+          ]
+        },
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-111122223333-assume-5",
+          "eventTime": "2026-07-14T03:55:00Z",
+          "eventSource": "sts.amazonaws.com",
+          "eventName": "AssumeRole",
+          "awsRegion": "us-east-1",
+          "readOnly": false,
+          "errorCode": null,
+          "eventCategory": "Management",
+          "managementEvent": true,
+          "userIdentity": {
+            "type": "IAMUser",
+            "arn": "arn:aws:iam::111122223333:user/alice"
+          },
+          "resources": [
+            {
+              "ARN": "arn:aws:iam::111122223333:role/admin",
+              "type": "AWS::IAM::Role"
+            }
+          ]
+        },
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-111122223333-assume-6",
+          "eventTime": "2026-07-14T04:06:00Z",
+          "eventSource": "sts.amazonaws.com",
+          "eventName": "AssumeRole",
+          "awsRegion": "us-east-1",
+          "readOnly": false,
+          "errorCode": null,
+          "eventCategory": "Management",
+          "managementEvent": true,
+          "userIdentity": {
+            "type": "IAMUser",
+            "arn": "arn:aws:iam::111122223333:user/alice"
+          },
+          "resources": [
+            {
+              "ARN": "arn:aws:iam::111122223333:role/admin",
+              "type": "AWS::IAM::Role"
+            }
+          ]
+        },
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-111122223333-denied-1",
+          "eventTime": "2026-07-14T04:00:00Z",
+          "eventSource": "ec2.amazonaws.com",
+          "eventName": "TerminateInstances",
+          "awsRegion": "us-east-1",
+          "eventCategory": "Management",
+          "managementEvent": true,
+          "errorCode": "Client.UnauthorizedOperation",
+          "errorMessage": "You are not authorized to perform this operation.",
+          "userIdentity": {
+            "type": "IAMUser",
+            "arn": "arn:aws:iam::111122223333:user/bob"
+          }
+        }
+      ]
+    },
+    {
+      "account": "444455556666",
+      "region": "us-west-2",
+      "surface": "cloudwatch",
+      "label": "non-prod CloudWatch alarms (us-west-2)",
+      "events": [
+        {
+          "version": "0",
+          "id": "cw-444455556666-1",
+          "detail-type": "CloudWatch Alarm State Change",
+          "source": "aws.cloudwatch",
+          "account": "444455556666",
+          "time": "2026-07-14T01:05:00Z",
+          "region": "us-west-2",
+          "resources": [
+            "arn:aws:cloudwatch:us-west-2:444455556666:alarm:HighCPU"
+          ],
+          "detail": {
+            "alarmName": "HighCPU",
+            "state": {
+              "value": "ALARM",
+              "reason": "Threshold Crossed: 1 datapoint"
+            },
+            "previousState": {
+              "value": "OK"
+            }
+          }
+        },
+        {
+          "version": "0",
+          "id": "cw-444455556666-2",
+          "detail-type": "CloudWatch Alarm State Change",
+          "source": "aws.cloudwatch",
+          "account": "444455556666",
+          "time": "2026-07-14T01:10:00Z",
+          "region": "us-west-2",
+          "resources": [
+            "arn:aws:cloudwatch:us-west-2:444455556666:alarm:HighCPU"
+          ],
+          "detail": {
+            "alarmName": "HighCPU",
+            "state": {
+              "value": "ALARM",
+              "reason": "Threshold Crossed: 1 datapoint"
+            },
+            "previousState": {
+              "value": "ALARM"
+            }
+          }
+        },
+        {
+          "version": "0",
+          "id": "cw-444455556666-3",
+          "detail-type": "CloudWatch Alarm State Change",
+          "source": "aws.cloudwatch",
+          "account": "444455556666",
+          "time": "2026-07-14T01:15:00Z",
+          "region": "us-west-2",
+          "resources": [
+            "arn:aws:cloudwatch:us-west-2:444455556666:alarm:HighCPU"
+          ],
+          "detail": {
+            "alarmName": "HighCPU",
+            "state": {
+              "value": "ALARM",
+              "reason": "Threshold Crossed: 1 datapoint"
+            },
+            "previousState": {
+              "value": "ALARM"
+            }
+          }
+        },
+        {
+          "version": "0",
+          "id": "cw-444455556666-4",
+          "detail-type": "CloudWatch Alarm State Change",
+          "source": "aws.cloudwatch",
+          "account": "444455556666",
+          "time": "2026-07-14T01:20:00Z",
+          "region": "us-west-2",
+          "resources": [
+            "arn:aws:cloudwatch:us-west-2:444455556666:alarm:HighCPU"
+          ],
+          "detail": {
+            "alarmName": "HighCPU",
+            "state": {
+              "value": "ALARM",
+              "reason": "Threshold Crossed: 1 datapoint"
+            },
+            "previousState": {
+              "value": "ALARM"
+            }
+          }
+        },
+        {
+          "version": "0",
+          "id": "cw-444455556666-5",
+          "detail-type": "CloudWatch Alarm State Change",
+          "source": "aws.cloudwatch",
+          "account": "444455556666",
+          "time": "2026-07-14T01:25:00Z",
+          "region": "us-west-2",
+          "resources": [
+            "arn:aws:cloudwatch:us-west-2:444455556666:alarm:HighCPU"
+          ],
+          "detail": {
+            "alarmName": "HighCPU",
+            "state": {
+              "value": "ALARM",
+              "reason": "Threshold Crossed: 1 datapoint"
+            },
+            "previousState": {
+              "value": "ALARM"
+            }
+          }
+        },
+        {
+          "version": "0",
+          "id": "cw-444455556666-6",
+          "detail-type": "CloudWatch Alarm State Change",
+          "source": "aws.cloudwatch",
+          "account": "444455556666",
+          "time": "2026-07-14T01:30:00Z",
+          "region": "us-west-2",
+          "resources": [
+            "arn:aws:cloudwatch:us-west-2:444455556666:alarm:HighCPU"
+          ],
+          "detail": {
+            "alarmName": "HighCPU",
+            "state": {
+              "value": "ALARM",
+              "reason": "Threshold Crossed: 1 datapoint"
+            },
+            "previousState": {
+              "value": "ALARM"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "account": "444455556666",
+      "region": "us-west-2",
+      "surface": "eventbridge",
+      "label": "non-prod EventBridge operational events (us-west-2)",
+      "events": [
+        {
+          "version": "0",
+          "id": "eb-444455556666-1",
+          "detail-type": "EC2 Instance State-change Notification",
+          "source": "aws.ec2",
+          "account": "444455556666",
+          "time": "2026-07-14T02:07:00Z",
+          "region": "us-west-2",
+          "resources": [
+            "arn:aws:ec2:us-west-2:444455556666:instance/i-abc66"
+          ],
+          "detail": {
+            "instance-id": "i-abc66",
+            "state": "stopped"
+          }
+        },
+        {
+          "version": "0",
+          "id": "eb-444455556666-2",
+          "detail-type": "EC2 Instance State-change Notification",
+          "source": "aws.ec2",
+          "account": "444455556666",
+          "time": "2026-07-14T02:14:00Z",
+          "region": "us-west-2",
+          "resources": [
+            "arn:aws:ec2:us-west-2:444455556666:instance/i-abc66"
+          ],
+          "detail": {
+            "instance-id": "i-abc66",
+            "state": "stopped"
+          }
+        },
+        {
+          "version": "0",
+          "id": "eb-444455556666-3",
+          "detail-type": "EC2 Instance State-change Notification",
+          "source": "aws.ec2",
+          "account": "444455556666",
+          "time": "2026-07-14T02:21:00Z",
+          "region": "us-west-2",
+          "resources": [
+            "arn:aws:ec2:us-west-2:444455556666:instance/i-abc66"
+          ],
+          "detail": {
+            "instance-id": "i-abc66",
+            "state": "stopped"
+          }
+        },
+        {
+          "version": "0",
+          "id": "eb-444455556666-4",
+          "detail-type": "EC2 Instance State-change Notification",
+          "source": "aws.ec2",
+          "account": "444455556666",
+          "time": "2026-07-14T02:28:00Z",
+          "region": "us-west-2",
+          "resources": [
+            "arn:aws:ec2:us-west-2:444455556666:instance/i-abc66"
+          ],
+          "detail": {
+            "instance-id": "i-abc66",
+            "state": "stopped"
+          }
+        },
+        {
+          "version": "0",
+          "id": "eb-444455556666-5",
+          "detail-type": "EC2 Instance State-change Notification",
+          "source": "aws.ec2",
+          "account": "444455556666",
+          "time": "2026-07-14T02:35:00Z",
+          "region": "us-west-2",
+          "resources": [
+            "arn:aws:ec2:us-west-2:444455556666:instance/i-abc66"
+          ],
+          "detail": {
+            "instance-id": "i-abc66",
+            "state": "stopped"
+          }
+        },
+        {
+          "version": "0",
+          "id": "eb-444455556666-6",
+          "detail-type": "EC2 Instance State-change Notification",
+          "source": "aws.ec2",
+          "account": "444455556666",
+          "time": "2026-07-14T02:42:00Z",
+          "region": "us-west-2",
+          "resources": [
+            "arn:aws:ec2:us-west-2:444455556666:instance/i-abc66"
+          ],
+          "detail": {
+            "instance-id": "i-abc66",
+            "state": "stopped"
+          }
+        }
+      ]
+    },
+    {
+      "account": "444455556666",
+      "region": "us-west-2",
+      "surface": "cloudtrail",
+      "label": "non-prod CloudTrail management events (us-west-2)",
+      "events": [
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-444455556666-assume-1",
+          "eventTime": "2026-07-14T03:11:00Z",
+          "eventSource": "sts.amazonaws.com",
+          "eventName": "AssumeRole",
+          "awsRegion": "us-west-2",
+          "readOnly": false,
+          "errorCode": null,
+          "eventCategory": "Management",
+          "managementEvent": true,
+          "userIdentity": {
+            "type": "IAMUser",
+            "arn": "arn:aws:iam::444455556666:user/alice"
+          },
+          "resources": [
+            {
+              "ARN": "arn:aws:iam::444455556666:role/admin",
+              "type": "AWS::IAM::Role"
+            }
+          ]
+        },
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-444455556666-assume-2",
+          "eventTime": "2026-07-14T03:22:00Z",
+          "eventSource": "sts.amazonaws.com",
+          "eventName": "AssumeRole",
+          "awsRegion": "us-west-2",
+          "readOnly": false,
+          "errorCode": null,
+          "eventCategory": "Management",
+          "managementEvent": true,
+          "userIdentity": {
+            "type": "IAMUser",
+            "arn": "arn:aws:iam::444455556666:user/alice"
+          },
+          "resources": [
+            {
+              "ARN": "arn:aws:iam::444455556666:role/admin",
+              "type": "AWS::IAM::Role"
+            }
+          ]
+        },
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-444455556666-assume-3",
+          "eventTime": "2026-07-14T03:33:00Z",
+          "eventSource": "sts.amazonaws.com",
+          "eventName": "AssumeRole",
+          "awsRegion": "us-west-2",
+          "readOnly": false,
+          "errorCode": null,
+          "eventCategory": "Management",
+          "managementEvent": true,
+          "userIdentity": {
+            "type": "IAMUser",
+            "arn": "arn:aws:iam::444455556666:user/alice"
+          },
+          "resources": [
+            {
+              "ARN": "arn:aws:iam::444455556666:role/admin",
+              "type": "AWS::IAM::Role"
+            }
+          ]
+        },
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-444455556666-assume-4",
+          "eventTime": "2026-07-14T03:44:00Z",
+          "eventSource": "sts.amazonaws.com",
+          "eventName": "AssumeRole",
+          "awsRegion": "us-west-2",
+          "readOnly": false,
+          "errorCode": null,
+          "eventCategory": "Management",
+          "managementEvent": true,
+          "userIdentity": {
+            "type": "IAMUser",
+            "arn": "arn:aws:iam::444455556666:user/alice"
+          },
+          "resources": [
+            {
+              "ARN": "arn:aws:iam::444455556666:role/admin",
+              "type": "AWS::IAM::Role"
+            }
+          ]
+        },
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-444455556666-assume-5",
+          "eventTime": "2026-07-14T03:55:00Z",
+          "eventSource": "sts.amazonaws.com",
+          "eventName": "AssumeRole",
+          "awsRegion": "us-west-2",
+          "readOnly": false,
+          "errorCode": null,
+          "eventCategory": "Management",
+          "managementEvent": true,
+          "userIdentity": {
+            "type": "IAMUser",
+            "arn": "arn:aws:iam::444455556666:user/alice"
+          },
+          "resources": [
+            {
+              "ARN": "arn:aws:iam::444455556666:role/admin",
+              "type": "AWS::IAM::Role"
+            }
+          ]
+        },
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-444455556666-assume-6",
+          "eventTime": "2026-07-14T04:06:00Z",
+          "eventSource": "sts.amazonaws.com",
+          "eventName": "AssumeRole",
+          "awsRegion": "us-west-2",
+          "readOnly": false,
+          "errorCode": null,
+          "eventCategory": "Management",
+          "managementEvent": true,
+          "userIdentity": {
+            "type": "IAMUser",
+            "arn": "arn:aws:iam::444455556666:user/alice"
+          },
+          "resources": [
+            {
+              "ARN": "arn:aws:iam::444455556666:role/admin",
+              "type": "AWS::IAM::Role"
+            }
+          ]
+        },
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-444455556666-denied-1",
+          "eventTime": "2026-07-14T04:00:00Z",
+          "eventSource": "ec2.amazonaws.com",
+          "eventName": "TerminateInstances",
+          "awsRegion": "us-west-2",
+          "eventCategory": "Management",
+          "managementEvent": true,
+          "errorCode": "Client.UnauthorizedOperation",
+          "errorMessage": "You are not authorized to perform this operation.",
+          "userIdentity": {
+            "type": "IAMUser",
+            "arn": "arn:aws:iam::444455556666:user/bob"
+          }
+        }
+      ]
+    }
+  ]
+}

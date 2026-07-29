@@ -135,7 +135,10 @@ function ContractHarness({
   );
 }
 
-function PlanHarness() {
+function PlanHarness(
+  { activePackIds, salesforcePacks }:
+  { activePackIds?: string[]; salesforcePacks?: string[] },
+) {
   const setupState = useSetupState();
   const activePackId = setupState.state.packId ?? LENDING.pack_id;
   return (
@@ -155,9 +158,14 @@ function PlanHarness() {
         industries={[FINANCIAL_SERVICES]}
         templates={[LENDING, INSURANCE_FIXTURE]}
         activePackId={activePackId}
+        activePackIds={activePackIds}
+        salesforcePacks={salesforcePacks}
         onLaunch={vi.fn()}
       />
       <output data-testid="selected-pack">{setupState.state.packId ?? ''}</output>
+      <output data-testid="selected-pack-ids">
+        {(setupState.state.packIds ?? []).join(',')}
+      </output>
     </div>
   );
 }
@@ -276,17 +284,58 @@ describe('R18-C1 T6 - combined registry and first-run guide contract', () => {
     expect(screen.getByText(/Focus Id, Selected System Ids, Roles/)).toBeInTheDocument();
   });
 
-  it('uses registry labels throughout the plan and keeps the template pack editable', () => {
+  it('offers the analysis pack as a single-select dropdown defaulting to None', () => {
     render(<PlanHarness />);
     fireEvent.click(screen.getByRole('button', { name: 'Load registry plan' }));
 
     expect(screen.getByText(FINANCIAL_SERVICES.label)).toBeInTheDocument();
     expect(screen.getByText(LENDING.label)).toBeInTheDocument();
 
-    const packSelect = screen.getByRole('combobox', { name: 'Analysis pack' });
-    expect(packSelect).toHaveValue('ncino');
-    fireEvent.change(packSelect, { target: { value: 'service_cloud' } });
-    expect(packSelect).toHaveValue('service_cloud');
-    expect(screen.getByTestId('selected-pack')).toHaveTextContent('service_cloud');
+    // One analysis pack at most, chosen from a dropdown — NOT a multi-select.
+    const select = screen.getByRole('combobox', {
+      name: 'Analysis pack',
+    }) as HTMLSelectElement;
+    expect(select.multiple).toBe(false);
+    // "None" is the default: applying a template must not pre-pick an analysis
+    // pack (the template's own pack_id is a separate, non-analysis entry).
+    expect(select.value).toBe('');
+    expect((screen.getByRole('option', { name: 'None' }) as HTMLOptionElement).selected)
+      .toBe(true);
+
+    // Every offered analysis pack is an option, and none is a checkbox any more.
+    expect(screen.getByRole('option', { name: 'Cloud Ops' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'GitHub Engineering' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Cloud Ops/i })).not.toBeInTheDocument();
+  });
+
+  it('replaces the analysis pack on each choice and preserves the template pack', () => {
+    render(<PlanHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Load registry plan' }));
+    const select = screen.getByRole('combobox', { name: 'Analysis pack' });
+    const packIds = () => screen.getByTestId('selected-pack-ids').textContent?.trim();
+
+    // The template contributed 'ncino'; it is not an analysis option and must
+    // survive every change made here.
+    expect(packIds()).toBe('ncino');
+
+    fireEvent.change(select, { target: { value: 'cloud_ops' } });
+    expect(packIds()).toBe('ncino,cloud_ops');
+
+    // Single-select: a second choice REPLACES the first rather than adding to it.
+    fireEvent.change(select, { target: { value: 'github_engineering' } });
+    expect(packIds()).toBe('ncino,github_engineering');
+
+    // Back to None clears the analysis slot only.
+    fireEvent.change(select, { target: { value: '' } });
+    expect(packIds()).toBe('ncino');
+  });
+
+  it('shows the fixed Salesforce packs read-only from the declaration', () => {
+    render(<PlanHarness salesforcePacks={['service_cloud', 'ncino']} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Load registry plan' }));
+
+    // The declared Salesforce products' packs are shown read-only (not selectable).
+    expect(screen.getByText('Salesforce packs')).toBeInTheDocument();
+    expect(screen.getByText('Service Cloud, nCino')).toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Unplug } from 'lucide-react';
+import { Loader2, Unplug } from 'lucide-react';
 import { Connector } from '../../types/connector';
 import Badge from '../common/Badge';
 import Button from '../common/Button';
@@ -40,6 +40,7 @@ export default function ConnectorTile({
   onSetupOutbound,
   connectBlocked,
   connectBlockMessage,
+  connecting,
 }: {
   connector: Connector;
   icon: React.ReactNode;
@@ -68,10 +69,24 @@ export default function ConnectorTile({
   // reconnecting is not a new connection and is never blocked.
   connectBlocked?: boolean;
   connectBlockMessage?: string;
+  // True while THIS connector's OAuth round-trip is in flight (the parent owns
+  // the flag). Connecting mints a one-time state nonce and then redirects the
+  // browser, so the action must be a single click: the button disables and reads
+  // "Connecting…" until the redirect lands — the same posture as the Stack
+  // Builder "Start discovery" button while a run is launching.
+  connecting?: boolean;
 }) {
   const isConnected = connector.status === 'connected';
   const isConfigured = connector.configured;
-  const isEnabled = ENABLED_CONNECTOR_IDS.includes(connector.id);
+  const isConnecting = Boolean(connecting);
+  // MSP-B13 (AT-748): a multi-scope cloud connector (AWS/Azure Events) onboards
+  // in the detail panel (credentials + scope pinning + per-scope health), NOT via
+  // the tile's OAuth Connect flow. Its tile action just opens that panel — enabled
+  // for every role, since Analyst/Viewer open it to VIEW health (read-only) and
+  // the panel enforces Owner-only edits. So it bypasses the OAuth-only enablement
+  // gate below.
+  const isMultiScope = Boolean(connector.multiScope);
+  const isEnabled = isMultiScope || ENABLED_CONNECTOR_IDS.includes(connector.id);
 
   // R191-R1 T5 (AT-726): a roadmap connector (SAP/D365 and any tile whose
   // ingestion does not ship yet) is never connectable. Keep the release target
@@ -124,9 +139,16 @@ export default function ConnectorTile({
   const outboundSetupGate = hideAuthCode && isEnabled;
 
   // When the token is expired/missing, override the button to "Reconnect".
-  // A roadmap tile always shows its "Coming soon" label (it can never connect).
+  // A roadmap tile always shows its "Coming soon" label (it can never connect) —
+  // that outranks every other posture, including multi-scope. Multi-scope cloud
+  // connectors come next: their action opens the onboarding/health panel
+  // ("Set up" when new, "Manage" once configured).
   const actionLabel = isRoadmap
     ? comingLabel
+    : isMultiScope
+    ? isConnected
+      ? 'Manage'
+      : 'Set up'
     : outboundSetupGate
     ? 'Set up outbound access'
     : tokenExpired
@@ -137,12 +159,15 @@ export default function ConnectorTile({
     ? 'View data'
     : 'Connect';
 
-  const actionVariant =
-    outboundSetupGate || !isConnected || tokenExpired
-      ? 'primary'
-      : isConfigured
+  const actionVariant = isMultiScope
+    ? isConnected
       ? 'secondary'
-      : 'tertiary';
+      : 'primary'
+    : outboundSetupGate || !isConnected || tokenExpired
+    ? 'primary'
+    : isConfigured
+    ? 'secondary'
+    : 'tertiary';
 
   // R17-D4 Addendum A / T11: at the licensed limit, a NEW connection is blocked
   // (forward-only). Only applies to a not-yet-connected system — the 'connected'
@@ -150,9 +175,17 @@ export default function ConnectorTile({
   // existing systems keep working when a lower-limit key lands (AC12).
   const limitBlocksNew = Boolean(connectBlocked) && !isConnected;
   // Viewers can only use the read-only "View data" action; every write action
-  // (Connect / Configure & Sync / Reconnect) is disabled for them.
-  const viewerBlocks = isViewer && actionLabel !== 'View data';
-  const actionDisabled = isRoadmap || !isEnabled || limitBlocksNew || viewerBlocks;
+  // (Connect / Configure & Sync / Reconnect) is disabled for them. A multi-scope
+  // tile is exempt — it opens a read-only panel for Viewer/Analyst (health), with
+  // Owner-only edits enforced inside the panel (MSP-B13 AT-748, T6-AC3).
+  const viewerBlocks = isViewer && !isMultiScope && actionLabel !== 'View data';
+  // A multi-scope tile only OPENS the panel (no OAuth/new connection here), so the
+  // license new-connection gate never disables it. A roadmap tile is not
+  // connectable at all, so it stays disabled regardless of posture.
+  // A connect flow already in flight disables the action too, so the OAuth
+  // round-trip can only ever be started once per click-through.
+  const actionDisabled =
+    isRoadmap || !isEnabled || (limitBlocksNew && !isMultiScope) || viewerBlocks || isConnecting;
 
   // R18-C0 P4 / AT-566: a connected tile offers Disconnect. Disconnecting is a
   // connector write (analyst+), so viewers never see it; it is independent of the
@@ -162,7 +195,7 @@ export default function ConnectorTile({
     ? roadmapIsVersioned
       ? `${connector.name} is on the AgentIQ roadmap (coming in ${roadmapTarget}) and is not yet connectable.`
       : `${connector.name} is on the AgentIQ roadmap and is not yet connectable.`
-    : limitBlocksNew
+    : (limitBlocksNew && !isMultiScope)
     ? (connectBlockMessage || 'Your license limit has been reached. Contact CloudFulcrum to add more.')
     : !isEnabled
     ? 'Connecting new sources is currently unavailable'
@@ -241,8 +274,11 @@ export default function ConnectorTile({
           variant={actionVariant}
           disabled={actionDisabled}
           title={disabledTitle}
+          ariaLabel={isConnecting ? `Connecting ${connector.name}` : undefined}
           className={`min-w-0 flex-1 ${
-            actionDisabled
+            isConnecting
+              ? 'gap-1.5 !opacity-70'
+              : actionDisabled
               ? '!bg-slate-500/10 !text-muted !border-border !opacity-100'
               : isConnected && isConfigured && !tokenExpired
               ? 'light-view-data-button !border-accent/50 !text-accent'
@@ -250,6 +286,16 @@ export default function ConnectorTile({
           }`}
           onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
             e.stopPropagation();
+            // Defensive: the button is already disabled while connecting, so a
+            // second click can never reach the OAuth initiation.
+            if (isConnecting) return;
+            // MSP-B13 (AT-748): a multi-scope cloud connector onboards in the
+            // detail panel — the tile action just selects it to open that panel
+            // (never the OAuth Connect flow, which it does not use).
+            if (isMultiScope) {
+              onSelect();
+              return;
+            }
             // R18-A3 T5 (AT-558): in a no-public-inbound deployment, never start
             // the authorization-code flow for a connector with an outbound-only
             // mode — open the detail panel (outbound setup path) instead so the
@@ -273,7 +319,14 @@ export default function ConnectorTile({
             }
           }}
         >
-          {actionLabel}
+          {isConnecting ? (
+            <>
+              <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+              Connecting…
+            </>
+          ) : (
+            actionLabel
+          )}
         </Button>
 
         {canDisconnect && (

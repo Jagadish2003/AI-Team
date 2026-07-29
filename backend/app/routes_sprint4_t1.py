@@ -13,7 +13,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, HTTPException, FastAPI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .security import require_auth
 from .rbac import require_role
@@ -28,7 +28,37 @@ logger = logging.getLogger(__name__)
 class ComputeRequest(BaseModel):
     mode: str = Field(default="offline", pattern="^(offline|live)$")
     systems: List[str] = Field(default_factory=lambda: ["salesforce", "servicenow", "jira"])
-    pack: Optional[str] = Field(default=None, description="Pack ID: service_cloud or ncino")
+    pack: Optional[str] = Field(
+        default=None,
+        description=(
+            "Primary pack ID (backward-compatible singular alias for pack_ids). "
+            "e.g. service_cloud or ncino."
+        ),
+    )
+    pack_ids: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "R191-P1 T1: multi-pack selection (order-preserving, de-duplicated). "
+            "Supersedes the singular pack; a single-element list behaves exactly "
+            "as pack. Reconciled with pack in the validator — both stay in sync, "
+            "pack being the primary (first) pack."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _reconcile_packs(self) -> "ComputeRequest":
+        # R191-P1 T1: fold the singular pack and the pack_ids list into ONE
+        # order-preserving, de-duplicated selection via the shared primitive, then
+        # re-derive pack as the primary (first). Single-pack callers — the current
+        # frontend sends only `pack` — are unaffected: [pack] normalises to pack.
+        from discovery.packs.pack_config import normalize_pack_ids
+
+        combined = normalize_pack_ids(
+            list(self.pack_ids or []) + ([self.pack] if self.pack else [])
+        )
+        self.pack_ids = combined
+        self.pack = combined[0] if combined else None
+        return self
 
 
 class ComputeResponse(BaseModel):
@@ -105,6 +135,7 @@ from .materialize_t2 import (
     _ingest_summary_from_payload,
     _org_id_for_run,
     _pack_id_for_run,
+    _pack_ids_for_run,
     _selected_system_ids_for_report,
     resolve_effective_pack,
 )
@@ -128,15 +159,21 @@ def _apply_temporal_enrichment(
         from .telemetry import record_event
         from .temporal_enrichment import enrich_opportunities_with_temporal_context
 
-        pack_id = _pack_id_for_run(run) or pack or ""
-
         calculate_baselines_for_org(org_id or "default")
-        opps = enrich_opportunities_with_temporal_context(
-            run_id,
-            org_id or "default",
-            pack_id,
-            opps,
-        )
+        fallback_pack_id = _pack_id_for_run(run) or pack or ""
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for opp in opps:
+            opp_pack_id = str(
+                opp.get("packId") or opp.get("pack_id") or fallback_pack_id
+            )
+            grouped.setdefault(opp_pack_id, []).append(opp)
+        for pack_id, pack_opps in grouped.items():
+            enrich_opportunities_with_temporal_context(
+                run_id,
+                org_id or "default",
+                pack_id,
+                pack_opps,
+            )
 
         temporal_keys = (
             "baseline_context",
@@ -172,7 +209,13 @@ def _apply_temporal_enrichment(
     return opps
 
 
-def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Optional[str] = None) -> None:
+def _run_trackb_and_persist(
+    run_id: str,
+    mode: str,
+    systems: List[str],
+    pack: Optional[str] = None,
+    pack_ids: Optional[List[str]] = None,
+) -> None:
     """Background task: execute Track B and persist Track A-shaped artifacts."""
     import logging
     logger = logging.getLogger(__name__)
@@ -181,6 +224,18 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
     run = db.run_get(run_id)
     if run is None:
         raise RuntimeError(f"Run '{run_id}' not found — cannot materialise")
+
+    from discovery.packs.pack_config import normalize_pack_ids
+
+    # The launch record is the source of truth. This is important for the current
+    # frontend, which may still send only the primary pack to /compute after a
+    # multi-template launch. Direct compute callers can supply pack_ids normally.
+    selected_pack_ids = normalize_pack_ids(
+        list(_pack_ids_for_run(run) or [])
+        + list(pack_ids or [])
+        + ([pack] if pack else [])
+    )
+    pack = selected_pack_ids[0] if selected_pack_ids else pack
 
     # Resolve the run's org once; reused for live-connector resolution and for
     # the runner's org_id below.
@@ -219,8 +274,18 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
     _effective_pack = resolve_effective_pack(pack, live_systems)
     if _effective_pack and _effective_pack != pack:
         pack = _effective_pack
+        selected_pack_ids = normalize_pack_ids([pack] + selected_pack_ids)
         _emit_event(
             run_id, "CONNECT", f"GitHub connected — defaulting to the {_effective_pack} pack"
+        )
+
+    # R191-P1: log the FULL multi-pack selection (selected_pack_ids, resolved
+    # above from the launch record + the compute request) for run-log visibility.
+    # The runner runs EVERY selected pack against the shared signal — without this,
+    # only the primary `pack` ran (e.g. Service Cloud but not nCino).
+    if selected_pack_ids:
+        _emit_event(
+            run_id, "CONNECT", f"Analysis packs: {', '.join(selected_pack_ids)}"
         )
 
     per_system: Dict[str, str] = {
@@ -247,8 +312,32 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
         # the temporal read uses; without it the runner falls back to its own
         # "demo-org" default, which hides the Baseline Context panel.
         payload = trackb_run(
-            mode=mode, systems=systems, run_id=run_id, org_id=run_org_id, pack=pack
+            mode=mode,
+            systems=systems,
+            run_id=run_id,
+            org_id=run_org_id,
+            pack=pack,
+            pack_ids=selected_pack_ids or None,
         )
+
+        # Preserve the exact immutable execution snapshot returned by the runner.
+        executed_detectors = payload.get("detectorsExecuted")
+        if isinstance(executed_detectors, list):
+            run["packId"] = payload.get("packId") or pack
+            run["packName"] = payload.get("packName") or run.get("packName")
+            run["packVersion"] = payload.get("packVersion")
+            run["executedDetectorIds"] = [
+                str(detector_id)
+                for detector_id in executed_detectors
+                if str(detector_id).strip()
+            ]
+            run["packExecutedAt"] = payload.get("packExecutedAt")
+        if isinstance(payload.get("packIds"), list):
+            run["packIds"] = list(payload["packIds"])
+        if isinstance(payload.get("packVersions"), dict):
+            run["packVersions"] = dict(payload["packVersions"])
+        if isinstance(payload.get("packs"), list):
+            run["packs"] = list(payload["packs"])
 
         per_system, succeeded, ingest_errors = _ingest_summary_from_payload(
             payload, systems
@@ -410,13 +499,17 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
             exec_report = db.run_kv_get("executive_report", run_id, {})
             sources_analyzed = exec_report.get("sourcesAnalyzed", {})
             
-            enrichment = run_llm_enrichment(
+            from .pack_aware_enrichment import run_pack_aware_enrichment
+
+            execution_pack_ids = list(payload.get("packIds") or selected_pack_ids)
+            enrichment = run_pack_aware_enrichment(
                 run_id=run_id,
-                opps=opps,
+                opportunities=opps,
                 evidence=ev,
                 sources_analyzed=sources_analyzed,
-                pack_id=pack,
+                pack_ids=execution_pack_ids or [pack],
                 org_id=run_org_id,
+                enrichment_fn=run_llm_enrichment,
             )
             db.run_kv_set(KV_LLM_ENRICHMENT, run_id, enrichment)
             if enrichment.get("executiveSummary"):
@@ -505,7 +598,14 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
         # Mark status running and return immediately.
         _set_status(run_id, "running", counts={"opportunities": 0, "evidence": 0})
         _append_event(run_id, "QUEUED", "Discovery run queued.")
-        background_tasks.add_task(_run_trackb_and_persist, run_id, body.mode, body.systems, body.pack)
+        background_tasks.add_task(
+            _run_trackb_and_persist,
+            run_id,
+            body.mode,
+            body.systems,
+            body.pack,
+            body.pack_ids,
+        )
 
         return ComputeResponse(
             ok=True,

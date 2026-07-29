@@ -25,7 +25,11 @@ type ConnectorContextValue = {
   nextBestRecommendedId: string | null;
 
   selectConnector: (id: string) => void;
-  connectConnector: (id: string) => void;
+  // Resolves true when the OAuth round-trip was initiated (auth-url minted and
+  // the browser redirect started), false when it failed. Callers use this to
+  // hold a one-shot "Connecting…" button state: on true the browser is already
+  // navigating away, so the button stays busy; on false it is released to retry.
+  connectConnector: (id: string) => Promise<boolean>;
   configureSync: (id: string) => void;
   // R18-C0 P4 / AT-566: disconnect a connector (clears the org vault credential
   // and returns the tile to its unconnected state). Rejects on failure so the
@@ -82,6 +86,11 @@ function normalizeConnector(raw: ConnectorPayload): Connector | null {
     products: Array.isArray(raw.products)
       ? raw.products.filter((product): product is string => typeof product === 'string')
       : [],
+    // MSP-B13 (AT-748): catalog-driven multi-scope flag + scope noun, carried
+    // through so the hub can register cloud tiles from the catalog with no
+    // hardcoded id list.
+    multiScope: raw.multiScope === true,
+    scopeNoun: typeof raw.scopeNoun === 'string' ? raw.scopeNoun : undefined,
     // R191-R1 T5 (AT-726): roadmap flags stamped by the backend catalog overlay.
     // A tile without a shipped ingestor comes back roadmap=true with its target
     // release metadata; the tile renders it non-connectable "Coming soon".
@@ -190,13 +199,15 @@ export function ConnectorProvider({ children }: { children: React.ReactNode }) {
     cache.invalidate(cacheKeys.license);
   }, [cache]);
 
-  const connectConnector = useCallback(async (id: string) => {
+  const connectConnector = useCallback(async (id: string): Promise<boolean> => {
     setMutationError(null);
     try {
       await connectConnectorApi(id);
       invalidateConnectorState();
+      return true;
     } catch (e: any) {
       setMutationError(e?.message ?? 'Failed to connect');
+      return false;
     }
   }, [invalidateConnectorState]);
 

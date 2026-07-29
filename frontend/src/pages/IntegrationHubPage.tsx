@@ -53,7 +53,7 @@ import LicenseLimitBanner, { systemLimitMessage } from '../components/integratio
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import { useToast } from '../components/common/Toast';
 import { ApiError } from '../lib/apiClient';
-import { useResource } from '../lib/dataCache';
+import { useResource, useDataCache } from '../lib/dataCache';
 import { cacheKeys } from '../lib/cacheKeys';
 import { useConnectorContext } from '../context/ConnectorContext';
 import { useAuthOptional } from '../context/AuthContext';
@@ -86,6 +86,12 @@ const CATEGORY_SYSTEMS: Record<string, string[]> = {
 
 const START_BAR_SOURCE_IDS = ['salesforce', 'servicenow', 'jira'];
 
+// MSP-B13 (AT-748): the Cloud Operations group is NOT a hardcoded id list.
+// Membership is derived from the catalog itself — any connector the catalog marks
+// `multiScope` (AWS/Azure Events today, future cloud connectors automatically)
+// registers here — so no connector tile is hardcoded (T6-AC1/AC4).
+const CLOUD_OPS_CATEGORY = 'cloud_operations';
+
 // ── Group metadata ────────────────────────────────────────────────────────────
 
 interface GroupMeta {
@@ -114,6 +120,11 @@ const GROUP_META: GroupMeta[] = [
     categoryId: 'data_engineering',
     label:      'Data & Engineering Sources',
     subLabel:   'Source control, databases, and data platform connectors',
+  },
+  {
+    categoryId: CLOUD_OPS_CATEGORY,
+    label:      'Cloud Operations',
+    subLabel:   'Multi-account/subscription cloud event connectors (AWS, Azure)',
   },
 ];
 
@@ -186,6 +197,24 @@ export default function IntegrationHubPage() {
     () => [...recommended, ...standard],
     [recommended, standard],
   );
+
+  // Regularly re-check connector token expiry so a token that lapses WHILE the
+  // user is on this page surfaces as "Token expired" / Reconnect without a manual
+  // reload. Invalidating each connected connector's token-status cache key makes
+  // that tile's useResource refetch and re-render its action. Only connected
+  // connectors hold a token worth checking.
+  const cache = useDataCache();
+  useEffect(() => {
+    const REVALIDATE_MS = 120_000; // 2 minutes
+    const timer = setInterval(() => {
+      for (const c of allConnectors) {
+        if (c.status === 'connected') {
+          cache.invalidate(cacheKeys.connectorTokenStatus(c.id));
+        }
+      }
+    }, REVALIDATE_MS);
+    return () => clearInterval(timer);
+  }, [allConnectors, cache]);
 
   // Auto-configure connected-but-unconfigured connectors (Connect → View data).
   // See autoConfiguredRef above for the rationale. Runs whenever the connector
@@ -268,16 +297,25 @@ export default function IntegrationHubPage() {
     }
   }, [location.state, location.pathname, location.search, allConnectors, loading, push, navigate]);
 
-  // Build groups
+  // Build groups. The Cloud Operations group is catalog-driven — its membership
+  // is every connector the catalog flags `multiScope`, not a hardcoded id list
+  // (MSP-B13 / AT-748, T6-AC1/AC4). The other groups keep their category map.
   const groups: GroupConfig[] = useMemo(
     () =>
-      GROUP_META.map(meta => ({
-        ...meta,
-        allSystemIds: CATEGORY_SYSTEMS[meta.categoryId] ?? [],
-        connectors: allConnectors.filter(c =>
-          connectorBelongsToCategory(c, meta.categoryId)
-        ),
-      })),
+      GROUP_META.map(meta => {
+        const connectors =
+          meta.categoryId === CLOUD_OPS_CATEGORY
+            ? allConnectors.filter(c => c.multiScope)
+            : allConnectors.filter(c => connectorBelongsToCategory(c, meta.categoryId));
+        return {
+          ...meta,
+          allSystemIds:
+            meta.categoryId === CLOUD_OPS_CATEGORY
+              ? connectors.map(c => c.id)
+              : CATEGORY_SYSTEMS[meta.categoryId] ?? [],
+          connectors,
+        };
+      }),
     [allConnectors],
   );
 
@@ -307,6 +345,23 @@ export default function IntegrationHubPage() {
     () => startBarStatusConnectors.find(c => !isDiscoveryReadyConnector(c)) ?? null,
     [startBarStatusConnectors],
   );
+
+  // One-shot Connect: starting a connect flow mints a one-time OAuth state nonce
+  // and then hands the browser to the provider, so the button must only ever be
+  // clickable once. This holds the id of the connector whose flow is in flight —
+  // its action button disables and reads "Connecting…", the same posture as the
+  // Stack Builder "Start discovery" button while a run is launching.
+  const [connectingId, setConnectingId] = useState<string | null>(null);
+
+  async function startConnect(id: string) {
+    if (connectingId) return;
+    setConnectingId(id);
+    const started = await connectConnector(id);
+    // On success the browser is already navigating to the provider — keep the
+    // button busy until it leaves the page. Only a failed auth-url call releases
+    // it, so the user can retry.
+    if (!started) setConnectingId(null);
+  }
 
   // Connect / configure handler (same logic as pre-Sprint-9)
   function handlePrimary(id: string) {
@@ -340,7 +395,7 @@ export default function IntegrationHubPage() {
     } else if (c.status === 'coming_soon') {
       push('Coming Soon');
     } else {
-      connectConnector(id);
+      void startConnect(id);
       // Connect now leads straight to "View data" — configuring is automatic
       // (see the auto-configure effect). For OAuth connectors this toast is not
       // seen (the browser redirects to the provider), but keep it accurate.
@@ -353,7 +408,7 @@ export default function IntegrationHubPage() {
   // the same context method Connect uses — connectConnector navigates the
   // browser away, so no follow-up toast is needed here.
   function handleReconnect(id: string) {
-    connectConnector(id);
+    void startConnect(id);
   }
 
   // R18-C0 P4 / AT-566: disconnect flow. The tile's Disconnect action opens a
@@ -487,6 +542,7 @@ export default function IntegrationHubPage() {
                     onAddSource={handleAddSource}
                     connectBlocked={atSystemLimit}
                     connectBlockMessage={systemLimitMsg}
+                    connectingId={connectingId}
                   />
                 </div>
               ))}
@@ -506,6 +562,7 @@ export default function IntegrationHubPage() {
                 recommendedConnectedCount={startBarReadyCount}
                 recommendedTotal={3}
                 next={startBarNext}
+                connectingNext={Boolean(startBarNext) && connectingId === startBarNext?.id}
                 onConnectNext={() => {
                   if (!startBarNext) return;
                   if (startBarNext.status === 'connected') {
@@ -517,8 +574,8 @@ export default function IntegrationHubPage() {
                     // message, consistent with the disabled tile Connect buttons.
                     push(systemLimitMsg || 'Your license limit has been reached. Contact CloudFulcrum to add more.', 'error');
                   } else {
-                    connectConnector(startBarNext.id);
-                    push('Connected next best source.');
+                    void startConnect(startBarNext.id);
+                    push('Connecting…');
                   }
                 }}
               />

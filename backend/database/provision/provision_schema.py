@@ -9,7 +9,11 @@ so the target database is complete after one invocation:
   1. Alembic migrations (0001..head) — the native tables:
         telemetry_events, signal_snapshots, entities, users, login_attempts,
         orgs, entity_relationships, causal_hypotheses, audit_log,
-        workspace_members  (+ the alembic_version stamp).
+        workspace_members, org_licenses, and (R-1.9.1-L3, migration 0026) the
+        vendor-side license_registry + append-only issuance_audit — among others
+        added by later migrations  (+ the alembic_version stamp).
+        This path runs `alembic upgrade head`, so it stays in lock-step with the
+        pure-SQL provision.sql bundle (Path B), which is a snapshot of this head.
   2. seed_loader.py --no-reset — the {id, payload} tables and run scaffolding:
         connectors, uploads, runs, evidence, mappings, permissions,
         opportunities, audit_events, executive_reports, run_events, kv

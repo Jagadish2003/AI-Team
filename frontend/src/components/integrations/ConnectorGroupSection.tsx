@@ -58,11 +58,14 @@ interface Props {
   // actionable. Optional so the section renders unchanged where unused.
   connectBlocked?: boolean;
   connectBlockMessage?: string;
+  // Id of the connector whose OAuth connect flow is currently in flight, if any.
+  // Its tile renders a disabled "Connecting…" action so the flow is one-click.
+  connectingId?: string | null;
 }
 
 export default function ConnectorGroupSection({
   group, selectedId, onSelect, onPrimary, onReconnect, onDisconnect, onSetupOutbound, onAddSource,
-  connectBlocked, connectBlockMessage,
+  connectBlocked, connectBlockMessage, connectingId = null,
 }: Props) {
   const hasConnectors = group.connectors.length > 0;
   const shouldScrollConnectors = group.connectors.length > 6;
@@ -109,6 +112,7 @@ export default function ConnectorGroupSection({
                 onSetupOutbound={onSetupOutbound ? () => onSetupOutbound(c.id) : undefined}
                 connectBlocked={connectBlocked}
                 connectBlockMessage={connectBlockMessage}
+                connecting={connectingId === c.id}
               />
             ))}
           </div>

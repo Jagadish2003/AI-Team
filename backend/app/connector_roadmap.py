@@ -45,6 +45,8 @@ from typing import Any, Dict, Optional
 #   github                            — discovery/ingest/git_content.py + connectors/saas/github.py
 #   slack/teams/confluence/sharepoint — discovery/ingest/{slack,teams,confluence,sharepoint}.py
 #   postgresql/sql_server/oracle_db   — native DB connectors under connectors/db/
+#   aws_events                        — discovery/ingest/aws_event_connector.py (MSP-B1)
+#   azure_events                      — discovery/ingest/azure_events.py (MSP-B2)
 #
 # NOTE: a shipped connector may still be product-gated OFF the Hub connect button
 # (see ENABLED_CONNECTOR_IDS on the frontend tile — e.g. the native databases).
@@ -63,6 +65,8 @@ SHIPPED_CONNECTOR_IDS = frozenset(
         "postgresql",
         "sql_server",
         "oracle_db",
+        "aws_events",
+        "azure_events",
     }
 )
 

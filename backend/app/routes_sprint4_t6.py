@@ -38,7 +38,7 @@ from .security import require_auth
 from .rbac import require_role
 from . import db
 from .llm_enrichment import KV_LLM_ENRICHMENT
-from .terminology import apply_terminology, resolve_run_terminology
+from .terminology import apply_run_terminology
 from .temporal import get_baseline, get_signal_history
 from .graph_query import RelationshipSummary, select_relationships_for_opportunity
 from database.models.entities import ENTITY_MIN_RUN_COUNT
@@ -97,6 +97,8 @@ class OppEnrichment(BaseModel):
     aiSuggestedNextSteps: List[str] = Field(default_factory=list)
     llmGenerated:         bool = False
     llmModel:             Optional[str] = None
+    aiNarrativeAvailable: Optional[bool] = None
+    aiModeLabel:          Optional[str] = None
     # Track 3 Stage 1 — T3-S11-A temporal fields
     baseline_context:     Optional[str] = None
     trend_direction:      Optional[str] = None
@@ -684,13 +686,11 @@ def register_sprint4_t6_routes(app) -> None:
         # the finding-detail wording (aiSummary/why/risks/next-steps, the
         # aiRationale fallback, corroboration label) to the domain language.
         # No-op when no template is active — technical fields are untouched.
-        terminology = resolve_run_terminology(run_id)
-
         # ENT-2: corroboration fields live on the stored opportunity record.
         # Load the opps list once so both branches can read them.
         stored_opps = db.run_kv_get("opps", run_id, []) or []
         stored_opp = next((o for o in stored_opps if o.get("id") == opp_id), None)
-        stored_opp = apply_terminology(stored_opp, terminology)
+        stored_opp = apply_run_terminology(stored_opp, run_id)
         corroboration = _corroboration_fields(stored_opp)
         # 2.0-A1 T1: the intervention projection also lives on the stored
         # opportunity (written by the run pipeline). Served as stored.
@@ -736,7 +736,7 @@ def register_sprint4_t6_routes(app) -> None:
         # R18-C1 T4: adapt the LLM narrative fields to the active template's
         # domain language before serving. Numeric/graph/temporal fields on
         # opp_data are outside the terminology allowlist and stay verbatim.
-        opp_data = apply_terminology(opp_data, terminology)
+        opp_data = apply_run_terminology(opp_data, run_id)
 
         temporal = _temporal_payload(run, run_id, opp_id, opp_data)
 
@@ -748,6 +748,11 @@ def register_sprint4_t6_routes(app) -> None:
             aiSuggestedNextSteps=opp_data.get("aiSuggestedNextSteps", []),
             llmGenerated=opp_data.get("llmGenerated", False),
             llmModel=opp_data.get("llmModel"),
+            aiNarrativeAvailable=opp_data.get(
+                "aiNarrativeAvailable",
+                opp_data.get("ai_narrative_available"),
+            ),
+            aiModeLabel=opp_data.get("aiModeLabel", opp_data.get("ai_mode_label")),
             baseline_context=opp_data.get("baseline_context"),
             trend_direction=opp_data.get("trend_direction"),
             anomaly_score=opp_data.get("anomaly_score"),
@@ -804,9 +809,9 @@ def register_sprint4_t6_routes(app) -> None:
 
         # R18-C1 T4: adapt the run-level executive summary to the active
         # template's domain language (this is the executive-reporting surface).
-        executive_summary = apply_terminology(
+        executive_summary = apply_run_terminology(
             {"executiveSummary": enrichment.get("executiveSummary", "")},
-            resolve_run_terminology(run_id),
+            run_id,
         )["executiveSummary"]
 
         return RunEnrichment(
