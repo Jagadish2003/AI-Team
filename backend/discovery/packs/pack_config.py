@@ -83,6 +83,71 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         ),
     },
 
+    # 2.0-D1 T1 — Financial Services Cloud pack registration.
+    #
+    # Registered on the EXISTING pack framework: identity, versioning, and
+    # terminology, following the shape every shipped pack already uses. The
+    # closest analogue is the "ncino" entry directly above — same underlying
+    # Salesforce connector, same BFSI domain family, same compliance posture —
+    # so this entry is a copy of that shape, not of "service_cloud".
+    #
+    # `detectors` is intentionally EMPTY at registration: the FSC detector set
+    # (servicing-request recurrence, referral/handoff friction, approval and
+    # review cycles, service-queue ageing, cross-object rework) lands in T2, and
+    # registering module paths before their modules exist would break the
+    # registry-wide detector-import sweeps (discovery/tests/test_focus_affinity.py,
+    # tests/contract/test_relationship_mapping.py). The FSC label file below
+    # already carries the wording for all five, keyed by their planned
+    # DETECTOR_IDs, so T2 only adds the modules and the paths here.
+    #
+    # This pack is deliberately NOT yet listed in any industry's `pack_hints`
+    # (industry_registry.py) nor bound to a Stack Builder template — that is the
+    # story's registry-honesty rule (the FSC entry appears on a selectable
+    # surface only when the pack actually ships) and is T4's scope.
+    "financial_services_cloud": {
+        "packId":        "financial_services_cloud",
+        # R16-B1 §4: stamped onto every opportunity this pack produces. Bumping
+        # this is a LIVE obligation, not a one-time field — bump it in the same PR
+        # as ANY change to this pack's detectors, scorer, or corroboration rules
+        # (T2/T3 both bump it). 2.0-A2 outcome tracking reads this version to
+        # flag a measurement taken across a pack-version boundary as a
+        # confounder, so a version that never moves silently breaks that story.
+        # A pinned fingerprint in test_financial_services_cloud_pack_registration.py
+        # fails the build if the pack surface changes without an intentional bump.
+        "packVersion":   "1.0.0",
+        "packName":      "Financial Services Cloud",
+        "domain":        "financial_services_cloud",
+        "pack_domain":   "financial_services_cloud",
+        # T2 populates: discovery.detectors.fsc_* (see the label file's keys).
+        "detectors":     [],
+        # Terminology is DATA, not code: every user-visible FSC string
+        # (households, relationship groups, financial accounts, service
+        # processes, referrals) resolves through this label file, so the pack
+        # code stays terminology-neutral.
+        "ui_labels_path": str(_PACKS_DIR / "financial_services_cloud_ui_labels.json"),
+        "llm_context": (
+            "Salesforce Financial Services Cloud (FSC) client-servicing analysis "
+            "for retail banking and wealth management. "
+            "Speak FSC language: households, relationship groups, financial "
+            "accounts, service processes, referrals, action plans, and client "
+            "interactions. "
+            "Focus on servicing-request recurrence, referral and handoff friction "
+            "between teams, approval and review cycle time, ageing in service "
+            "queues, and cross-object rework across household, financial account, "
+            "and service process records. "
+            "Use banking and wealth-servicing operations language — not "
+            "Salesforce admin language. "
+            "Reference households, relationship groups, teams, queues, and "
+            "service processes only — never an individual client, adviser, or "
+            "banker. "
+            "Regulatory compliance (FCA, SEC, OCC) is the highest-weight signal "
+            "category; approval audit trails and review documentation are "
+            "priority friction patterns. "
+            "IMPORTANT: never suggest automated credit or compliance decisions. "
+            "All credit, suitability, and compliance decisions require human "
+            "approval."
+        ),
+    },
 
     "strs_benefits": {
         "packId":        "strs_benefits",
@@ -432,6 +497,15 @@ def is_ncino_pack(pack_id: Optional[str] = None) -> bool:
     Returns True when the active pack is nCino domain.
     """
     return get_pack(pack_id)["domain"] == "ncino"
+
+
+def is_financial_services_cloud_pack(pack_id: Optional[str] = None) -> bool:
+    """Return True when the active pack is the Financial Services Cloud pack (2.0-D1).
+
+    Used in runner.py and scorer for pack routing.  Follows the identical
+    pattern as is_ncino_pack() and is_security_ops_pack().
+    """
+    return get_pack(pack_id)["domain"] == "financial_services_cloud"
 
 
 def is_sqlserver_opsignal_pack(pack_id: Optional[str] = None) -> bool:
