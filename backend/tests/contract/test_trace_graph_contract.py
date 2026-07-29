@@ -1,13 +1,16 @@
-"""2.0-B1 T1 contract tests — the trace graph API.
+"""2.0-B1 T1/T2 contract tests — the trace graph API.
 
 Covers:
   AC1 — a finding expands to a complete chain terminating in source records;
         every hop carries origin, connector, run id, and timestamp.
   AC2 — joined claims display the join type and correlation window used; a
         claim whose join is outside window cannot appear.
+  AC3 — which retrieval candidates were proposed vs. actually used are both
+        shown in the trace.
 
 Mirrors test_evidence_pointer_trace.py's two-layer pattern:
-  * Pure / monkeypatched unit tests (no DB) pin the tenancy guard.
+  * Pure / monkeypatched unit tests (no DB) pin the tenancy guard and the
+    retrieval-candidate response shape.
   * End-to-end tests drive the real route + tenancy middleware over a live
     offline run.
 """
@@ -160,6 +163,83 @@ def test_trace_graph_returns_full_chain(client: TestClient, traced_run_id, first
     for hop in data["hops"]:
         if hop is not root:
             assert hop["from_hop_id"] is not None
+
+
+def test_trace_graph_retrieval_candidates_field_always_present(
+    client: TestClient, traced_run_id, first_opp_id
+):
+    """AC3 — the response always carries the retrieval-candidate surface
+    (possibly empty, when nothing was ingested/retrieved for this run), never
+    missing — the same 'always present, sometimes empty' contract as the
+    other trace fields."""
+    r = client.get(
+        f"/api/runs/{traced_run_id}/opportunities/{first_opp_id}/trace-graph",
+        headers=_auth(),
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data["retrieval_candidates"], list)
+    assert isinstance(data["retrieval_candidates_used_count"], int)
+    assert isinstance(data["retrieval_candidates_unused_count"], int)
+    assert data["retrieval_candidates_used_count"] + data["retrieval_candidates_unused_count"] \
+        == len(data["retrieval_candidates"])
+    for candidate in data["retrieval_candidates"]:
+        for key in ("chunk_id", "used", "decision"):
+            assert key in candidate
+
+
+def test_trace_graph_surfaces_used_and_unused_retrieval_candidates(
+    client: TestClient, traced_run_id, first_opp_id, monkeypatch
+):
+    """AC3 end-to-end through the real route: with a trace whose
+    retrieval_candidates mix used and unused entries, both sides serialise
+    correctly and the used/unused counts match."""
+    from app.trace_graph import (
+        HOP_FINDING,
+        FindingTrace,
+        RetrievalCandidateTrace,
+        TraceHop,
+    )
+
+    fake_trace = FindingTrace(
+        opportunity_id=first_opp_id, run_id=traced_run_id,
+        hops=[TraceHop(
+            hop_id=f"finding:{first_opp_id}", hop_type=HOP_FINDING, label="x",
+            origin="observed", connector=None, run_id=traced_run_id,
+            timestamp=None, from_hop_id=None,
+        )],
+        joins=[],
+        complete=True,
+        retrieval_candidates=[
+            RetrievalCandidateTrace(
+                chunk_id="c1", used=True, decision="included",
+                reason="included@position_1", confidence=0.92, origin="observed",
+                source_system="confluence", source_artifact="page-42",
+                content_snippet="relevant text", is_stale=False,
+            ),
+            RetrievalCandidateTrace(
+                chunk_id="c2", used=False, decision="excluded",
+                reason="below_confidence_floor", confidence=0.02, origin="observed",
+                source_system="git", source_artifact="README.md",
+                content_snippet="unrelated text", is_stale=False,
+            ),
+        ],
+    )
+    monkeypatch.setattr("app.trace_graph.load_finding_trace", lambda run_id, opp_id: fake_trace)
+
+    r = client.get(
+        f"/api/runs/{traced_run_id}/opportunities/{first_opp_id}/trace-graph",
+        headers=_auth(),
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["retrieval_candidates_used_count"] == 1
+    assert data["retrieval_candidates_unused_count"] == 1
+    by_id = {c["chunk_id"]: c for c in data["retrieval_candidates"]}
+    assert by_id["c1"]["used"] is True
+    assert by_id["c1"]["source_system"] == "confluence"
+    assert by_id["c2"]["used"] is False
+    assert by_id["c2"]["reason"] == "below_confidence_floor"
 
 
 def test_trace_graph_isolated_by_org(client: TestClient, traced_run_id, first_opp_id, monkeypatch):

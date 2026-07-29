@@ -42,6 +42,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
+from . import db
+
 logger = logging.getLogger(__name__)
 
 # ── Hop / origin vocabulary ─────────────────────────────────────────────────
@@ -164,6 +166,43 @@ class JoinTrace:
 
 
 @dataclass(frozen=True)
+class RetrievalCandidateTrace:
+    """2.0-B1 T2 (AC3): one retrieval candidate context assembly considered
+    for this finding — used or not.
+
+    "Retrieval proposes, assembly decides" (context_assembly.py): every
+    candidate the retrieval evidence source proposed gets exactly one of
+    these, so both sides of the decision are visible — not just the ones
+    that made it into the finding's narrative.
+    """
+
+    chunk_id: str
+    used: bool
+    decision: str
+    reason: Optional[str]
+    confidence: Optional[float]
+    origin: Optional[str]
+    source_system: Optional[str]
+    source_artifact: Optional[str]
+    content_snippet: Optional[str]
+    is_stale: Optional[bool]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "chunk_id": self.chunk_id,
+            "used": self.used,
+            "decision": self.decision,
+            "reason": self.reason,
+            "confidence": self.confidence,
+            "origin": self.origin,
+            "source_system": self.source_system,
+            "source_artifact": self.source_artifact,
+            "content_snippet": self.content_snippet,
+            "is_stale": self.is_stale,
+        }
+
+
+@dataclass(frozen=True)
 class FindingTrace:
     """The full trace graph for one opportunity."""
 
@@ -173,8 +212,10 @@ class FindingTrace:
     joins: List[JoinTrace]
     complete: bool
     truncated: bool = False
+    retrieval_candidates: List[RetrievalCandidateTrace] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
+        used = sum(1 for c in self.retrieval_candidates if c.used)
         return {
             "opportunity_id": self.opportunity_id,
             "run_id": self.run_id,
@@ -184,6 +225,9 @@ class FindingTrace:
             "join_count": len(self.joins),
             "complete": self.complete,
             "truncated": self.truncated,
+            "retrieval_candidates": [c.to_dict() for c in self.retrieval_candidates],
+            "retrieval_candidates_used_count": used,
+            "retrieval_candidates_unused_count": len(self.retrieval_candidates) - used,
         }
 
 
@@ -198,7 +242,40 @@ def _empty_trace(opportunity: Any, run_id: Any) -> FindingTrace:
         joins=[],
         complete=False,
         truncated=False,
+        retrieval_candidates=[],
     )
+
+
+def _retrieval_candidate_traces(
+    candidates: Optional[Sequence[Mapping[str, Any]]],
+) -> List[RetrievalCandidateTrace]:
+    """Build RetrievalCandidateTrace entries from stored candidate dicts
+    (app.retrieval_trace's persisted shape). Skips malformed entries rather
+    than raising — a trace degrades, it never breaks."""
+    result: List[RetrievalCandidateTrace] = []
+    for candidate in candidates or ():
+        if not isinstance(candidate, Mapping):
+            continue
+        chunk_id = candidate.get("chunk_id")
+        if not chunk_id:
+            continue
+        decision = candidate.get("decision")
+        used = candidate.get("used")
+        if used is None:
+            used = decision == "included"
+        result.append(RetrievalCandidateTrace(
+            chunk_id=str(chunk_id),
+            used=bool(used),
+            decision=str(decision or ("included" if used else "excluded")),
+            reason=candidate.get("reason"),
+            confidence=candidate.get("confidence"),
+            origin=candidate.get("origin"),
+            source_system=candidate.get("source_system"),
+            source_artifact=candidate.get("source_artifact"),
+            content_snippet=candidate.get("content_snippet"),
+            is_stale=candidate.get("is_stale"),
+        ))
+    return result
 
 
 # ── Hop builders ─────────────────────────────────────────────────────────────
@@ -368,6 +445,7 @@ def build_finding_trace(
     evidence_items: Optional[Sequence[Mapping[str, Any]]] = None,
     pointers: Optional[Sequence[Mapping[str, Any]]] = None,
     run_completed_at: Optional[str] = None,
+    retrieval_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> FindingTrace:
     """Build the full provenance chain for one finding.
 
@@ -388,6 +466,11 @@ def build_finding_trace(
         derived from; a pointer with no match attaches directly under the
         finding.
     run_completed_at : optional ISO timestamp stamped on the finding root hop.
+    retrieval_candidates : (2.0-B1 T2 / AC3) this opportunity's stored
+        retrieval-candidate records (see
+        app.retrieval_trace.get_retrieval_candidates_for_opportunity) — every
+        candidate context assembly considered, used and unused alike, so
+        "retrieval proposes, assembly decides" is visible on both sides.
 
     Never raises: any unexpected shape degrades to the emptiest valid trace
     (the finding hop alone, or nothing at all) rather than propagating an
@@ -400,6 +483,7 @@ def build_finding_trace(
             evidence_items=evidence_items or (),
             pointers=pointers or (),
             run_completed_at=run_completed_at,
+            retrieval_candidates=retrieval_candidates or (),
         )
     except Exception as exc:  # noqa: BLE001 — trace building is advisory.
         logger.warning(
@@ -418,6 +502,7 @@ def _build_finding_trace(
     evidence_items: Sequence[Mapping[str, Any]],
     pointers: Sequence[Mapping[str, Any]],
     run_completed_at: Optional[str],
+    retrieval_candidates: Sequence[Mapping[str, Any]] = (),
 ) -> FindingTrace:
     opp_id = str(opportunity.get("id") or "")
     run_id = str(run_id or "")
@@ -512,6 +597,7 @@ def _build_finding_trace(
         joins=joins,
         complete=len(hops) > 1,
         truncated=truncated,
+        retrieval_candidates=_retrieval_candidate_traces(retrieval_candidates),
     )
 
 
@@ -528,7 +614,6 @@ def load_finding_trace(run_id: str, opp_id: str) -> Optional[FindingTrace]:
     (it has the request org context), exactly like
     evidence_pointers.get_evidence_pointers_for_opportunity.
     """
-    from . import db
     from .evidence_pointers import get_evidence_pointers_for_opportunity
 
     opps = db.run_kv_get("opps", run_id, []) or []
@@ -547,6 +632,17 @@ def load_finding_trace(run_id: str, opp_id: str) -> Optional[FindingTrace]:
         )
         pointers = []
 
+    try:
+        from .retrieval_trace import get_retrieval_candidates_for_opportunity
+
+        retrieval_candidates = get_retrieval_candidates_for_opportunity(run_id, opp_id)
+    except Exception as exc:  # noqa: BLE001 — retrieval candidates are advisory here.
+        logger.debug(
+            "trace_graph: retrieval-candidate load failed for run=%s opp=%s: %s",
+            run_id, opp_id, exc,
+        )
+        retrieval_candidates = []
+
     run = None
     try:
         run = db.get_run(run_id)
@@ -562,6 +658,7 @@ def load_finding_trace(run_id: str, opp_id: str) -> Optional[FindingTrace]:
         evidence_items=evidence_items,
         pointers=pointers,
         run_completed_at=run_completed_at,
+        retrieval_candidates=retrieval_candidates,
     )
 
 
@@ -573,6 +670,7 @@ __all__ = [
     "ORIGIN_INFERRED",
     "TraceHop",
     "JoinTrace",
+    "RetrievalCandidateTrace",
     "FindingTrace",
     "build_finding_trace",
     "load_finding_trace",
