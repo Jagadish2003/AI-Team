@@ -91,14 +91,14 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
     # Salesforce connector, same BFSI domain family, same compliance posture —
     # so this entry is a copy of that shape, not of "service_cloud".
     #
-    # `detectors` is intentionally EMPTY at registration: the FSC detector set
-    # (servicing-request recurrence, referral/handoff friction, approval and
-    # review cycles, service-queue ageing, cross-object rework) lands in T2, and
-    # registering module paths before their modules exist would break the
-    # registry-wide detector-import sweeps (discovery/tests/test_focus_affinity.py,
-    # tests/contract/test_relationship_mapping.py). The FSC label file below
-    # already carries the wording for all five, keyed by their planned
-    # DETECTOR_IDs, so T2 only adds the modules and the paths here.
+    # 2.0-D1 T2 populated `detectors` with the five FSC detectors — 80% reuse, as
+    # the story intended: four are existing detector shapes recomposed for FSC
+    # (repetition -> servicing recurrence, handoff_friction -> referral friction,
+    # approval_delay+approval_bottleneck -> approval/review cycle,
+    # cross_system_echo -> cross-object rework) and only service-queue ageing is
+    # new, itself modelled on cloud_ops_queue_ageing's per-queue-own-baseline rule.
+    # Each module documents which detector it was composed from and what did not
+    # transfer.
     #
     # This pack is deliberately NOT yet listed in any industry's `pack_hints`
     # (industry_registry.py) nor bound to a Stack Builder template — that is the
@@ -108,18 +108,33 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packId":        "financial_services_cloud",
         # R16-B1 §4: stamped onto every opportunity this pack produces. Bumping
         # this is a LIVE obligation, not a one-time field — bump it in the same PR
-        # as ANY change to this pack's detectors, scorer, or corroboration rules
-        # (T2/T3 both bump it). 2.0-A2 outcome tracking reads this version to
-        # flag a measurement taken across a pack-version boundary as a
-        # confounder, so a version that never moves silently breaks that story.
-        # A pinned fingerprint in test_financial_services_cloud_pack_registration.py
-        # fails the build if the pack surface changes without an intentional bump.
-        "packVersion":   "1.0.0",
+        # as ANY change to this pack's detectors, scorer, or corroboration rules.
+        # 2.0-A2 outcome tracking reads this version to flag a measurement taken
+        # across a pack-version boundary as a confounder, so a version that never
+        # moves silently breaks that story. A pinned fingerprint in
+        # test_financial_services_cloud_pack_registration.py fails the build if the
+        # pack surface changes without an intentional bump.
+        #
+        # 1.0.0 -> 1.1.0 by T2: the five detectors + their externalised thresholds
+        # are a behaviour change, and this is the intentional bump that guard
+        # exists to force. Keep this in lockstep with packVersion in
+        # financial_services_cloud_pack_config.json (a test pins the two together).
+        "packVersion":   "1.1.0",
         "packName":      "Financial Services Cloud",
         "domain":        "financial_services_cloud",
         "pack_domain":   "financial_services_cloud",
-        # T2 populates: discovery.detectors.fsc_* (see the label file's keys).
-        "detectors":     [],
+        "detectors": [
+            "discovery.detectors.fsc_servicing_request_recurrence",
+            "discovery.detectors.fsc_referral_handoff_friction",
+            "discovery.detectors.fsc_approval_review_cycle",
+            "discovery.detectors.fsc_service_queue_ageing",
+            "discovery.detectors.fsc_cross_object_rework",
+        ],
+        # T2: firing thresholds, the AC5 aggregation floor, and terminology load
+        # from this external file (via financial_services_cloud_config.py) rather
+        # than from inline detector constants, so replacing a PROVISIONAL number
+        # is a config edit. T3 fills its `calibration.impact_weights`.
+        "config_path":   str(_PACKS_DIR / "financial_services_cloud_pack_config.json"),
         # Terminology is DATA, not code: every user-visible FSC string
         # (households, relationship groups, financial accounts, service
         # processes, referrals) resolves through this label file, so the pack
