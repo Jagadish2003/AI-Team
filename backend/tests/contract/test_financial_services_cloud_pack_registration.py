@@ -184,11 +184,15 @@ class TestVersionBumpGuard:
     the pins below. T2 (detectors) and T3 (scorer calibration) both trip this.
     """
 
-    # Pinned to financial_services_cloud packVersion 1.0.0 — registration state:
-    # empty detector list, five FSC label entries, three carrying a populated
-    # compliance guardrail.
-    PINNED_VERSION = "1.0.0"
-    PINNED_FINGERPRINT = "4aff8571a40fee24cd1b2442972762fe9203080497f0481f1cc09b74fcc23871"
+    # Pinned to financial_services_cloud packVersion 1.1.0.
+    #
+    # T1 registration state was 1.0.0 (empty detector list, five label entries,
+    # three guardrails). 2.0-D1 T2 added the five FSC detector modules — a
+    # behaviour change — so it bumped packVersion 1.0.0 -> 1.1.0 and updated these
+    # pins. That is exactly the intentional pack-version update this guard exists
+    # to force, and it is the first time it has fired in anger.
+    PINNED_VERSION = "1.1.0"
+    PINNED_FINGERPRINT = "a03d6b1cebb1cf9d287d3a81a615a3c804c75c3faa0ac02d8d626d8496e5182a"
 
     @staticmethod
     def _surface_fingerprint():
@@ -228,14 +232,49 @@ class TestDetectorPaths:
         assert isinstance(_pack_config().get_detector_modules(PACK_ID), list)
 
     def test_every_registered_detector_path_is_importable(self):
-        """Vacuously true at registration (empty list); a real guard once T2
-        populates it. The registry-wide sweeps in
+        """A real guard since T2 populated the list. The registry-wide sweeps in
         discovery/tests/test_focus_affinity.py and
         tests/contract/test_relationship_mapping.py import these same paths, so a
         path registered before its module exists breaks the build."""
         for path in _pack_config().get_detector_modules(PACK_ID):
             assert isinstance(path, str) and path
             importlib.import_module(path)
+
+    def test_pack_ships_the_five_fsc_detectors(self):
+        """T2 populated the detector list the T1 label file was keyed for."""
+        paths = _pack_config().get_detector_modules(PACK_ID)
+        assert len(paths) == 5, paths
+        for fragment in ("servicing_request_recurrence", "referral_handoff_friction",
+                         "approval_review_cycle", "service_queue_ageing",
+                         "cross_object_rework"):
+            assert any(fragment in p for p in paths), f"no detector for {fragment}"
+
+    def test_each_detector_id_matches_a_label_entry(self):
+        """The label file's keys must be the detectors' real DETECTOR_IDs.
+
+        T1 keyed the labels on PLANNED ids. If T2 had named a module's
+        DETECTOR_ID differently, runner.py's per-detector label lookup would miss
+        and every FSC finding would render with a raw detector id as its title —
+        silently, since a missing label falls back rather than raising.
+        """
+        m = _pack_config()
+        labels = _labels()
+        for path in m.get_detector_modules(PACK_ID):
+            detector_id = importlib.import_module(path).DETECTOR_ID
+            assert detector_id in labels, (
+                f"{path} declares DETECTOR_ID {detector_id!r} which has no entry in "
+                f"the FSC label file — its findings would render untitled"
+            )
+
+    def test_label_file_has_no_entry_without_a_detector(self):
+        """The reverse direction: no orphan label entry."""
+        m = _pack_config()
+        shipped = {
+            importlib.import_module(p).DETECTOR_ID
+            for p in m.get_detector_modules(PACK_ID)
+        }
+        orphans = set(_detector_label_entries()) - shipped
+        assert orphans == set(), f"label entries with no detector: {orphans}"
 
 
 # ── AC3 — terminology is pack config, in FSC language ────────────────────────────
@@ -477,11 +516,37 @@ class TestNoNewMachinery:
         assert m.normalize_pack_ids([PACK_ID, "ncino"]) == [PACK_ID, "ncino"]
         assert m.normalize_pack_ids([PACK_ID, PACK_ID]) == [PACK_ID]
 
-    def test_pack_has_no_externalised_scorer_calibration_yet(self):
-        """T1 is registration + labels. Scorer calibration as pack config is T3,
-        so no config_path is claimed here — claiming one would assert a
-        calibration file that does not exist."""
-        assert _pack_config().get_pack_config_path(PACK_ID) is None
+    def test_pack_config_path_registered_and_exists(self):
+        """T2 externalised the firing thresholds, so a config_path now exists.
+
+        (At T1 this asserted `is None`: registration claimed no config file
+        because none existed. T2 added one — thresholds and the aggregation floor
+        — and T3 fills its calibration.impact_weights.)
+        """
+        path = _pack_config().get_pack_config_path(PACK_ID)
+        assert path is not None
+        assert path.endswith("financial_services_cloud_pack_config.json")
+        assert os.path.isfile(path), f"config_path file not found: {path}"
+
+    def test_registry_and_config_versions_do_not_drift(self):
+        m = _pack_config()
+        try:
+            from discovery.packs.financial_services_cloud_config import load_fsc_config
+        except ModuleNotFoundError:  # pragma: no cover
+            from backend.discovery.packs.financial_services_cloud_config import (  # type: ignore
+                load_fsc_config,
+            )
+        assert load_fsc_config().pack_version == m.get_pack_version(PACK_ID)
+
+    def test_scorer_impact_weights_are_still_t3s_job(self):
+        """T2 must not invent scorer weights — an invented weight silently ranks."""
+        try:
+            from discovery.packs.financial_services_cloud_config import get_calibration
+        except ModuleNotFoundError:  # pragma: no cover
+            from backend.discovery.packs.financial_services_cloud_config import (  # type: ignore
+                get_calibration,
+            )
+        assert get_calibration().impact_weights == {}
 
 
 # ── Registry honesty (story item 5) ──────────────────────────────────────────────
