@@ -71,6 +71,7 @@ from .routes_entities import register_entities_routes
 from .routes_causal import register_causal_routes
 from .routes_graph import register_graph_routes
 from .routes_trace_graph import register_trace_graph_routes
+from .routes_evidence_export import register_evidence_export_routes
 from .routes_retrieval import register_retrieval_routes
 from .routes_run_health import register_run_health_routes
 from .routes_auth import register_auth_routes
@@ -346,6 +347,10 @@ register_graph_routes(app)
 # with MSP-B7 join/correlation-window surfacing). Registered alongside the
 # other graph/trace routes.
 register_trace_graph_routes(app)
+# 2.0-B1 T4 (AC4): signed evidence-export bundles (per finding + per report),
+# HMAC-signed with the installation's license report_key. Registered after the
+# trace-graph routes it bundles.
+register_evidence_export_routes(app)
 # R18-B2 T6: retrieval freshness metrics for the run-health dashboard (AC7).
 register_retrieval_routes(app)
 # R18-C2 T1: Run-Health Dashboard aggregation endpoints (connectors, runs,

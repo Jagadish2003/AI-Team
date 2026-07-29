@@ -63,6 +63,13 @@ INGESTION_CHECKPOINT_RESET = "ingestion_checkpoint_reset"
 # match. The dedicated decision-history table is the domain record; this event
 # also places the action in the organisation-wide audit stream.
 RUNBOOK_MATCH_DECIDED = "runbook_match_decided"
+# 2.0-B1 T4: a signed evidence-export bundle was generated. The bundle leaves the
+# deployment (auditors/regulators/board packs), so WHO exported WHAT and WHEN is
+# itself audit-relevant. There is no request-logging middleware in this app — a
+# GET is not auto-audited — so routes_evidence_export.py calls log_event()
+# explicitly. The payload carries the bundle FINGERPRINT only (scope, ids, record
+# count, content root, signature prefix), never bundle content.
+EVIDENCE_EXPORT_GENERATED = "evidence_export_generated"
 
 # ---------------------------------------------------------------------------
 # Registry — every accepted event type listed here.
@@ -85,6 +92,7 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     SCHEMA_DISCOVERED,
     INGESTION_CHECKPOINT_RESET,
     RUNBOOK_MATCH_DECIDED,
+    EVIDENCE_EXPORT_GENERATED,
 })
 
 # ---------------------------------------------------------------------------

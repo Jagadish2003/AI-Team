@@ -316,6 +316,62 @@ posture per provider.
 
 ---
 
+## Signed Evidence Export (2.0-B1 T4)
+
+A finding — or a whole run's report — can be exported as a **signed, offline
+bundle** for auditors, regulators, and board packs. The bundle carries the
+finding's full provenance trace, the evidence records it references, the
+evidence-pointer spine, and the run + pack versions that produced it.
+
+| | |
+|---|---|
+| Per finding | `GET /api/runs/{run_id}/opportunities/{opp_id}/evidence-export` |
+| Per run report | `GET /api/runs/{run_id}/evidence-export` |
+| Download form | append `?download=1` to receive the canonical bytes as an attachment |
+| Role | `analyst` or above (the underlying trace is viewer-readable; issuing a *signed, distributable attestation* sits above plain viewer) |
+| Envelope | `{bundle, signature, algorithm}` — `algorithm` is `HMAC-SHA256` |
+
+**Signing key.** No new secret is introduced. The bundle is signed with the
+per-installation `report_key` carried in the Ed25519-signed license payload —
+the same key, and the same resolver, as the signed usage report. An installation
+with no `report_key` gets **HTTP 400 naming the reason**; an unsigned bundle is
+never returned. (Asymmetric signing is not possible at runtime: the CloudFulcrum
+Ed25519 *private* key never ships inside the product, so a verifier needs the
+installation's `report_key` — the same trust model as the usage report.)
+
+**Verifying a bundle (third party).** Hand the auditor the bundle file plus the
+installation's `report_key`. They verify **offline**, with no access to the
+deployment and no dependencies beyond the Python standard library:
+
+```bash
+python scripts/verify_evidence_export.py bundle.json --report-key <report_key>
+# or: REPORT_KEY=<report_key> python scripts/verify_evidence_export.py bundle.json
+```
+
+Exit code `0` = verified, `1` = not verified. Any altered byte fails. The script
+is deliberately self-contained and short enough to audit by eye; a unit test pins
+it against the product's own signer so the two cannot drift.
+
+**Two layers of tamper evidence.** The HMAC signature covers the whole canonical
+bundle, so any altered byte anywhere fails. Inside the signed bundle, an
+`integrity` block additionally records a per-record `content_hash` folded into a
+`content_root`, so a verifier can see *which* record changed — and because that
+block is itself signed, editing a record and recomputing its hash still fails the
+signature.
+
+**What is excluded from the export.** Secret redaction runs over exported content
+before signing, and the SecOps aggregation floor is enforced — a bundle that would
+enumerate host × vulnerability pairs is **refused**, not emitted with a caveat.
+The run's decision audit is deliberately outside that sweep: its actor identity is
+the point of an audit trail and an auditor requires it (the audit list has a fixed
+shape and cannot carry a security enumeration).
+
+**Bundle sizing.** A report-scope bundle covers at most `MAX_REPORT_FINDINGS`
+(200) findings; exceeding that sets `truncated: true` on the bundle rather than
+silently shortening an artifact someone will audit.
+
+---
+
 ## Login Rate Limiting (AUTH-1)
 
 AUTH-1 adds a `login_attempts` table (created by Alembic migration `0004`) that backs
