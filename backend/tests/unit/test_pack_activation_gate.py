@@ -85,6 +85,22 @@ def incompatible_packs(monkeypatch):
     return packs
 
 
+@pytest.fixture(autouse=True)
+def offline_pack_state():
+    """Keep this suite DB-free.
+
+    Activation resolution reads the org's pack-state store (2.0-C1 T2). Injecting
+    the in-memory store keeps that read local — the read is fail-soft either way,
+    but a Postgres round trip does not belong in a unit suite. No pack is disabled
+    in it, so every test here exercises the compatibility half unchanged.
+    """
+    from app.pack_state import InMemoryPackStateStore, set_pack_state_store
+
+    set_pack_state_store(InMemoryPackStateStore())
+    yield
+    set_pack_state_store(None)
+
+
 @pytest.fixture
 def captured_events(monkeypatch):
     """Capture telemetry instead of writing it (no DB)."""

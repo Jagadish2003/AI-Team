@@ -556,16 +556,20 @@ def _run_trackb_and_persist(
 def _gate_pack_activation(
     run_id: str, run: Dict[str, Any], body: "ComputeRequest"
 ) -> None:
-    """Refuse an incompatible pack selection before compute starts (2.0-C1 T1).
+    """Resolve pack activation before compute starts (2.0-C1 T1 + T2).
 
     Resolves the SAME effective selection ``_run_trackb_and_persist`` resolves —
     the launch record's ``packIds`` plus the request's ``pack_ids``/``pack`` — so
-    the synchronous refusal and the background execution can never disagree about
-    which packs were selected. Raises HTTP 409 with a reason naming every unmet
-    requirement (AC1).
+    the synchronous check and the background execution can never disagree about
+    which packs were selected.
+
+    Refuses with HTTP 409 when a pack is incompatible (AT-826 / AC1) or when EVERY
+    selected pack is disabled (AT-827). A disabled pack alongside runnable ones is
+    excluded, not refused — the runner re-resolves the same decision and drops it,
+    so it cannot execute (AC2).
     """
     from .middleware.tenancy import get_current_org_id_optional
-    from .pack_activation import gate_pack_activation
+    from .pack_activation import AllPacksDisabledError, resolve_activatable_packs
     from discovery.packs.pack_compatibility import PackIncompatibleError
     from discovery.packs.pack_config import normalize_pack_ids
 
@@ -578,10 +582,10 @@ def _gate_pack_activation(
         _org_id_for_run(run, get_current_org_id_optional() or "default") or "default"
     )
     try:
-        gate_pack_activation(
+        resolve_activatable_packs(
             org_id=org_id, pack_ids=selected_pack_ids, run_id=run_id
         )
-    except PackIncompatibleError as exc:
+    except (AllPacksDisabledError, PackIncompatibleError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 

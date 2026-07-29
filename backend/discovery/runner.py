@@ -165,6 +165,80 @@ def _record_pack_execution(
     return detector_ids
 
 
+def _resolve_pack_activation(
+    *,
+    org_id: str,
+    run_id: Optional[str],
+    pack_configs: List[Tuple[Optional[str], Dict[str, Any]]],
+) -> Dict[str, Any]:
+    """Apply the 2.0-C1 activation rules at the execution point.
+
+    Drops this org's DISABLED packs from the selection (AT-827) and asserts the
+    remainder is compatible (AT-826). Returns the narrowed pack configs plus the
+    compatibility reports and the excluded list for the run payload.
+
+    ``AllPacksDisabledError`` and ``PackIncompatibleError`` both propagate — a run
+    that cannot legitimately execute its packs must fail, not quietly do less than
+    it was asked to.
+
+    The activation resolution lives in ``app.pack_activation`` because it needs the
+    org-scoped pack-state store; the import is lazy and local, matching how this
+    module already reaches for ``app.db`` / ``app.telemetry``.
+    """
+    from app.pack_activation import resolve_activatable_packs
+
+    selected_ids = [cfg["packId"] for _, cfg in pack_configs]
+    decision = resolve_activatable_packs(
+        org_id=org_id, pack_ids=selected_ids, run_id=run_id
+    )
+
+    if decision.excluded:
+        logger.info(
+            "Run %s: skipping disabled pack(s) %s", run_id, decision.excluded_pack_ids
+        )
+        # Also record it run-scoped, so an analyst opening this run sees why a pack
+        # they selected produced nothing. The launch edge writes the same key; a
+        # direct/CLI run reaches the runner without ever touching that edge, so this
+        # is the only record for those. Non-blocking: the exclusion is already
+        # logged and emitted as telemetry, and the run itself is perfectly valid.
+        if run_id:
+            try:
+                from app.db import run_kv_get, run_kv_set
+
+                existing = run_kv_get("excluded_packs", run_id, []) or []
+                seen = {
+                    str(row.get("packId"))
+                    for row in existing
+                    if isinstance(row, dict)
+                }
+                run_kv_set(
+                    "excluded_packs",
+                    run_id,
+                    list(existing)
+                    + [
+                        item.to_dict()
+                        for item in decision.excluded
+                        if item.pack_id not in seen
+                    ],
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Could not record excluded packs for run %s (non-blocking)",
+                    run_id,
+                    exc_info=True,
+                )
+
+    activated_ids = set(decision.activated_pack_ids)
+    narrowed = [
+        (sel, cfg) for sel, cfg in pack_configs if cfg["packId"] in activated_ids
+    ]
+    return {
+        "pack_configs": narrowed,
+        "compatibility": decision.activated,
+        "excluded": [item.to_dict() for item in decision.excluded],
+    }
+
+
 def build_org_context(sf_data: Dict, sn_data: Dict, jira_data: Dict) -> Dict[str, Any]:
     cm = sf_data.get("case_metrics") or {}
     fi = sf_data.get("flow_inventory") or {}
@@ -1492,7 +1566,6 @@ def run(
         is_cloud_ops_pack,
         is_security_ops_pack,
     )
-    from .packs.pack_compatibility import assert_selection_activatable
     from .packs.platform_capabilities import get_platform_version
 
     _selected_pack_args = normalize_pack_ids(
@@ -1517,17 +1590,30 @@ def run(
         _seen_pack_ids.add(_pid)
         _pack_configs.append((_sel, _cfg))
 
-    # 2.0-C1 T1 (AT-826 / AC1): the LAST activation edge — the execution point.
-    # The API edges (/stack-builder/launch and /runs/{id}/compute) already refuse an
-    # incompatible selection with a 409, but a CLI/direct caller reaches the runner
-    # without passing through either, so the gate is re-asserted here. Deliberately
-    # NOT wrapped in a try/except: an incompatible pack must fail the run loudly
-    # with a reason naming the unmet requirement, exactly like the cloud_ops
-    # four-part-contract violation. Every shipped pack satisfies its declaration
-    # against the current platform version, so this never fires for a normal run.
-    _pack_compatibility = assert_selection_activatable(
-        [_cfg["packId"] for _, _cfg in _pack_configs]
+    # 2.0-C1 (AT-826 T1 + AT-827 T2): the LAST activation edge — the EXECUTION
+    # point, and therefore the one that actually guarantees the two rules. The API
+    # edges already applied them, but a CLI/direct caller reaches the runner without
+    # passing through either, so both are re-asserted here:
+    #
+    #   T2 — a DISABLED pack is dropped from _pack_configs, so its detectors never
+    #        run. This is what makes "disabling stops future execution" (AC2) true
+    #        rather than merely enforced at the API. The exclusion is recorded on the
+    #        run payload and as telemetry, never silent.
+    #   T1 — an INCOMPATIBLE pack fails the run loudly. Deliberately NOT wrapped in
+    #        a try/except, exactly like the cloud_ops four-part-contract violation.
+    #
+    # Every shipped pack satisfies its declaration on the current platform version,
+    # so T1 never fires for a normal run; T2 fires only where a customer disabled
+    # something. `AllPacksDisabledError` propagates — a run with zero packs would
+    # otherwise report success having produced nothing.
+    _pack_activation = _resolve_pack_activation(
+        org_id=org_id,
+        run_id=run_id,
+        pack_configs=_pack_configs,
     )
+    _pack_configs = _pack_activation["pack_configs"]
+    _pack_compatibility = _pack_activation["compatibility"]
+    _excluded_packs = _pack_activation["excluded"]
 
     primary_pack_arg, pack_config = _pack_configs[0]
     pack_id = pack_config["packId"]
@@ -2902,6 +2988,10 @@ def run(
         "packCompatibility": {
             report.pack_id: report.to_dict() for report in _pack_compatibility
         },
+        # 2.0-C1 T2 (AT-827 / AC5): packs selected for this run that did NOT execute
+        # because the org has them disabled. Empty for the common case; present so
+        # run health can state the fact rather than leaving a gap unexplained.
+        "excludedPacks": _excluded_packs,
         "startedAt": started_at, "completedAt": datetime.now(timezone.utc).isoformat(),
         "inputs": org_ctx, "opportunities": opportunities,
         "perSystem": _per_system,

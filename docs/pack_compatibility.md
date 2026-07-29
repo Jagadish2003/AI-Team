@@ -1,18 +1,20 @@
-# Pack Compatibility Declaration & Activation Gate
+# Pack Compatibility, Lifecycle State & Activation
 
 **Story:** 2.0-C1 — Pack Compatibility, Safe Disable & Rollback (AT-822)
-**Task:** T1 — Compatibility declaration (AT-826)
-**Criterion discharged:** AC1 — *a pack declaring an unmet platform range cannot be
-activated; the refusal names the unmet requirement.*
+
+| Task | Delivers | Criterion |
+|------|----------|-----------|
+| **T1 — AT-826** | Compatibility declaration + activation gate | **AC1** — a pack declaring an unmet platform range cannot be activated; the refusal names the unmet requirement |
+| **T2 — AT-827** | Safe disable state machine (§8 below) | **AC2** — disabling stops future execution while all historical findings remain retrievable and correctly labelled |
 
 Packs are versioned and stamped per run (R16-B1 §4), 1.9 added two more packs, and
 1.9.1 enabled multi-pack runs. What was missing: what happens when a pack version
-is incompatible with the platform version. This is that gate.
+is incompatible with the platform version, and when a customer wants a pack turned
+off — **without destroying run history**.
 
-> **Scope.** This document covers COMPATIBILITY only. Safe disable (AT-827),
-> rollback (AT-828), never-delete-history (AT-829), and surfacing (AT-830) are
-> separate tasks layered on top of this gate. Nothing described here reads or
-> writes pack enable/disable state.
+> **Scope.** Rollback (AT-828), the exhaustive never-delete-history data-layer
+> sweep (AT-829), and UI surfacing (AT-830) are separate tasks layered on top of
+> what is described here. §1–§7 cover compatibility (T1); §8 covers disable (T2).
 
 ## 1. What a pack declares
 
@@ -196,4 +198,137 @@ letting a bad declaration surface as a runtime refusal in front of a customer:
 |-------|--------|
 | [`discovery/tests/test_pack_compatibility.py`](../backend/discovery/tests/test_pack_compatibility.py) | The rule: version parsing/ranges, concept availability, declaration integrity, refusal reasons, the runner gate. DB-free. |
 | [`tests/unit/test_pack_activation_gate.py`](../backend/tests/unit/test_pack_activation_gate.py) | The shared app-layer gate + refusal telemetry + the compute edge's selection resolution. DB-free. |
+| [`tests/unit/test_pack_state_machine.py`](../backend/tests/unit/test_pack_state_machine.py) | The disable state machine: transitions, idempotence, org isolation, append-only history, exclusion, labelling, fail-soft reads. DB-free. |
 | [`tests/contract/test_pack_compatibility_activation.py`](../backend/tests/contract/test_pack_compatibility_activation.py) | The HTTP contract: 409 + named reason on both edges, no half-created run, no queued background task, run-record persistence. Needs the contract DB. |
+| [`tests/contract/test_pack_disable_lifecycle.py`](../backend/tests/contract/test_pack_disable_lifecycle.py) | Disable over HTTP: the state endpoints, RBAC, launch exclusion, historical findings retrievable + labelled, run-health state across transitions. Needs the contract DB. |
+
+---
+
+# 8. Safe disable state machine (T2 / AT-827)
+
+**Criterion discharged:** AC2 — *disabling a pack stops future execution while all
+historical findings remain retrievable and correctly labelled.* Re-enable is
+supported.
+
+## 8.1 The state machine
+
+Two states, two transitions, per **(org, pack)**:
+
+```
+active  --disable-->  disabled
+disabled --enable-->  active
+```
+
+`active` is the DEFAULT and is represented by the **absence of a row**. Provisioning
+the tables therefore changes no behaviour until a customer disables something —
+there is no seed step and no backfill. Both transitions are **idempotent**:
+re-disabling an already-disabled pack returns `changed: false` and writes no history
+row.
+
+Implementation: [`app/pack_state.py`](../backend/app/pack_state.py). Storage:
+`pack_states` + `pack_state_history` (alembic `0031`, mirrored into
+`provision.sql`), modelled in
+[`database/models/pack_states.py`](../backend/database/models/pack_states.py).
+
+Pack id validation is deliberately **stricter than `get_pack()`**: an unknown id
+raises `PackNotFound` rather than resolving to the default pack. Silently disabling
+`service_cloud` because an operator typo'd a pack id would be a serious foot-gun.
+
+## 8.2 Disable EXCLUDES, it does not refuse
+
+This is the key design decision, and it differs from T1's compatibility gate on
+purpose:
+
+| | Meaning | Behaviour |
+|---|---------|-----------|
+| **incompatible** (T1) | "this pack CANNOT work on this platform" — a configuration error | the activation edge **refuses** with 409 naming the unmet requirement |
+| **disabled** (T2) | "this pack is intentionally turned off" — a deliberate, ongoing customer state | the pack is **excluded** and the run proceeds with what remains |
+
+Refusing every run after a disable would make disable unusable: the customer would
+also have to edit every template and industry default that references the pack.
+Excluding matches how this codebase treats a source that is not connected —
+degrade, don't crash.
+
+**Disabled is evaluated BEFORE compatibility.** A pack the customer already turned
+off must not be able to fail a run on compatibility grounds — it is not going to
+execute either way, so refusing the run over it would be noise.
+
+**The exclusion is loud, never silent** — the same discipline as MSP-B7's noise
+floors and run budgets. And if the exclusion would leave **nothing** to run, that IS
+an error (`AllPacksDisabledError` → 409): a run with zero packs would report success
+having produced nothing, and must never quietly fall back to the default pack.
+
+## 8.3 Where disable is enforced
+
+| Edge | Behaviour |
+|------|-----------|
+| `POST /api/stack-builder/launch` | Disabled packs dropped from the selection; `packIds` and `packVersions` record only what will run; `excludedPacks` names what was dropped. 409 if every selected pack is disabled. |
+| `POST /api/runs/{run_id}/compute` | Same resolution over the same effective selection. 409 if every selected pack is disabled. |
+| `discovery/runner.py` `run()` | **The guarantee.** `_resolve_pack_activation` narrows `_pack_configs` before any detector runs, so a disabled pack's detectors never execute even for a CLI/direct caller that never touched an API edge. |
+
+## 8.4 Historical output: kept, and labelled
+
+Disabling **never** removes or rewrites a finding. What changes is that a reader can
+tell the finding came from a pack that is no longer running.
+`opportunity_display.with_pack_state` stamps two ADDITIVE fields (the
+`connector_roadmap.annotate_connector` pattern):
+
+```
+packState      : "active" | "disabled"
+packStateLabel : "Produced by a now-disabled pack"   (absent when active)
+```
+
+Nothing else is touched — not the score, not the evidence ids, and **not the
+`packVersion` stamp**, so R16-B1 §4 provenance (and AC3's guarantee) survives.
+
+It is wired into `with_display_title`, the funnel every opportunity serve site
+already uses, so the label reaches the list, decision, override, roadmap, executive
+report, and blueprint paths alike. `with_display_titles` / `with_display_all` read
+the org's pack state **once per list** rather than once per finding.
+
+**Reads are fail-soft.** If the state store cannot be read — including a deployment
+that has not yet applied migration `0031` — every pack reads as active and the
+finding is served **unlabelled** rather than not at all. "Historical findings remain
+retrievable and viewable" outranks the label. The failure is logged. Writes are NOT
+fail-soft: a disable that did not persist must never look like it succeeded.
+
+## 8.5 Nothing is ever deleted (AC4 contribution)
+
+There is **no delete path** in `app/pack_state.py` — not for state, not for history,
+and emphatically not for findings, evidence, or run records. Re-enabling writes a
+*new* state and a *new* history row; it does not remove the disable. That is what
+makes the transition history an audit trail. Tests pin that the module contains no
+`DELETE`/`DROP`/`TRUNCATE`, that the store contract exposes no delete/remove method,
+and that a disable→enable cycle leaves both transitions on the trail. AT-829 owns
+the exhaustive data-layer sweep.
+
+## 8.6 API
+
+| Endpoint | Role | Purpose |
+|----------|------|---------|
+| `GET /api/packs/state` | viewer | Every pack with its state, revision, reason, and current version |
+| `PUT /api/packs/{pack_id}/state` | **owner** | `{"state": "disabled"\|"active", "reason": "..."}` — idempotent |
+| `GET /api/packs/{pack_id}/state/history` | analyst | Append-only transitions, newest first |
+
+Reading is `viewer` so a viewer who sees a "now-disabled pack" label can confirm it.
+Changing is `owner`: turning off a pack alters what every future run for the whole
+organisation produces — the same bar as connector connect/disconnect.
+
+## 8.7 What gets recorded (AC5)
+
+| Location | Content |
+|----------|---------|
+| Run record | `excludedPacks` (+ `packIds` narrowed to what runs) |
+| Run-scoped KV | `excluded_packs:{run_id}` — written by the launch edge *and* the runner (the only record for a direct/CLI run) |
+| Runner payload | `excludedPacks` |
+| Run health `GET /api/run-health/packs` | `pack_state` per pack row + a top-level `excluded_packs` list |
+| Audit | `pack_state_changed` (org-wide audit stream) |
+| Telemetry | `pack.state_changed`, `pack.execution_skipped` |
+| Domain audit trail | `pack_state_history` table |
+
+Note the deliberate split in the run-health packs panel: every other field comes
+from **immutable run fields**, precisely so a later pack change cannot rewrite what
+the dashboard says executed. `pack_state` is the one field read **live**, because
+"is this pack still running?" is a question about *now*, not about the run. So a
+pack disabled after a run reads `disabled` while its recorded `pack_version` and
+`detectors` stay exactly as executed.

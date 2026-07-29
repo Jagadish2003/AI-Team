@@ -154,6 +154,38 @@ class PackActivationRefusedPayload(TypedDict, total=False):
     reason: NotRequired[str]
 
 
+class PackExecutionSkippedPayload(TypedDict, total=False):
+    """2.0-C1 T2 (AT-827) — a DISABLED pack was dropped from a run's selection.
+
+    Excluding a disabled pack is normal and expected, but it must never be silent
+    (the same discipline as MSP-B7's suppression/deferral reports): this event is
+    the record that a pack the caller selected did not execute, and why. Pack ids
+    and state strings only — no credentials, no PII.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_ids: NotRequired[list[str]]
+    reason: NotRequired[str]
+    excluded: NotRequired[list[dict]]
+
+
+class PackStateChangedPayload(TypedDict, total=False):
+    """2.0-C1 T2 (AT-827) — a pack was disabled or re-enabled for an org.
+
+    The ``pack_state_history`` table is the domain audit trail; this event places
+    the transition in the telemetry stream so run health and support tooling can
+    correlate "this run skipped cloud_ops" with "cloud_ops was disabled at T".
+    """
+    org_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    transition: NotRequired[str]
+    previous_state: NotRequired[str]
+    state: NotRequired[str]
+    revision: NotRequired[int]
+    actor_id: NotRequired[str]
+    changed_at: NotRequired[str]
+
+
 class DetectorFiredPayload(TypedDict, total=False):
     """T1-S14-C — one record per detector that fires in a run."""
     detector_id: NotRequired[str]
@@ -927,6 +959,11 @@ register_event_type("run.pack_executed", PackExecutedPayload)
 # refused, so a refusal is observable in run health and support tooling rather
 # than existing only as an HTTP 409 the caller saw once.
 register_event_type("pack.activation_refused", PackActivationRefusedPayload)
+# 2.0-C1 T2 (AT-827): the disabled-pack lifecycle. `execution_skipped` is emitted
+# at the activation edges/runner when a disabled pack is dropped from a selection;
+# `state_changed` when an owner disables or re-enables a pack.
+register_event_type("pack.execution_skipped", PackExecutionSkippedPayload)
+register_event_type("pack.state_changed", PackStateChangedPayload)
 # T3-S11-A Sprint 11
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
 # T3-S12-A T7 Sprint 12

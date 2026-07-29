@@ -1369,6 +1369,53 @@ CREATE INDEX IF NOT EXISTS idx_runbook_match_feedback_org_created
 
 
 --
+-- Name: pack_states, pack_state_history — 2.0-C1 T2 (AT-827) alembic 0031
+--
+-- Per-org pack lifecycle state (active/disabled) and its append-only transition
+-- history. Like the runbook tables above these have NO runtime ensure_* helper:
+-- app/pack_state.py only reads and writes them, so provisioning is the only thing
+-- that can create them.
+--
+-- ABSENCE OF A ROW MEANS 'active'. There is no seed step: provisioning these
+-- tables changes no behaviour until a customer disables a pack. The read path in
+-- app/pack_state.py is fail-soft, so a deployment that has not yet run this
+-- migration serves every pack as active rather than failing.
+--
+
+CREATE TABLE IF NOT EXISTS pack_states (
+    org_id      VARCHAR(64)  NOT NULL,
+    pack_id     VARCHAR(64)  NOT NULL,
+    state       VARCHAR(16)  NOT NULL,
+    revision    INTEGER      NOT NULL DEFAULT 0,
+    reason      TEXT,
+    updated_by  VARCHAR(128),
+    created_at  TIMESTAMPTZ  NOT NULL,
+    updated_at  TIMESTAMPTZ  NOT NULL,
+    PRIMARY KEY (org_id, pack_id)
+);
+
+CREATE TABLE IF NOT EXISTS pack_state_history (
+    id              VARCHAR(64)  PRIMARY KEY,
+    org_id          VARCHAR(64)  NOT NULL,
+    pack_id         VARCHAR(64)  NOT NULL,
+    revision        INTEGER      NOT NULL,
+    transition      VARCHAR(16)  NOT NULL,
+    previous_state  VARCHAR(16)  NOT NULL,
+    resulting_state VARCHAR(16)  NOT NULL,
+    reason          TEXT,
+    actor_id        VARCHAR(128) NOT NULL,
+    changed_at      TIMESTAMPTZ  NOT NULL,
+    UNIQUE (org_id, pack_id, revision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pack_state_history_org_pack
+    ON pack_state_history (org_id, pack_id, revision DESC);
+
+CREATE INDEX IF NOT EXISTS idx_pack_states_org_state
+    ON pack_states (org_id, state);
+
+
+--
 -- PostgreSQL database dump complete
 --
 

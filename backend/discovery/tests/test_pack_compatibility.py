@@ -585,6 +585,24 @@ class TestCompatibilityReportShape:
 
 
 class TestRunnerRefusesIncompatiblePack:
+    @pytest.fixture(autouse=True)
+    def _offline_pack_state(self, monkeypatch):
+        """Keep this suite DB-free.
+
+        The runner resolves pack activation (2.0-C1 T2), which reads the org's
+        pack-state store and — on a refusal — records the refusal as telemetry.
+        Both are stubbed here so neither reaches Postgres; the read is fail-soft
+        and the telemetry write is non-blocking either way, but a DB round trip
+        does not belong in this suite.
+        """
+        import app.telemetry as telemetry
+        from app.pack_state import InMemoryPackStateStore, set_pack_state_store
+
+        monkeypatch.setattr(telemetry, "record_event", lambda *_a, **_k: None)
+        set_pack_state_store(InMemoryPackStateStore())
+        yield
+        set_pack_state_store(None)
+
     def test_runner_refuses_before_doing_any_work(self, registered_test_packs):
         # Defence in depth: a CLI/direct caller reaches the runner without passing
         # through either API activation edge, so the gate is re-asserted there and

@@ -63,6 +63,11 @@ INGESTION_CHECKPOINT_RESET = "ingestion_checkpoint_reset"
 # match. The dedicated decision-history table is the domain record; this event
 # also places the action in the organisation-wide audit stream.
 RUNBOOK_MATCH_DECIDED = "runbook_match_decided"
+# 2.0-C1 T2 (AT-827): an owner disabled or re-enabled a discovery pack for the org.
+# The dedicated pack_state_history table is the domain record; this event places the
+# transition in the organisation-wide audit stream. Snake_case per this module's
+# convention — the telemetry counterpart is "pack.state_changed" (app/telemetry.py).
+PACK_STATE_CHANGED = "pack_state_changed"
 
 # ---------------------------------------------------------------------------
 # Registry — every accepted event type listed here.
@@ -85,6 +90,7 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     SCHEMA_DISCOVERED,
     INGESTION_CHECKPOINT_RESET,
     RUNBOOK_MATCH_DECIDED,
+    PACK_STATE_CHANGED,
 })
 
 # ---------------------------------------------------------------------------

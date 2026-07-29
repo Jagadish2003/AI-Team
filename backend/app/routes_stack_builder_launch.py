@@ -50,7 +50,11 @@ from .middleware.tenancy import get_current_org_id
 from .security import require_auth
 from .rbac import require_role
 
-from .pack_activation import compatibility_snapshot, gate_pack_activation
+from .pack_activation import (
+    AllPacksDisabledError,
+    compatibility_snapshot,
+    resolve_activatable_packs,
+)
 from discovery.packs.pack_compatibility import PackIncompatibleError
 from discovery.packs.pack_config import get_pack_version, normalize_pack_ids
 from discovery.packs.platform_capabilities import get_platform_version
@@ -156,6 +160,11 @@ class LaunchResponse(BaseModel):
     focusId: Optional[str] = None
     industryId: Optional[str] = None
     systemCount: int
+    # 2.0-C1 T2 (AT-827): packs the caller selected that will NOT run because this
+    # org has disabled them. packIds above already excludes them, so a caller that
+    # ignores this field still sees the truthful pack set — this names WHAT was
+    # dropped so the exclusion is never silent. Empty for the common case.
+    excludedPacks: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 # ── Route registration ────────────────────────────────────────────────────────
@@ -231,20 +240,32 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
                 detail="pack_id is required",
             )
 
-        # 2.0-C1 T1 (AT-826 / AC1): a pack declaring an unmet platform-capability
-        # range or a required normalised concept this platform does not provide
-        # CANNOT be activated. This is the primary activation edge, so the refusal
-        # happens before any run record or KV entry exists — an incompatible pack
-        # never produces a half-created run. 409 Conflict + a reason naming every
-        # unmet requirement, mirroring the roadmap-connector connect guard.
+        # 2.0-C1 activation resolution. This is the primary activation edge, so
+        # both rules run before any run record or KV entry exists:
+        #
+        #   T2 (AT-827 / AC2) — a DISABLED pack is dropped from the selection so it
+        #     cannot execute in this or any future run. The exclusion is recorded on
+        #     the run record (and as telemetry), never silent. If every selected
+        #     pack is disabled there is nothing to run → 409.
+        #   T1 (AT-826 / AC1) — a pack whose declared platform range or required
+        #     normalised concepts are unmet CANNOT be activated → 409 naming the
+        #     unmet requirement.
+        #
+        # eff_pack_ids is then narrowed to what will ACTUALLY run, so the run record,
+        # KV, and response report the real pack set rather than the requested one.
         try:
-            compatibility_reports = gate_pack_activation(
+            activation = resolve_activatable_packs(
                 org_id=get_current_org_id(), pack_ids=eff_pack_ids
             )
+        except AllPacksDisabledError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except PackIncompatibleError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-        pack_compatibility = compatibility_snapshot(compatibility_reports)
+        eff_pack_ids = activation.activated_pack_ids
+        eff_pack = eff_pack_ids[0] if eff_pack_ids else eff_pack
+        excluded_packs = [item.to_dict() for item in activation.excluded]
+        pack_compatibility = compatibility_snapshot(activation.activated)
         platform_version_at_launch = get_platform_version()
 
         # Versions are captured at launch so historical provenance cannot drift
@@ -303,6 +324,10 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             # must not rewrite what this run was actually launched against.
             "packCompatibility": pack_compatibility,
             "platformVersion": platform_version_at_launch,
+            # 2.0-C1 T2 (AT-827 / AC5): packs the caller selected that will NOT run
+            # because this org has disabled them. Recorded so the exclusion is
+            # visible on the run and in run health rather than being silent.
+            "excludedPacks": excluded_packs,
             "focusId": eff_focus,
             "industryId": body.industry_id,
             "templateId": eff_template,
@@ -330,6 +355,7 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         # range/version record run health reads instead of re-deriving it from the
         # mutable registry after the fact.
         run_kv_set("pack_compatibility", run_id, pack_compatibility)
+        run_kv_set("excluded_packs", run_id, excluded_packs)
         run_kv_set("template_ids", run_id, eff_template_ids)
         run_kv_set("template_versions", run_id, template_versions)
         run_kv_set("effective_configuration", run_id, effective)
@@ -369,4 +395,5 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             focusId=eff_focus,
             industryId=body.industry_id,
             systemCount=len(eff_systems),
+            excludedPacks=excluded_packs,
         )
