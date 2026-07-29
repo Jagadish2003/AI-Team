@@ -359,6 +359,14 @@ def to_track_a_opportunities(
             # have the version history — unreconstructable if not captured now.
             "packId":      opp.get("packId"),
             "packVersion": opp.get("packVersion"),
+            # 2.0-B1 T1 (trace graph engine): packs that build the four-part
+            # finding_contract (cloud_ops, security_ops — see cloud_ops_finding.py)
+            # carry it forward onto the STORED opportunity. Without this the
+            # contract's evidence/confidence/corroboration/source_trace exists
+            # only for the lifetime of the run and cannot be traced afterwards.
+            # None for packs that don't build one (service_cloud, ncino, ...) —
+            # additive, backward compatible.
+            "findingContract": (opp.get("raw_evidence") or {}).get("finding_contract"),
             # Keep calibration fields under a debug namespace (not breaking Track A)
             "_debug": {
                 "detector_id":   did,

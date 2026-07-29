@@ -225,6 +225,9 @@ def _build_result(hotspot: Dict[str, Any], t: Dict[str, Any]) -> DetectorResult:
         sources=systems,
         label="Incidents concentrate on a shared dependency (event-corroborated, window-gated)",
         window_gated=True,
+        # 2.0-B1 (trace graph engine): carry the actual join(s) MSP-B7 recorded
+        # for this event signature so the trace can surface join type + window.
+        correlation_windows=(event or {}).get("correlation_windows") if event is not None else None,
     )
 
     contract = fc.build_finding_contract(

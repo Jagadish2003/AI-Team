@@ -131,6 +131,9 @@ def _build_result(ev: Dict[str, Any], t: Dict[str, Any]) -> DetectorResult:
         sources=systems,
         label="Corroborated by event stream + ITSM (window-gated)",
         window_gated=True,
+        # 2.0-B1 (trace graph engine): carry the actual join(s) MSP-B7 recorded
+        # for this event signature so the trace can surface join type + window.
+        correlation_windows=ev.get("correlation_windows"),
     )
 
     contract = fc.build_finding_contract(
