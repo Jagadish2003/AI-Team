@@ -386,8 +386,47 @@ def run_trackb_and_persist(
         opps = seed.get("opportunities", [])
         ev = seed.get("evidence", [])
 
+        # R16-B1 (§2): stamp the stable cross-run opportunity_identity onto each
+        # stored opportunity BEFORE it is persisted, so the served record carries
+        # the id used to group an opportunity with its own history. Idempotent and
+        # additive; non-blocking — never breaks the run.
+        #
+        # 2.0-A1 AC6 depends on this: the stored projection's provenance records
+        # this identity, and it is the ONLY key by which 2.0-A2 can follow one
+        # problem's projections across runs. Without it a projection is still
+        # stored, but only comparable within its own run.
+        try:
+            from .opportunity_instances import stamp_opportunity_identities
+
+            stamp_opportunity_identities(opps, run_id, org_id=run_org_id)
+        except Exception as e:  # noqa: BLE001
+            errors["opportunity_identity"] = str(e)
+            logger.warning(
+                "Opportunity identity stamping failed (non-blocking): %s", e
+            )
+
         db.run_kv_set("opps", run_id, opps)
         db.run_kv_set("evidence", run_id, ev)
+
+        # R16-B1 (T4): persist one per-run opportunity_instance per opportunity.
+        # Built from the RAW runner opportunities, which keep orgId/detector_id/
+        # signal_source at top level — the inputs identity is derived from. These
+        # rows are also what 2.0-A1 T6 attaches the stored projection to, so the
+        # cross-run projection history has somewhere to live. Non-blocking.
+        try:
+            from .opportunity_instances import record_opportunity_instances
+
+            n_instances = record_opportunity_instances(
+                run_id, payload.get("opportunities", []), org_id=run_org_id
+            )
+            logger.info(
+                "Recorded %d opportunity instances for run %s", n_instances, run_id
+            )
+        except Exception as e:  # noqa: BLE001
+            errors["opportunity_instances"] = str(e)
+            logger.warning(
+                "Opportunity instance recording failed (non-blocking): %s", e
+            )
 
         # R16-B1 (T6): persist the queryable evidence-pointer trail so a finding
         # can later be walked back to the source artifacts that produced it
