@@ -131,7 +131,17 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
         label="Financial services",
         # R191-R1 T3: sqlserver_opsignal added — the shipped native-DB pack
         # serves the new database anchor below.
-        pack_hints=["ncino", "service_cloud", "sqlserver_opsignal"],
+        # 2.0-D1 T4: financial_services_cloud added — the pack now SHIPS (T1
+        # registration, T2 detectors, T3 scorer), which is the condition the
+        # story's registry-honesty rule sets for an entry appearing on a
+        # selectable surface. A contract test pins the invariant directly:
+        # if this pack is hinted here it must ship detectors.
+        pack_hints=[
+            "ncino",
+            "financial_services_cloud",
+            "service_cloud",
+            "sqlserver_opsignal",
+        ],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals", "compliance_risk"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests", "compliance_risk"]),
