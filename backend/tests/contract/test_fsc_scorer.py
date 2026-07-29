@@ -56,10 +56,19 @@ SHARED_SCORING_ENGINE = (
     "backend/discovery/calibration/calibrator.py",
     "backend/discovery/calibration/ranking.py",
 )
-TEMPLATE_MODEL = (
-    "backend/discovery/packs/template_registry.py",
+# The template model. `app/terminology.py` is pure model and must contain no pack
+# reference at all. `template_registry.py` is BOTH the model AND the registry data,
+# so a whole-file token ban would forbid adding a template — which is exactly what
+# the model is designed for. It is therefore checked structurally instead: the
+# MODEL/API definitions outside the TEMPLATE_REGISTRY literal must stay
+# pack-agnostic, while registry entries inside it are the intended extension point.
+# (2.0-D1 T4 exposed this: T3's original whole-file assertion was too broad and
+# would have failed a legitimate config-only template addition.)
+TEMPLATE_MODEL_STRICT = (
     "backend/app/terminology.py",
 )
+TEMPLATE_MODEL_REGISTRY_FILE = "backend/discovery/packs/template_registry.py"
+TEMPLATE_MODEL = TEMPLATE_MODEL_STRICT + (TEMPLATE_MODEL_REGISTRY_FILE,)
 
 # Files T3 is allowed to touch: the pack's own scorer/config, its registry entry,
 # the runner dispatch branch, tests, and docs. Anything else is a deviation that
@@ -148,13 +157,51 @@ class TestAC4WhereTheChangeLanded:
                 f"pack-agnostic (D1 AC4)"
             )
 
-    @pytest.mark.parametrize("rel", TEMPLATE_MODEL)
+    @pytest.mark.parametrize("rel", TEMPLATE_MODEL_STRICT)
     def test_template_model_has_no_fsc_awareness(self, rel):
         source = (REPO_ROOT / rel).read_text(encoding="utf-8").lower()
         for token in FSC_TOKENS:
             assert token.lower() not in source, (
                 f"{rel} references {token!r} — the template model must stay "
-                f"pack-agnostic (D1 AC4); FSC template work is T4 and is config"
+                f"pack-agnostic (D1 AC4)"
+            )
+
+    def test_template_model_definitions_stay_pack_agnostic(self):
+        """`template_registry.py` holds the model AND the registry data.
+
+        Registry ENTRIES are the model's intended extension point (2.0-D1 T4 adds
+        the FSC one), so this checks the part AC4 actually protects: everything
+        OUTSIDE the ``TEMPLATE_REGISTRY`` literal — the dataclasses, the accessors,
+        ``register_template``, ``resolve_launch_config`` — must contain no
+        pack-specific reference.
+        """
+        import ast
+
+        path = REPO_ROOT / TEMPLATE_MODEL_REGISTRY_FILE
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        registry_span = None
+        for node in tree.body:
+            targets = getattr(node, "targets", None) or (
+                [node.target] if hasattr(node, "target") else []
+            )
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id == "TEMPLATE_REGISTRY":
+                    registry_span = (node.lineno, node.end_lineno)
+        assert registry_span, "TEMPLATE_REGISTRY assignment not found"
+
+        start, end = registry_span
+        outside = [
+            line for i, line in enumerate(source.splitlines(), start=1)
+            if not (start <= i <= end)
+        ]
+        blob = "\n".join(outside).lower()
+        for token in FSC_TOKENS:
+            assert token.lower() not in blob, (
+                f"the template MODEL/API in {TEMPLATE_MODEL_REGISTRY_FILE} "
+                f"references {token!r} outside the registry literal — adding a "
+                f"template must be adding a dict entry (D1 AC4)"
             )
 
     def test_shared_scorer_knows_no_pack_at_all(self):
