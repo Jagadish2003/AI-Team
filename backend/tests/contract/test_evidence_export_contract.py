@@ -177,18 +177,54 @@ def test_ac4_download_form_bytes_verify_and_tampering_fails(
 # ── RBAC + tenancy ──────────────────────────────────────────────────────────
 
 
-def test_viewer_cannot_generate_a_signed_export(
-    client: TestClient, exported_run_id, first_opp_id, signing_key, monkeypatch
-):
-    """The export is a distributable, audited attestation — above plain viewer."""
-    monkeypatch.setenv("DEV_JWT_ROLE", "viewer")
+def test_unauthenticated_request_is_rejected(client: TestClient, exported_run_id, first_opp_id):
     r = client.get(
-        f"/api/runs/{exported_run_id}/opportunities/{first_opp_id}/evidence-export",
-        headers=_auth(),
+        f"/api/runs/{exported_run_id}/opportunities/{first_opp_id}/evidence-export"
     )
-    assert r.status_code in (401, 403), (
-        f"a viewer must not be able to issue a signed export, got {r.status_code}"
+    assert r.status_code == 401
+    assert "signature" not in r.text
+
+
+def test_viewer_cannot_generate_a_signed_export(
+    client: TestClient, exported_run_id, first_opp_id, signing_key
+):
+    """The export is a distributable, audited attestation — above plain viewer.
+
+    Authenticates with the pre-seeded VIEWER_JWT token: ``main.py`` calls
+    ``rbac.seed_static_token_members`` at startup, which seeds it as a ``viewer``
+    member of the default org.
+
+    Note that monkeypatching DEV_JWT_ROLE does NOT work for this:
+    ``require_role`` resolves the role from the ``workspace_members`` row keyed on
+    the token, and ``seed_static_token_members`` deliberately SKIPS DEV_JWT "so
+    its owner role is not downgraded" (it is seeded as owner by ``seed_owner``).
+    The dev token therefore stays owner regardless of that env var — an earlier
+    revision of this test asserted a denial that way and wrongly got a 200.
+    """
+    viewer = os.getenv("VIEWER_JWT", "viewer-token")
+    path = f"/api/runs/{exported_run_id}/opportunities/{first_opp_id}/evidence-export"
+
+    denied = client.get(path, headers={"Authorization": f"Bearer {viewer}"})
+    assert denied.status_code == 403, (
+        f"a viewer must not be able to issue a signed export, got {denied.status_code}"
     )
+    assert "signature" not in denied.text
+
+    # The gate must DISCRIMINATE, not deny everyone: analyst+ still succeeds.
+    allowed = client.get(path, headers=_auth())
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["signature"]
+
+
+def test_viewer_cannot_generate_a_report_scope_export(
+    client: TestClient, exported_run_id, signing_key
+):
+    viewer = os.getenv("VIEWER_JWT", "viewer-token")
+    r = client.get(
+        f"/api/runs/{exported_run_id}/evidence-export",
+        headers={"Authorization": f"Bearer {viewer}"},
+    )
+    assert r.status_code == 403
     assert "signature" not in r.text
 
 
