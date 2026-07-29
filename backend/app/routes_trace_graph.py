@@ -1,5 +1,5 @@
 """
-routes_trace_graph.py — Release 2.0-B1 T1: the trace graph API.
+routes_trace_graph.py — Release 2.0-B1 T1/T2: the trace graph API.
 
 Exposes trace_graph.py's engine as a single, read-only, org-scoped endpoint:
 
@@ -10,6 +10,10 @@ Mirrors routes_sprint4_t6.py's evidence-trace route contract exactly:
   - Org-scoped: a run belonging to another org yields an empty
     (available: false) trace, never another tenant's provenance.
   - Never 404 for a merely empty/thin trace.
+
+T2 (AC3) adds ``retrieval_candidates``: every retrieval candidate context
+assembly considered for this finding, used and unused alike — "retrieval
+proposes, assembly decides", and both sides of that decision are visible.
 """
 from __future__ import annotations
 
@@ -52,8 +56,23 @@ class JoinTraceSummary(BaseModel):
     hop_id: Optional[str] = None
 
 
+class RetrievalCandidateSummary(BaseModel):
+    """2.0-B1 T2 (AC3) — one retrieval candidate context assembly considered
+    for this finding: proposed by retrieval, decided by assembly."""
+    chunk_id: str
+    used: bool
+    decision: str
+    reason: Optional[str] = None
+    confidence: Optional[float] = None
+    origin: Optional[str] = None
+    source_system: Optional[str] = None
+    source_artifact: Optional[str] = None
+    content_snippet: Optional[str] = None
+    is_stale: Optional[bool] = None
+
+
 class TraceGraphResponse(BaseModel):
-    """The full provenance chain for one opportunity (2.0-B1 AC1/AC2).
+    """The full provenance chain for one opportunity (2.0-B1 AC1/AC2/AC3).
 
     ``available`` is False (never 404) when the run belongs to another org or
     the opportunity has no derivable chain — mirroring the evidence-trace and
@@ -65,6 +84,9 @@ class TraceGraphResponse(BaseModel):
     joins: List[JoinTraceSummary] = Field(default_factory=list)
     complete: bool = False
     truncated: bool = False
+    retrieval_candidates: List[RetrievalCandidateSummary] = Field(default_factory=list)
+    retrieval_candidates_used_count: int = 0
+    retrieval_candidates_unused_count: int = 0
     available: bool = False
 
 
@@ -142,13 +164,15 @@ def register_trace_graph_routes(app) -> None:
         tags=["runs"],
     )
     def get_trace_graph(run_id: str, opp_id: str) -> TraceGraphResponse:
-        """2.0-B1 (T1) — the complete provenance chain for one finding.
+        """2.0-B1 (T1/T2) — the complete provenance chain for one finding.
 
         Walks finding -> contributing evidence -> source records, with every
         hop carrying origin, connector, run id, and timestamp (AC1); where a
         claim was corroborated by an MSP-B7 time-windowed join, the join type
         and correlation window used are surfaced too, and a join outside its
-        window can never appear (AC2).
+        window can never appear (AC2). ``retrieval_candidates`` lists every
+        candidate context assembly considered for this finding — used and
+        unused alike (AC3).
         """
         run = _require_run(run_id)
 
@@ -163,6 +187,7 @@ def register_trace_graph_routes(app) -> None:
         if trace is None:
             return TraceGraphResponse(runId=run_id, oppId=opp_id, available=False)
 
+        used_count = sum(1 for c in trace.retrieval_candidates if c.used)
         return TraceGraphResponse(
             runId=run_id,
             oppId=opp_id,
@@ -170,5 +195,10 @@ def register_trace_graph_routes(app) -> None:
             joins=[JoinTraceSummary(**join.to_dict()) for join in trace.joins],
             complete=trace.complete,
             truncated=trace.truncated,
+            retrieval_candidates=[
+                RetrievalCandidateSummary(**c.to_dict()) for c in trace.retrieval_candidates
+            ],
+            retrieval_candidates_used_count=used_count,
+            retrieval_candidates_unused_count=len(trace.retrieval_candidates) - used_count,
             available=trace.complete,
         )
