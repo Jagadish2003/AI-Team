@@ -59,6 +59,12 @@ CREATE TABLE IF NOT EXISTS opportunity_movements (
     measured_at            TIMESTAMPTZ  NOT NULL,
     created_at             TIMESTAMPTZ  NOT NULL,
     updated_at             TIMESTAMPTZ  NOT NULL,
+    -- 2.0-A2 T4: confounder caveat counts, promoted so T6's portfolio aggregate
+    -- can report how many of its inputs were caveated without parsing JSON. The
+    -- caveats themselves (type, severity, detail, detectedAt) live in `record`.
+    confounder_count           INTEGER  NOT NULL DEFAULT 0,
+    confounder_material_count  INTEGER  NOT NULL DEFAULT 0,
+    confounder_types           TEXT,
     PRIMARY KEY (org_id, opportunity_identity, current_run_id)
 )
 """
@@ -81,14 +87,22 @@ CREATE INDEX IF NOT EXISTS idx_opp_movements_org_verdict
     ON opportunity_movements (org_id, comparability_verdict)
 """
 
+# T6 counts caveated measurements, so the aggregate filters on this.
+CREATE_OPPORTUNITY_MOVEMENTS_IDX_CONFOUNDERS = """
+CREATE INDEX IF NOT EXISTS idx_opp_movements_org_confounders
+    ON opportunity_movements (org_id, confounder_count)
+"""
+
 ALL_OPPORTUNITY_MOVEMENTS_DDL: tuple[str, ...] = (
     CREATE_OPPORTUNITY_MOVEMENTS_TABLE,
     CREATE_OPPORTUNITY_MOVEMENTS_IDX_IDENTITY,
     CREATE_OPPORTUNITY_MOVEMENTS_IDX_RUN,
     CREATE_OPPORTUNITY_MOVEMENTS_IDX_VERDICT,
+    CREATE_OPPORTUNITY_MOVEMENTS_IDX_CONFOUNDERS,
 )
 
 DROP_OPPORTUNITY_MOVEMENTS_DDL: tuple[str, ...] = (
+    "DROP INDEX IF EXISTS idx_opp_movements_org_confounders",
     "DROP INDEX IF EXISTS idx_opp_movements_org_verdict",
     "DROP INDEX IF EXISTS idx_opp_movements_org_run",
     "DROP INDEX IF EXISTS idx_opp_movements_org_identity",
@@ -114,6 +128,9 @@ OPPORTUNITY_MOVEMENT_COLUMNS: tuple[str, ...] = (
     "measured_at",
     "created_at",
     "updated_at",
+    "confounder_count",
+    "confounder_material_count",
+    "confounder_types",
 )
 
 __all__ = [

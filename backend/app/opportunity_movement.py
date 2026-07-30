@@ -40,6 +40,7 @@ from .opportunity_movement_record import (
     MOVEMENT_SCHEMA_VERSION,
     build_movement_record,
 )
+from .outcome_confounders import detect_confounders, summarise_confounders
 from database.models.opportunity_movements import ALL_OPPORTUNITY_MOVEMENTS_DDL
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,36 @@ def _current_signal_values(
                 pass
 
     return values, captured_at, window_days
+
+
+def _entity_keys_as_of_run(org_id: str, run_id: str) -> Optional[List[str]]:
+    """The resolved entity population visible as of one run.
+
+    Reuses ``ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE`` — the shared clause both
+    existing chronological-visibility paths bind, documented there as the thing
+    that must not drift. Returns ``None`` (not ``[]``) when the population cannot
+    be read: not knowing is different from knowing it is empty, and only ``None``
+    correctly suppresses a fabricated population confounder.
+    """
+    try:
+        from database.models.entities import ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE
+
+        with closing(db.connect()) as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    "SELECT e.entity_type, e.canonical_name "
+                    + ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE,
+                    (org_id, run_id),
+                )
+                rows = cur.fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Could not read the entity population as of run %s: %s", run_id, exc
+        )
+        return None
+    # The stable resolution key, not the random per-row uuid — the same identity
+    # entity_resolution dedupes on, so a recreated row is not read as a change.
+    return sorted(f"{row[0]}:{row[1]}" for row in rows)
 
 
 def _lower_is_better_map(detector_id: str) -> Dict[str, bool]:
@@ -309,9 +340,51 @@ def measure_movement(
         lower_is_better_by_signal=_lower_is_better_map(detector_id),
     )
 
+    # 2.0-A2 T4 — attach labelled confounder caveats. Detection APPENDS caveats:
+    # it never adjusts the delta and never blocks the measurement, so a detector
+    # failure or a detected confounder both leave the record publishable.
+    record["confounders"] = _detect_record_confounders(
+        org_id, opportunity_identity, baseline, record
+    )
+    record["confounderSummary"] = summarise_confounders(record["confounders"])
+
     if persist:
         _store_movement(record)
     return record
+
+
+def _detect_record_confounders(
+    org_id: str,
+    opportunity_identity: str,
+    baseline: Mapping[str, Any],
+    record: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    """Run confounder detection for one record. Never raises.
+
+    A failure here must not cost the measurement — but it must also not be
+    invisible, because a result published with fewer caveats than were detectable
+    is the exact failure this subtask exists to prevent.
+    """
+    try:
+        return detect_confounders(
+            org_id=org_id,
+            opportunity_identity=opportunity_identity,
+            baseline=baseline,
+            movement=record,
+            baseline_entity_keys=_entity_keys_as_of_run(
+                org_id, str(record.get("baselineRunId") or "")
+            ),
+            current_entity_keys=_entity_keys_as_of_run(
+                org_id, str(record.get("currentRunId") or "")
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Confounder detection failed for %s (measurement still reports): %s",
+            opportunity_identity,
+            exc,
+        )
+        return []
 
 
 def _timedelta_days(days: int):
@@ -365,6 +438,7 @@ def _store_movement(record: Mapping[str, Any]) -> None:
     ) or next(iter(record.get("movements") or []), None) or {}
     now = _now()
     comparability = record.get("comparability") or {}
+    summary = record.get("confounderSummary") or {}
 
     with closing(db.connect()) as con:
         with con.cursor() as cur:
@@ -374,8 +448,10 @@ def _store_movement(record: Mapping[str, Any]) -> None:
                 "  detector_id, action_date, comparability_verdict,"
                 "  baseline_pack_version, current_pack_version, primary_signal,"
                 "  primary_baseline_value, primary_current_value, primary_delta,"
-                "  primary_direction, record, measured_at, created_at, updated_at"
-                ") VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "  primary_direction, record, measured_at, created_at, updated_at,"
+                "  confounder_count, confounder_material_count, confounder_types"
+                ") VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+                "%s,%s,%s) "
                 "ON CONFLICT (org_id, opportunity_identity, current_run_id) "
                 "DO UPDATE SET "
                 "  baseline_run_id = EXCLUDED.baseline_run_id,"
@@ -388,6 +464,9 @@ def _store_movement(record: Mapping[str, Any]) -> None:
                 "  primary_direction = EXCLUDED.primary_direction,"
                 "  record = EXCLUDED.record,"
                 "  measured_at = EXCLUDED.measured_at,"
+                "  confounder_count = EXCLUDED.confounder_count,"
+                "  confounder_material_count = EXCLUDED.confounder_material_count,"
+                "  confounder_types = EXCLUDED.confounder_types,"
                 "  updated_at = EXCLUDED.updated_at",
                 (
                     record["orgId"],
@@ -408,6 +487,9 @@ def _store_movement(record: Mapping[str, Any]) -> None:
                     _parse_dt(record["measuredAt"]),
                     now,
                     now,
+                    int(summary.get("count", 0)),
+                    int(summary.get("materialCount", 0)),
+                    json.dumps(summary.get("types", [])),
                 ),
             )
         con.commit()
