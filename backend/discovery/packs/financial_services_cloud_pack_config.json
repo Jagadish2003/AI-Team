@@ -28,11 +28,10 @@
       "service_queue": "The team-owned queue a service process or referral waits in between stages.",
       "review_cycle": "A compliance, suitability, or supervisory review step on a service process — always a human decision."
     },
+    "_language_map_note": "Generic -> FSC word substitutions applied to narrative fields at serve time. EVERY entry must be IDEMPOTENT: app/terminology.py substitutes whole words, so a mapping whose replacement CONTAINS its source double-expands text that already uses the domain phrase. 'account' -> 'financial account' and 'handoff' -> 'referral handoff' were removed for that reason — this pack's own labels already say 'financial account' and 'referral handoffs', and the rewrite was producing 'financial financial account' and 'referral referral handoffs' on every served finding, roadmap entry and executive report. A contract test pins idempotency and pins this map against the template's terminology.",
     "language_map": {
       "customer": "household",
-      "account": "financial account",
       "ticket": "service process",
-      "handoff": "referral handoff",
       "backlog": "service queue"
     }
   },

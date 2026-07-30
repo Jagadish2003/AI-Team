@@ -417,7 +417,20 @@ class TestAC3TerminologyFromPackConfig:
     def test_language_map_is_config_not_code(self):
         language_map = _cfg().get_terminology().language_map
         assert language_map.get("customer") == "household"
-        assert language_map.get("account") == "financial account"
+        assert language_map.get("ticket") == "service process"
+
+    def test_language_map_mappings_are_idempotent(self):
+        """No mapping's replacement may contain its source.
+
+        app/terminology.py substitutes whole words, so `account -> financial
+        account` double-expands text that already says "financial account" — which
+        this pack's own labels do. Both such mappings were removed; this keeps them
+        out.
+        """
+        for generic, domain in _cfg().get_terminology().language_map.items():
+            assert generic.lower() not in domain.lower().split(), (
+                f"{generic!r} -> {domain!r} double-expands the domain phrase"
+            )
 
     def test_missing_term_is_rejected_loudly(self, tmp_path):
         cfg = _cfg()
