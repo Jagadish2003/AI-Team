@@ -81,6 +81,7 @@ from .routes_runbook_matches import register_runbook_match_routes
 from .routes_secops_evidence import register_secops_evidence_routes
 from .routes_opportunity_lifecycle import register_opportunity_lifecycle_routes
 from .routes_opportunity_baseline import register_opportunity_baseline_routes
+from .routes_opportunity_movement import register_opportunity_movement_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
@@ -367,6 +368,9 @@ register_opportunity_lifecycle_routes(app)
 # 2.0-A2 T2: read-only retrieval of the immutable baseline artifact frozen at
 # finding creation. No write verb — the pipeline is the only writer.
 register_opportunity_baseline_routes(app)
+# 2.0-A2 T3: read-only post-action movement records (baseline vs current, with a
+# comparability verdict and both run ids). Measured by the pipeline, never on read.
+register_opportunity_movement_routes(app)
 
 origins = [
     o.strip()
