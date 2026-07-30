@@ -60,6 +60,18 @@ CONFIG_KEY_DEPLOYMENT: str = "CUSTOMER_TENANT_DEPLOYMENT"
 CONFIG_KEY_GENERATION_DEPLOYMENT: str = "CUSTOMER_TENANT_GENERATION_DEPLOYMENT"
 CONFIG_KEY_EMBEDDING_DEPLOYMENT: str = "CUSTOMER_TENANT_EMBEDDING_DEPLOYMENT"
 
+# The UNDERLYING embedding model behind the embedding deployment, and its model
+# version — both non-secret. A managed Azure OpenAI deployment name is an
+# operator-chosen alias ("AgentIQ-text-embedding-3-small") for a real model
+# ("text-embedding-3-small", model version "1"); the alias is what the URL is
+# addressed by, but the MODEL is what determines the vector space. These keys let
+# a deployment declare the real model so the per-vector AC8 stamp names the model
+# rather than the alias — see ``CustomerTenantModelProvider.embedding_identity``
+# for why that distinction is load-bearing. Optional: when unset the identity
+# falls back to the deployment name + API version, preserving prior behaviour.
+CONFIG_KEY_EMBEDDING_MODEL: str = "CUSTOMER_TENANT_EMBEDDING_MODEL"
+CONFIG_KEY_EMBEDDING_MODEL_VERSION: str = "CUSTOMER_TENANT_EMBEDDING_MODEL_VERSION"
+
 # Full-URL overrides for a managed endpoint that does not follow the Azure
 # deployment-path convention. When set, the value is used verbatim and the
 # endpoint base / deployment / api-version are not consulted for that capability.
@@ -143,6 +155,25 @@ class CustomerTenantConfig:
         """Embedding deployment name, resolved live from config."""
         return _resolve_deployment(CONFIG_KEY_EMBEDDING_DEPLOYMENT)
 
+    def embedding_model(self) -> str:
+        """The underlying embedding model name, resolved live (non-secret).
+
+        The real model behind the embedding deployment alias (e.g.
+        ``text-embedding-3-small`` behind a deployment named
+        ``AgentIQ-text-embedding-3-small``). Empty when the operator has not
+        declared it; the provider then falls back to the deployment alias for the
+        AC8 stamp.
+        """
+        return os.getenv(CONFIG_KEY_EMBEDDING_MODEL, "").strip()
+
+    def embedding_model_version(self) -> str:
+        """The embedding model's version, resolved live (non-secret).
+
+        Azure OpenAI versions a model independently of the service ``api-version``
+        (``text-embedding-3-small`` model version ``1``). Empty when undeclared.
+        """
+        return os.getenv(CONFIG_KEY_EMBEDDING_MODEL_VERSION, "").strip()
+
     def _deployment_url(self, deployment: str, path: str) -> str:
         """Build the Azure-style per-deployment URL, or "" when unconfigured.
 
@@ -214,6 +245,8 @@ __all__ = [
     "CONFIG_KEY_DEPLOYMENT",
     "CONFIG_KEY_EMBEDDING_DEPLOYMENT",
     "CONFIG_KEY_EMBEDDING_ENDPOINT",
+    "CONFIG_KEY_EMBEDDING_MODEL",
+    "CONFIG_KEY_EMBEDDING_MODEL_VERSION",
     "CONFIG_KEY_ENDPOINT",
     "CONFIG_KEY_GENERATION_DEPLOYMENT",
     "CONFIG_KEY_GENERATION_ENDPOINT",

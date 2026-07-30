@@ -1,15 +1,16 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0030.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0031.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
 -- 03_lazy_runtime_tables.sql. Creates the agentiq role, all tables (incl.
--- org_licenses, ingestion_checkpoints, opportunity_instances, the R18-B1/B2
+-- org_licenses, ingestion_checkpoints, opportunity_instances, opportunity_lifecycle
+-- (+history), the R18-B1/B2
 -- pgvector-backed retrieval_chunks + retrieval_refresh_queue, the MSP-B8
 -- ops_event_staging + ops_event_load_batches, the MSP-B5 runbook_matches /
 -- runbook_match_decision_history / runbook_match_feedback, and the R-1.9.1-L3
 -- vendor-side license_registry + append-only issuance_audit),
 -- indexes/constraints/rules, seeds the connector catalog, grants the app login
--- role(s) privileges on the schema, and stamps alembic_version to head 0030.
+-- role(s) privileges on the schema, and stamps alembic_version to head 0031.
 --
 -- BEFORE RUNNING ON PRODUCTION — two values in this file are dev defaults and
 -- MUST be set for the target environment. Both are marked "TODO(deploy)" below:
@@ -426,6 +427,63 @@ CREATE TABLE "public"."opportunity_instances" (
     "created_at" timestamp without time zone NOT NULL,
     "is_deleted" boolean DEFAULT false NOT NULL,
     CONSTRAINT "opportunity_instances_pkey" PRIMARY KEY ("opportunity_identity", "run_id")
+);
+
+
+--
+-- Name: opportunity_lifecycle; Type: TABLE; Schema: public; Owner: -
+--
+-- SOURCE OF TRUTH: database/models/opportunity_lifecycle.py
+-- (ALL_OPPORTUNITY_LIFECYCLE_DDL), applied by migration 0031 and the runtime
+-- ensure_opportunity_lifecycle_tables() helper. This pure-SQL provisioning path
+-- mirrors that schema and MUST be kept in sync with it.
+--
+-- 2.0-A2 T1: keyed on (org_id, opportunity_identity) — the STABLE cross-run
+-- identity — because lifecycle is a property of the problem, not of one run's
+-- observation of it.
+--
+
+CREATE TABLE "public"."opportunity_lifecycle" (
+    "org_id" character varying(64) NOT NULL,
+    "opportunity_identity" character varying(64) NOT NULL,
+    "state" character varying(16) NOT NULL,
+    "action_date" "date",
+    "actioned_by" character varying(128),
+    "actioned_at" timestamp with time zone,
+    "revision" integer DEFAULT 0 NOT NULL,
+    "first_seen_run_id" character varying(64),
+    "last_run_id" character varying(64),
+    "last_transition_at" timestamp with time zone,
+    "updated_by" character varying(128),
+    "created_at" timestamp with time zone NOT NULL,
+    "updated_at" timestamp with time zone NOT NULL,
+    CONSTRAINT "opportunity_lifecycle_pkey" PRIMARY KEY ("org_id", "opportunity_identity")
+);
+
+
+--
+-- Name: opportunity_lifecycle_history; Type: TABLE; Schema: public; Owner: -
+--
+-- Append-only transition trail. An analyst unwinding a mistaken action appends a
+-- new forward row; history is never rewritten.
+--
+
+CREATE TABLE "public"."opportunity_lifecycle_history" (
+    "id" character varying(64) NOT NULL,
+    "org_id" character varying(64) NOT NULL,
+    "opportunity_identity" character varying(64) NOT NULL,
+    "revision" integer NOT NULL,
+    "from_state" character varying(16) NOT NULL,
+    "to_state" character varying(16) NOT NULL,
+    "actor" character varying(16) NOT NULL,
+    "actor_id" character varying(128) NOT NULL,
+    "action_date" "date",
+    "reason" "text" NOT NULL,
+    "note" "text",
+    "run_id" character varying(64),
+    "transitioned_at" timestamp with time zone NOT NULL,
+    CONSTRAINT "opportunity_lifecycle_history_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "opportunity_lifecycle_history_rev_key" UNIQUE ("org_id", "opportunity_identity", "revision")
 );
 
 
@@ -1431,7 +1489,11 @@ INSERT INTO "public"."connectors" ("id", "payload") VALUES ('zendesk', '{"id": "
 -- backend/migrations/versions/ — a DB stamped lower will have `alembic upgrade
 -- head` re-run intervening migrations against tables that already exist.
 --
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0030') ON CONFLICT DO NOTHING;
+CREATE INDEX "idx_opp_lifecycle_org_state" ON "public"."opportunity_lifecycle" USING "btree" ("org_id", "state");
+
+CREATE INDEX "idx_opp_lifecycle_history_org_identity" ON "public"."opportunity_lifecycle_history" USING "btree" ("org_id", "opportunity_identity", "revision" DESC);
+
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0031') ON CONFLICT DO NOTHING;
 
 
 --
