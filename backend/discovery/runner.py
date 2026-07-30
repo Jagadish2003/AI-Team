@@ -2939,6 +2939,12 @@ def main():
     if args.output_format == "track_a_seed":
         payload = export_track_a_seed(payload)
 
+    # 2.0-B1 T5 (AC5): this CLI writes the FULL run payload (opportunities +
+    # evidence) to disk, so it is an export path — redact secrets and enforce
+    # the 1.9 aggregation floor before anything is serialised.
+    from .export_safety import guard_exported_payload
+    payload = guard_exported_payload(payload, where="runner CLI payload export")
+
     out = json.dumps(payload, indent=2)
     if args.output:
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)

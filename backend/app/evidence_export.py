@@ -95,85 +95,39 @@ class EvidenceExportError(Exception):
 # ── content discipline (runs before hashing + signing) ───────────────────────
 
 
-def _aggregation_floor():
-    """The SecOps aggregation-floor module, or None when unavailable.
+def _guard_export_content(payload: Any, *, where: str) -> Tuple[Any, List[str]]:
+    """Redact secrets, then enforce the 1.9 aggregation floor, on bundle content.
 
-    Import shim mirrors the pack modules' own (repo-root vs backend-root import
-    styles). Returns None only if the module cannot be imported at all, which is
-    surfaced by the caller rather than silently skipping the check.
+    Delegates to :mod:`app.export_guard` — the ONE shared implementation every
+    export path in the product routes through (2.0-B1 T5 / AC5), so this bundle
+    and every other export cannot drift apart on either discipline. The floor
+    violation is re-raised as an :class:`EvidenceExportError` to keep this
+    module's public error contract (and the route's status mapping) unchanged.
+
+    ``audit`` is excluded from the FLOOR sweep only (never from the exported
+    payload): the run decision audit's ``by`` field is the analyst who recorded a
+    decision. That actor identity is the entire point of an audit trail and an
+    auditor requires it, but the floor flags any email as an individual
+    reference — sweeping it would either strip the attestation's provenance or
+    make every reviewed run unexportable. The audit list has a fixed shape
+    (id / timestamps / action / actor / evidence id) and so cannot carry a
+    host x vulnerability enumeration, which is what the floor exists to stop.
+    Secret redaction still covers it.
     """
-    try:  # pragma: no cover - import shim
-        from backend.discovery.packs import security_ops_aggregation_floor as floor
-    except ModuleNotFoundError:
-        try:
-            from discovery.packs import security_ops_aggregation_floor as floor
-        except ModuleNotFoundError:
-            return None
-    return floor
+    from .export_guard import ExportGuardViolation, guard_export_payload
 
-
-def _assert_aggregation_floor(payload: Any, *, where: str) -> None:
-    """Fail the export if ``payload`` would enumerate host x vulnerability pairs
-    or name individuals. Never swallowed — see the module docstring."""
-    floor = _aggregation_floor()
-    if floor is None:
-        logger.warning(
-            "evidence_export: SecOps aggregation floor unavailable — exporting "
-            "%s without the enumeration sweep", where,
-        )
-        return
     try:
-        floor.assert_output_safe(payload, where=where)
-    except floor.SecOpsAggregationFloorViolation as exc:
-        raise EvidenceExportError(
-            f"export refused — {where} violates the SecOps aggregation floor: {exc}"
-        ) from exc
-
-
-def _redactor():
-    """The secret-redaction scanner, or None when unavailable."""
-    try:  # pragma: no cover - import shim
-        from backend.discovery.ingest.secret_redaction import scan_and_redact
-    except ModuleNotFoundError:
-        try:
-            from discovery.ingest.secret_redaction import scan_and_redact
-        except ModuleNotFoundError:
-            return None
-    return scan_and_redact
-
-
-def _redact_tree(value: Any, pattern_types: List[str], scan) -> Any:
-    """Recursively redact secret signatures from every string in ``value``.
-
-    Deterministic (pattern-based), so it does not disturb reproducibility, and
-    it runs BEFORE hashing/signing so the signed bytes are the exported bytes.
-    Collects pattern TYPE names only — never a secret value.
-    """
-    if isinstance(value, str):
-        outcome = scan(value)
-        if outcome.pattern_types:
-            pattern_types.extend(outcome.pattern_types)
-        return outcome.text
-    if isinstance(value, Mapping):
-        return {k: _redact_tree(v, pattern_types, scan) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_redact_tree(v, pattern_types, scan) for v in value]
-    return value
-
-
-def _redact_content(payload: Any) -> Tuple[Any, List[str]]:
-    """Redact secrets across a bundle content section. Returns
-    ``(redacted_payload, pattern_types)``; a missing scanner degrades to a
-    no-op that is logged, never a silent pass."""
-    scan = _redactor()
-    if scan is None:
-        logger.warning(
-            "evidence_export: secret-redaction scanner unavailable — exporting "
-            "without the defence-in-depth redaction pass"
+        guarded = guard_export_payload(
+            payload,
+            where=where,
+            # Base pattern set: this bundle carries the run's decision audit,
+            # whose actor email must survive (the strict set would scrub it).
+            strict=False,
+            floor_exclude_keys=("audit",),
         )
-        return payload, []
-    pattern_types: List[str] = []
-    return _redact_tree(payload, pattern_types, scan), pattern_types
+    except ExportGuardViolation as exc:
+        raise EvidenceExportError(str(exc)) from exc
+    return guarded.payload, guarded.redacted_pattern_types
 
 
 # ── integrity block (per-record hashes folded into a root) ───────────────────
@@ -384,31 +338,18 @@ def build_export_bundle(
             "audit": db.run_kv_get("audit", run_id, []) or [],
         }
 
-    # Content discipline BEFORE hashing/signing so signed == exported.
+    # Content discipline BEFORE hashing/signing so signed == exported: redact
+    # secrets, then enforce the 1.9 aggregation floor, via the shared export
+    # guard every export path in the product routes through (T5 / AC5).
     content: Dict[str, Any] = {"findings": findings}
     if report_artifacts is not None:
         content["report_artifacts"] = report_artifacts
-    content, redacted_patterns = _redact_content(content)
+    content, redacted_patterns = _guard_export_content(
+        content, where=f"signed evidence export ({scope})"
+    )
 
     findings = content["findings"]
     report_artifacts = content.get("report_artifacts")
-
-    # The aggregation-floor sweep covers the ENUMERATION-CAPABLE surfaces: the
-    # pack-produced findings/evidence and the narrative report artifacts. It
-    # deliberately EXCLUDES the run's decision audit, whose ``by`` field is the
-    # analyst who recorded a decision. That actor identity is the entire point of
-    # an audit trail and an auditor requires it, but the floor flags any email as
-    # an individual reference — sweeping it would either strip the attestation's
-    # provenance or make every reviewed run unexportable. The audit list has a
-    # fixed shape (id / timestamps / action / actor / evidence id) and so cannot
-    # carry a host x vulnerability enumeration, which is what the floor exists to
-    # stop. Secret redaction above still covers it.
-    floor_scope: Dict[str, Any] = {"findings": findings}
-    if report_artifacts is not None:
-        floor_scope["report_artifacts"] = {
-            k: v for k, v in report_artifacts.items() if k != "audit"
-        }
-    _assert_aggregation_floor(floor_scope, where=f"signed evidence export ({scope})")
 
     records: List[Dict[str, Any]] = [
         {"kind": "run_provenance", "record_id": str(run_id), "content": _run_provenance(run)},

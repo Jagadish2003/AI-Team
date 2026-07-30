@@ -772,6 +772,10 @@ def main():
             print(f"  {i}. {sev_icon} [{rec['type']}] {rec['target']}")
 
     if args.report_path:
+        # 2.0-B1 T5 (AC5): the calibration report embeds run-derived content
+        # (algo_top5, score_debug_summary), so guard it before writing.
+        from ..export_safety import guard_exported_payload
+        report = guard_exported_payload(report, where="calibration report export")
         Path(args.report_path).parent.mkdir(parents=True, exist_ok=True)
         Path(args.report_path).write_text(
             json.dumps(report, indent=2), encoding="utf-8"

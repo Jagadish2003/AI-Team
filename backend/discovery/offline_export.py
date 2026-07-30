@@ -1,5 +1,15 @@
 """
 SF-2.8 — Offline Export CLI
+
+2.0-B1 T5 (AC5): this writes opportunities + evidence to disk, so it is an
+EXPORT path and holds the same two lines every export path holds — secrets are
+redacted (non-reversibly) and the 1.9 SecOps aggregation floor is enforced —
+via the shared ``app.export_guard``. Before T5 it applied neither, which made it
+the least protected export surface in the product despite being the one that
+literally writes files.
+
+A floor breach FAILS the export with a named reason and writes nothing: a seed
+file that doubles as a host x vulnerability target list must not reach disk.
 """
 from __future__ import annotations
 
@@ -12,6 +22,23 @@ from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _guard(opportunities: list, evidence: list) -> tuple:
+    """Redact secrets and enforce the aggregation floor on what will be written.
+
+    Returns the guarded ``(opportunities, evidence)`` — the content that must
+    actually be written, so what lands on disk is what was checked. Delegates to
+    the shared discovery-side bridge (``discovery.export_safety``) so every
+    export CLI holds the line the same way.
+    """
+    from .export_safety import guard_exported_payload
+
+    guarded = guard_exported_payload(
+        {"opportunities": opportunities, "evidence": evidence},
+        where="offline seed export",
+    )
+    return guarded["opportunities"], guarded["evidence"]
 
 
 def export(
@@ -69,6 +96,20 @@ def export(
 
     logger.info(f"Produced: {n_opps} opportunities, {n_ev} evidence objects")
 
+    # Clean opportunities (remove _debug)
+    clean_opps = []
+    for opp in seed["opportunities"]:
+        clean = {k: v for k, v in opp.items() if k != "_debug"}
+        clean_opps.append(clean)
+
+    # -------------------------------
+    # 2.0-B1 T5 (AC5) — EXPORT GUARD
+    # -------------------------------
+    # Runs BEFORE the dry-run branch so `--dry-run` exercises exactly the same
+    # discipline as a real write: a dry run that skipped the guard would report
+    # "would write" for content the guard refuses.
+    clean_opps, guarded_evidence = _guard(clean_opps, seed["evidence"])
+
     # -------------------------------
     # DRY RUN
     # -------------------------------
@@ -87,18 +128,12 @@ def export(
     opps_file = out_path / "opportunities.json"
     evs_file  = out_path / "evidence.json"
 
-    # Clean opportunities (remove _debug)
-    clean_opps = []
-    for opp in seed["opportunities"]:
-        clean = {k: v for k, v in opp.items() if k != "_debug"}
-        clean_opps.append(clean)
-
     opps_file.write_text(
         json.dumps(clean_opps, indent=2), encoding="utf-8"
     )
 
     evs_file.write_text(
-        json.dumps(seed["evidence"], indent=2), encoding="utf-8"
+        json.dumps(guarded_evidence, indent=2), encoding="utf-8"
     )
 
     logger.info(f"Written: {opps_file} ({n_opps} opportunities)")
@@ -118,14 +153,26 @@ def main():
     parser.add_argument("--org-id", default="demo-org")
     args = parser.parse_args()
 
-    export(
-        out_dir=args.out_dir,
-        systems=args.systems,
-        dry_run=args.dry_run,
-        run_id=args.run_id,
-        org_id=args.org_id,
-    )
+    from .export_safety import ExportGuardViolation
+
+    try:
+        export(
+            out_dir=args.out_dir,
+            systems=args.systems,
+            dry_run=args.dry_run,
+            run_id=args.run_id,
+            org_id=args.org_id,
+        )
+    except ExportGuardViolation as exc:
+        # 2.0-B1 T5 (AC5): a refused export must be a clear, actionable message
+        # and a non-zero exit — not a traceback, and never a partial write.
+        # Caught via the symbol re-exported by export_safety, which resolves to
+        # the SAME class the guard raises (see its _load_guard docstring).
+        logger.error("EXPORT REFUSED — nothing was written.")
+        logger.error("%s", exc)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
