@@ -391,6 +391,21 @@ def run_trackb_and_persist(
         db.run_kv_set("opps", run_id, opps)
         db.run_kv_set("evidence", run_id, ev)
         if payload.get("secopsVolume") is not None:
+            # 2.0-B1 T5 (AC5): sweep the SecOps volume artifact like every other
+            # SecOps materialization output. It is designed to be aggregate-only
+            # (counts keyed on vulnerability_class x ci_class x remediation_path,
+            # never hosts), but before T5 this was the ONE SecOps KV write in this
+            # block with no floor sweep — the guarantee rested on a docstring
+            # rather than an enforced boundary. It is also viewer-readable via
+            # GET /api/runs/{id}/secops/volume, so an enumeration reaching it
+            # would be broadly exposed. Swept unconditionally (not gated on
+            # secops_enabled): if this artifact exists at all the run produced
+            # SecOps volume data, whatever the pack list says.
+            _assert_secops_materialized(
+                payload["secopsVolume"],
+                where="Security Operations volume artifact",
+                enabled=True,
+            )
             db.run_kv_set("secops_volume", run_id, payload["secopsVolume"])
 
         # R16-B1 (T6): persist the queryable evidence-pointer trail so a finding

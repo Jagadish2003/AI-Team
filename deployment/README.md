@@ -372,6 +372,70 @@ silently shortening an artifact someone will audit.
 
 ---
 
+## Export Content Guarantees (2.0-B1 T5 / AC5)
+
+Every path by which content leaves the deployment holds two lines, in this
+order, via the single shared guard `backend/app/export_guard.py`
+(discovery-side CLIs reach it through `backend/discovery/export_safety.py`):
+
+1. **Secrets are redacted, non-reversibly.** `secret_redaction` substitutes
+   `[REDACTED:<type>]` and returns only pattern *type* names — the matched value
+   is never stored, returned, or logged, and there is no reverse map or keyed
+   tokenisation. Retrieval-sourced content is already redacted upstream ("redact
+   before index, always"), but detector-built evidence snippets and narrative
+   prose are not, which is why exports redact again.
+2. **The 1.9 SecOps aggregation floor is enforced.** A payload that would name an
+   individual, a host, a CVE, or a host × vulnerability pair **refuses the
+   export** — it is never emitted with a caveat. Redaction runs first, so the
+   floor sweeps the bytes that would actually ship.
+
+**Guarded export paths**
+
+| Surface | Notes |
+|---|---|
+| `GET .../evidence-export` (per finding, per report) | Guarded in the builder, before signing — so the signature covers guarded bytes |
+| `discovery/offline_export.py` | Guards before writing `opportunities.json` / `evidence.json`; `--dry-run` runs the same guard |
+| `discovery/runner.py --output` | Writes the full run payload, so it is guarded before serialising |
+| `calibrator.py` / `live_validator.py` / `integration_verifier.py` `--report-path` | Run-derived reports, guarded before writing |
+| `secops_volume` run artifact | Swept at materialization alongside its four sibling SecOps outputs |
+
+**Deliberately exempt** (recorded so they are not "fixed" by mistake): the static
+partner security-artifact download (a shipped file, no tenant content); the
+owner-only usage report/summary (commercial aggregates, no run content); the
+demo seeder's own `seed_state.json` bookkeeping; and the single audited
+`secops/evidence/resolve` pointer lookup, which returns individual record content
+**by design** and is the one sanctioned route to it.
+
+**One narrow exclusion.** The run's decision audit is excluded from the *floor
+sweep only* (never from the exported payload): its `by` field is the analyst who
+recorded a decision, which is the entire point of an audit trail and which an
+auditor requires — but the floor flags any email as an individual reference.
+The audit list has a fixed shape and cannot carry an enumeration. Secrets are
+still redacted from it.
+
+**Why this is enforced on exports and not on the ordinary API reads.** The floor
+*raises*. Its IPv4 pattern matches any valid dotted quad, so a version string
+like "upgraded to 1.2.3.4" in LLM prose would turn a board-facing page into a
+hard error. Exports are documents a third party keeps, so refusing is the correct
+answer there; the UI reads are protected by the materialization-time sweep
+instead.
+
+**The client-side PDF.** `frontend/src/utils/exportPdf.ts` re-serialises API
+responses (it does not screenshot the DOM) and renders only the executive summary
+and opportunity titles — no evidence snippets, no `aiRationale`. Because it bakes
+titles into a chart raster that no text-based check could audit, enforcement for
+it stays server-side; duplicating the floor's regexes in TypeScript would create
+a second source of truth. `exportPdfAggregationFloor.test.ts` pins the field set
+it consumes so that reasoning cannot silently go stale.
+
+**Adding a new export?** `tests/unit/test_r2_0_b1_t5_export_surface_conformance.py`
+discovers export surfaces by walking the tree, and **default-denies**: a new one
+fails CI until it either routes through the guard or is added to the allow-list
+with a written `PROTECTED:`/`EXEMPT:` justification. A `PROTECTED` claim is
+verified against the code, so it cannot be a rubber stamp.
+
+---
+
 ## Login Rate Limiting (AUTH-1)
 
 AUTH-1 adds a `login_attempts` table (created by Alembic migration `0004`) that backs
