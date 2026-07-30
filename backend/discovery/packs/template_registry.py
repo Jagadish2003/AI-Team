@@ -388,15 +388,52 @@ TEMPLATE_REGISTRY: Dict[str, TemplateDefinition] = {
             "PERMISSION_BOTTLENECK",
             "CROSS_SYSTEM_ECHO",
         ],
-        # Insurance vocabulary. Every mapping is IDEMPOTENT — no replacement
-        # contains its source — because app/terminology.py substitutes whole words
-        # and a superstring mapping double-expands text already using the domain
-        # phrase (the defect 2.0-D1 T6 fixed for FSC). A contract test pins this.
+        # ── Insurance terminology set (2.0-D2 T2) ────────────────────────────
+        #
+        # The vocabulary that makes findings, roadmaps, blueprints, AI enrichment
+        # and executive reports readable to claims, underwriting and
+        # policy-servicing stakeholders. It lives HERE — on the template — and
+        # nowhere else: no insurance wording is hardcoded in a detector, a frontend
+        # component, a report builder or an LLM branch. The existing serve-time
+        # engine (app/terminology.py, applied by apply_run_terminology) carries it
+        # to every narrative surface, and the shared engine is unchanged.
+        #
+        # MAPPING SAFETY. app/terminology.py substitutes WHOLE WORDS in one pass
+        # over an allowlist of narrative fields, and it pluralises both sides. Three
+        # rules therefore constrain what may appear here, all pinned by contract
+        # tests in test_insurance_terminology.py:
+        #
+        #   1. No replacement may CONTAIN its own source, or text already using the
+        #      domain phrase double-expands — the "policy policy" / "claim claim"
+        #      malformation. This is not hypothetical: it shipped for FSC in 2.0-D1
+        #      T4 and was fixed in T6.
+        #   2. No replacement word may be another mapping's SOURCE, or the map
+        #      stops being idempotent across repeated application.
+        #   3. A mapping must not capture a word this product uses for something
+        #      else.
+        #
+        # Mappings deliberately REJECTED, with the reason, so nobody re-adds them:
+        #   queue -> claims queue    rule 1: yields "claims claims queue"
+        #   team  -> claims team     rule 1: yields "claims claims team"
+        #   agent -> adjuster        rule 3: "agent" is the AI agent in this
+        #                            product; blueprint agentName "Monitoring
+        #                            Agent" would become "Monitoring Adjuster"
+        #   case  -> claim           semantics: a policy-endorsement case is not a
+        #                            claim, so this would mislabel servicing work
+        #
+        # Claims and team wording is therefore carried by the narrative copy itself
+        # rather than by a substitution — the only substitutions that would add them
+        # are the unsafe ones above.
+        #
+        # Values remain SUBJECT TO BUSINESS REVIEW (D2 T2): these are the story's
+        # candidate mappings, not SME-confirmed insurance house style.
         terminology={
             "customer": "policyholder",
             "account": "policy",
-            "obligation": "coverage",
-            "approval": "referral review",
+            "ticket": "service request",
+            "approval": "underwriting review",
+            "obligation": "coverage requirement",
+            # Queue coverage without the unsafe `queue -> claims queue` superstring.
             "backlog": "claims queue",
         },
         metadata={
