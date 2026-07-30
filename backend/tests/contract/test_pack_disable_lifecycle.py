@@ -17,7 +17,8 @@ RBAC boundary, and the run-scoped persistence.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterator, List
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -31,10 +32,43 @@ from app.pack_state import (
     STATE_DISABLED,
     set_pack_state_store,
 )
+from app.rbac import seed_owner
 
 OWNER_TOKEN = os.getenv("DEV_JWT", "dev-token-change-me")
 ANALYST_TOKEN = "analyst-token"
 VIEWER_TOKEN = "viewer-token"
+
+# The org requests are scoped to, or None to send NO X-Org-Id header — which is the
+# default, so every test that already passes keeps its exact previous request shape
+# (the static analyst/viewer tokens resolve their org and role as before). Only the
+# run-health tests opt in to a throwaway org (see `isolated_org`).
+_CURRENT_ORG: Dict[str, Any] = {"id": None}
+
+
+def _owner_org(prefix: str) -> str:
+    """A throwaway org with the dev token seeded as its owner."""
+    org_id = f"{prefix}_{uuid4().hex[:8]}"
+    seed_owner(org_id, OWNER_TOKEN)
+    return org_id
+
+
+@pytest.fixture
+def isolated_org() -> Iterator[str]:
+    """Scope one test to a fresh org.
+
+    Required by anything asserting on `GET /api/run-health/packs`, because
+    `health_aggregation._latest_run` returns the newest run **for the org across the
+    whole contract database** — and that database is dropped only once per session.
+    Other suites create runs in the shared `default` org, so a test that assumed "the
+    run I just launched is the latest" passed alone and failed in a full run, which is
+    exactly how these tests failed in CI.
+    """
+    previous = _CURRENT_ORG["id"]
+    _CURRENT_ORG["id"] = _owner_org("pack_disable")
+    try:
+        yield _CURRENT_ORG["id"]
+    finally:
+        _CURRENT_ORG["id"] = previous
 
 
 @pytest.fixture(autouse=True)
@@ -61,16 +95,31 @@ def client():
 
 
 def _auth(token: str = OWNER_TOKEN) -> Dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}"}
+    # Only sent when a test opted into an isolated org, so the default request shape
+    # is byte-identical to before.
+    if _CURRENT_ORG["id"] is not None:
+        headers["X-Org-Id"] = _CURRENT_ORG["id"]
+    return headers
 
 
 def _launch_body(**overrides: Any) -> Dict[str, Any]:
+    """A launch payload, defaulting to a single `service_cloud` selection.
+
+    When the caller supplies ``pack_ids`` the default singular ``pack_id`` is
+    DROPPED. ``LaunchRequest`` reconciles the two into one selection, so leaving it
+    in made ``pack_ids=["cloud_ops"]`` actually mean
+    ``["cloud_ops", "service_cloud"]`` — which silently defeated the
+    "only disabled packs" tests: a runnable pack was always in the selection, so the
+    launch correctly returned 200 instead of the 409 the test was asserting.
+    """
     body: Dict[str, Any] = {
         "org_id": "default",
         "selected_system_ids": ["salesforce", "servicenow"],
-        "pack_id": "service_cloud",
         "weightings": {},
     }
+    if "pack_ids" not in overrides:
+        body["pack_id"] = "service_cloud"
     body.update(overrides)
     return body
 
@@ -381,6 +430,12 @@ class TestHistoricalFindingsSurviveADisable:
 
 
 class TestRunHealthReflectsPackState:
+    # Every test here reads the packs panel, which resolves "the latest run for this
+    # org" out of the shared contract database — so each needs its own org.
+    @pytest.fixture(autouse=True)
+    def _own_org(self, isolated_org):
+        return isolated_org
+
     def _seed_executed_run(self, client) -> str:
         run_id = client.post(
             "/api/stack-builder/launch",
