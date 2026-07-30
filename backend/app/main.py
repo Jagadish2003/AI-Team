@@ -80,6 +80,7 @@ from .routes_ingestion import register_ingestion_routes
 from .routes_runbook_matches import register_runbook_match_routes
 from .routes_secops_evidence import register_secops_evidence_routes
 from .routes_opportunity_lifecycle import register_opportunity_lifecycle_routes
+from .routes_opportunity_baseline import register_opportunity_baseline_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
@@ -363,6 +364,9 @@ register_secops_evidence_routes(app)
 # 2.0-A2 T1: analyst-driven opportunity lifecycle (open -> actioned -> monitoring
 # -> measured, plus dismissed/stalled), keyed on the stable opportunity_identity.
 register_opportunity_lifecycle_routes(app)
+# 2.0-A2 T2: read-only retrieval of the immutable baseline artifact frozen at
+# finding creation. No write verb — the pipeline is the only writer.
+register_opportunity_baseline_routes(app)
 
 origins = [
     o.strip()
