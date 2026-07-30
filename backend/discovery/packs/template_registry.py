@@ -358,18 +358,57 @@ TEMPLATE_REGISTRY: Dict[str, TemplateDefinition] = {
             "confluence": "documentation_system",
             "sharepoint": "documentation_system",
         },
+        # ── Insurance focus defaults (2.0-D2 T3) ─────────────────────────────
+        #
+        # An EXISTING canonical focus id and EXISTING emphasis tags, through the
+        # current focus-affinity mechanism. No new focus type, scoring rule, focus
+        # card, API property or focus-engine branch.
+        #
+        # `member_customer_service` because the general Insurance template is
+        # primarily policyholder-facing claims and policy servicing, and because
+        # focus_affinity already emphasises the Service Cloud detectors that read
+        # that workload (REPETITIVE_AUTOMATION, KNOWLEDGE_GAP) under it.
+        #
+        # This is a STARTING VALUE, not a locked configuration: an
+        # underwriting-heavy customer selects `approvals_compliance` (which owns
+        # APPROVAL_BOTTLENECK and PERMISSION_BOTTLENECK) and their choice wins,
+        # recorded as an edited field by resolve_launch_config.
+        #
+        # The tags map to the five areas T3 names:
+        #   service_casework      policyholder service
+        #   intake_requests       claims intake
+        #   approvals             underwriting review
+        #   compliance_risk       underwriting review (the regulatory half)
+        #   backlog_work_queues   operational queues
+        #   handoffs_routing      cross-team handoffs
+        #
+        # WHAT THE TAGS DO, AND DO NOT DO. They are declarative workflow-focus
+        # hints: routes_stack_builder returns them so the Stack Builder can
+        # pre-populate, and they are captured in launch provenance. RANKING comes
+        # from `focus_id` alone, via FOCUS_AFFINITY's detector-id mapping — the tags
+        # are not a scoring input, so editing this list changes what the UI
+        # pre-selects and what the API reports, never how findings rank. A contract
+        # test proves it by emptying the list and asserting ranks are unchanged.
+        # (`documents_knowledge` was dropped here: the documentation lane is
+        # expressed in suggested_roles, and T3 scopes the focus to the five areas
+        # above.)
+        #
+        # KNOWN LIMITATION, reported rather than worked around (see
+        # metadata.focus_limitation): no single canonical focus emphasises all five
+        # areas. member_customer_service emphasises 2 of the pack's 7 detectors;
+        # claims handoffs sit under cross_system_handoffs and underwriting review
+        # under approvals_compliance. Nothing is SUPPRESSED — a detector outside the
+        # focus is "surfaced but not emphasised" — so every pattern stays visible,
+        # which a seeded test asserts.
         focus_defaults=FocusDefaults(
-            # Claims and policy servicing are the primary workload, and
-            # focus_affinity already emphasises the Service Cloud detectors that
-            # read it (REPETITIVE_AUTOMATION, KNOWLEDGE_GAP) under this focus — no
-            # code change needed. The emphasis tags widen it to cover the
-            # underwriting-review and handoff areas as well.
             focus_id="member_customer_service",
             emphasis=[
                 "service_casework",
+                "intake_requests",
                 "approvals",
+                "compliance_risk",
+                "backlog_work_queues",
                 "handoffs_routing",
-                "documents_knowledge",
             ],
         ),
         # Service Cloud pack (pack_config.PACK_REGISTRY["service_cloud"]) — D2
@@ -452,6 +491,26 @@ TEMPLATE_REGISTRY: Dict[str, TemplateDefinition] = {
                 "covered by the Service Cloud pack and are deliberately out of "
                 "scope for 2.0-D2. They require a separate future insurance pack "
                 "story on the FSC pattern; D2 ships configuration only."
+            ),
+            # 2.0-D2 T3: "any inability to represent Insurance priorities using
+            # existing focuses must be reported separately" — this is that report.
+            "focus_limitation": (
+                "No single canonical focus emphasises all five Insurance areas. "
+                "member_customer_service (the default) emphasises 2 of the Service "
+                "Cloud pack's 7 detectors — REPETITIVE_AUTOMATION and KNOWLEDGE_GAP, "
+                "the policyholder-service patterns. Claims handoffs "
+                "(HANDOFF_FRICTION, CROSS_SYSTEM_ECHO, INTEGRATION_CONCENTRATION) "
+                "are emphasised by cross_system_handoffs, and underwriting review "
+                "(APPROVAL_BOTTLENECK, PERMISSION_BOTTLENECK) by "
+                "approvals_compliance. Nothing is suppressed: a detector outside "
+                "the active focus is surfaced but not emphasised, so every pattern "
+                "stays visible and only relative ranking differs. Widening "
+                "member_customer_service's affinity would change ranking for every "
+                "industry that uses it (STRS, FSC, service_operations), so it is "
+                "deliberately not done here. An underwriting-heavy customer should "
+                "select approvals_compliance; a handoff-heavy one "
+                "cross_system_handoffs. A focus that spans an industry's whole "
+                "workflow would need a separate focus-model story."
             ),
         },
     ),
