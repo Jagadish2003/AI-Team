@@ -243,11 +243,21 @@ TEMPLATE_REGISTRY: Dict[str, TemplateDefinition] = {
         # financial_services_cloud_pack_config.json so template and pack speak the
         # same language (the same discipline the cloud_ops template follows). A
         # contract test pins the two together.
+        #
+        # EVERY MAPPING HERE MUST BE IDEMPOTENT: `app/terminology.py` is a
+        # whole-word substitution engine, so a mapping whose REPLACEMENT CONTAINS
+        # its SOURCE double-expands any text that already uses the domain phrase.
+        # `account -> financial account` and `handoff -> referral handoff` were
+        # removed for exactly that reason — this pack's own label copy already says
+        # "financial account" and "referral handoffs", and the rewrite turned those
+        # into "financial financial account" and "referral referral handoffs" on
+        # every served finding, roadmap entry and executive report. Nothing is lost
+        # by dropping them: the labels are already written in FSC language, which is
+        # what the mappings were trying to achieve. A contract test now asserts the
+        # map is idempotent and that the label copy survives it unchanged.
         terminology={
             "customer": "household",
-            "account": "financial account",
             "ticket": "service process",
-            "handoff": "referral handoff",
             "backlog": "service queue",
         },
         metadata={

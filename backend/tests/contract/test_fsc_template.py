@@ -278,7 +278,14 @@ class TestTerminology:
 
     def test_template_declares_fsc_terminology(self, template):
         assert template.terminology["customer"] == "household"
-        assert template.terminology["account"] == "financial account"
+        assert template.terminology["ticket"] == "service process"
+        assert template.terminology["backlog"] == "service queue"
+        # `account -> financial account` and `handoff -> referral handoff` were
+        # deliberately removed: their replacements contain their sources, so they
+        # double-expanded this pack's own label copy. See
+        # test_every_mapping_is_idempotent below.
+        assert "account" not in template.terminology
+        assert "handoff" not in template.terminology
 
     def test_template_terminology_matches_the_packs_language_map(self, template):
         """Template and pack must speak the same language (the cloud_ops
@@ -310,6 +317,54 @@ class TestTerminology:
         }
         assert boundaries[PACK_ID]["customer"] == "household"
         assert boundaries[LENDING_PACK_ID]["customer"] == "borrower"
+
+    def test_every_mapping_is_idempotent(self):
+        """A mapping whose REPLACEMENT CONTAINS its SOURCE double-expands.
+
+        ``app/terminology.py`` substitutes whole words, so ``account`` ->
+        ``financial account`` turns text that already says "financial account" into
+        "financial financial account" — on every served finding, roadmap entry and
+        executive report. Applying the map twice must equal applying it once.
+        """
+        terminology = _mod_app_terminology()
+        fsc = _tr().get_template(TEMPLATE_ID).terminology
+        for generic, domain in fsc.items():
+            once = terminology.rewrite_text(generic, fsc)
+            twice = terminology.rewrite_text(once, fsc)
+            assert once == twice, (
+                f"{generic!r} -> {domain!r} is not idempotent: {once!r} becomes "
+                f"{twice!r}. The replacement must not contain the source word."
+            )
+
+    def test_no_mapping_replacement_contains_its_own_source(self):
+        """The structural form of the rule above, stated directly."""
+        fsc = _tr().get_template(TEMPLATE_ID).terminology
+        for generic, domain in fsc.items():
+            assert generic.lower() not in domain.lower().split(), (
+                f"{generic!r} -> {domain!r}: the replacement contains the source, "
+                f"so any text already using the domain phrase double-expands"
+            )
+
+    def test_the_packs_own_label_copy_survives_its_own_map(self):
+        """The user-visible property: FSC labels are ALREADY in FSC language, so the
+        rewrite must not corrupt them. This is what the removed mappings broke."""
+        terminology = _mod_app_terminology()
+        fsc = _tr().get_template(TEMPLATE_ID).terminology
+        labels = _pack_config().get_ui_labels(PACK_ID) or {}
+        for detector_id, entry in labels.items():
+            if detector_id.startswith("_"):
+                continue
+            for field, value in entry.items():
+                if not isinstance(value, str):
+                    continue
+                once = terminology.rewrite_text(value, fsc)
+                twice = terminology.rewrite_text(once, fsc)
+                assert once == twice, f"{detector_id}.{field} is not stable"
+                for doubled in ("financial financial", "referral referral",
+                                "household household", "service process service process"):
+                    assert doubled not in once.lower(), (
+                        f"{detector_id}.{field} double-expanded to {once!r}"
+                    )
 
     def test_applying_one_vocabulary_never_introduces_the_others(self):
         terminology = _mod_app_terminology()
