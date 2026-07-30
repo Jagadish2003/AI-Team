@@ -1539,3 +1539,62 @@ BEGIN
     END LOOP;
 END
 $$;
+
+
+--
+-- Run-history retention — 2.0-C1 T4 (AT-829) alembic 0033
+--
+-- The GRANT block above hands each app role ALL PRIVILEGES, which includes DELETE
+-- and TRUNCATE. Claw those two back on the tables holding run history, so no
+-- application path — intended or buggy — can remove a finding, its evidence, a run
+-- record, or the pack lifecycle audit trail (2.0-C1 AC4). The DATABASE refuses it.
+--
+-- MUST run AFTER the GRANT block, or the grant hands DELETE straight back.
+--
+-- The protected set is declared once in backend/app/history_retention.py
+-- (PROTECTED_TABLE_REASONS) and mirrored here; a contract test asserts the two
+-- agree, so adding a table there without updating this block fails CI.
+--
+-- Deliberately NOT protected (deletion is correct for them):
+--   retrieval_chunks / retrieval_refresh_queue — derived vector index + work queue;
+--       R18-B2 freshness purges chunks when a source artifact changes. Re-embeddable,
+--       loses no history.
+--   entity_relationships — cross-run graph state that relationship_mapper prunes when
+--       a relationship no longer holds; a current view, not a historical record.
+--
+-- NOTE run_events: db.delete_run_events is a SOFT delete (UPDATE is_deleted = TRUE),
+-- which is why revoking DELETE here does not break rewriting a run's event list.
+--
+-- Idempotent: REVOKE on an already-revoked privilege is a no-op, and both the role
+-- and the table are existence-guarded.
+--
+DO
+$$
+DECLARE
+    r text;
+    t text;
+    app_roles text[] := ARRAY['agentiq', 'aiqdevusr'];  -- TODO(deploy): add the prod app role
+    protected_tables text[] := ARRAY[
+        'kv',                   -- run-scoped artifacts: findings, evidence, roadmap, report
+        'opportunity_instances',-- per-instance pack id + pack version stamps (R16-B1 §4)
+        'pack_state_history',   -- append-only pack lifecycle trail (2.0-C1 T2/T3)
+        'run_events',           -- run event log (soft-deleted, never removed)
+        'runs'                  -- run records
+    ];
+BEGIN
+    FOREACH r IN ARRAY app_roles LOOP
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+            FOREACH t IN ARRAY protected_tables LOOP
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = 'public' AND table_name = t
+                ) THEN
+                    EXECUTE format(
+                        'REVOKE DELETE, TRUNCATE ON TABLE public.%I FROM %I', t, r
+                    );
+                END IF;
+            END LOOP;
+        END IF;
+    END LOOP;
+END
+$$;

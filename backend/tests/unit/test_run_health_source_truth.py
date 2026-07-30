@@ -96,7 +96,16 @@ def test_selected_pack_without_execution_evidence_is_not_invented(monkeypatch):
     monkeypatch.setattr(health, "_safe_range", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(health, "_snapshot_detector_ids", lambda *_args: [])
 
-    assert health.packs_view("org-a") == {"run_id": "run-failed", "packs": []}
+    # 2.0-C1 T2/T4: the panel gained two ADDITIVE keys (`excluded_packs` from
+    # AT-827, `pinned_pack_versions` from AT-828), both empty here. The assertion
+    # this test exists to make is that `packs` stays EMPTY — a selected pack is not
+    # proof its detectors ran — so it is checked exactly while the additive
+    # lifecycle keys are asserted separately.
+    result = health.packs_view("org-a")
+    assert result["run_id"] == "run-failed"
+    assert result["packs"] == []
+    assert result["excluded_packs"] == []
+    assert result["pinned_pack_versions"] == {}
 
 
 def test_runner_emits_exact_pack_execution_snapshot(monkeypatch):

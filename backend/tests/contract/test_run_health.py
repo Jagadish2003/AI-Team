@@ -275,14 +275,23 @@ def test_selected_pack_is_not_reported_when_detectors_never_executed(client):
         pack_executed=False,
     )
 
+    # 2.0-C1 T2/T4: the panel gained the additive `excluded_packs` (AT-827) and
+    # `pinned_pack_versions` (AT-828) keys, both empty here. This test's point is
+    # that `packs` stays EMPTY, so that is asserted exactly.
     body = client.get("/api/run-health/packs", headers=_auth(org)).json()
-    assert body == {"run_id": run_id, "packs": []}
+    assert body["run_id"] == run_id
+    assert body["packs"] == []
+    assert body["excluded_packs"] == []
+    assert body["pinned_pack_versions"] == {}
 
 
 def test_packs_empty_without_runs(client):
     org = _owner_org("rh_nopacks")
     body = client.get("/api/run-health/packs", headers=_auth(org)).json()
-    assert body == {"run_id": None, "packs": []}
+    assert body["run_id"] is None
+    assert body["packs"] == []
+    assert body["excluded_packs"] == []
+    assert body["pinned_pack_versions"] == {}
 
 
 # ── AC3: content & freshness ────────────────────────────────────────────────────
@@ -463,7 +472,12 @@ def test_no_cross_tenant_visibility(client):
     assert runs_b["runs"] == []
 
     packs_b = client.get("/api/run-health/packs", headers=_auth(org_b)).json()
-    assert packs_b == {"run_id": None, "packs": []}
+    assert packs_b["run_id"] is None
+    assert packs_b["packs"] == []
+    # 2.0-C1 T2/T4: additive lifecycle keys must also be empty for org B — a
+    # rollback or a disable in org A must not leak across the tenant boundary.
+    assert packs_b["excluded_packs"] == []
+    assert packs_b["pinned_pack_versions"] == {}
 
     attention_b = client.get("/api/run-health/attention", headers=_auth(org_b)).json()
     assert attention_b["items"] == []

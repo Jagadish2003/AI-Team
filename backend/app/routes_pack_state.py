@@ -38,6 +38,7 @@ from .pack_state import (
     PackStateOutcome,
     STATE_ACTIVE,
     STATE_DISABLED,
+    has_pack_lifecycle_record,
     pack_state_history,
     pack_state_view,
     set_pack_state,
@@ -224,17 +225,25 @@ def put_pack_version(
 def get_pack_state_history(pack_id: str) -> Dict[str, Any]:
     """Newest-first transition history (repo convention for audit lists).
 
-    Re-enabling a pack does not erase the disable — both transitions appear here,
-    which is what makes this an audit trail rather than a current-state mirror.
+    Re-enabling a pack does not erase the disable, and restoring does not erase the
+    rollback — every transition appears here, which is what makes this an audit trail
+    rather than a current-state mirror.
+
+    2.0-C1 T4 (AT-829): a pack REMOVED from the registry still serves its retained
+    history. Gating this on registry membership alone would 404 a trail whose rows
+    are still in the database, and history you cannot reach is functionally deleted.
+    A genuinely unknown id (a typo, never any lifecycle record) is still a 404.
     """
     org_id = get_current_org_id()
     from discovery.packs.pack_config import PACK_REGISTRY
 
-    if pack_id not in PACK_REGISTRY:
+    registered = pack_id in PACK_REGISTRY
+    if not registered and not has_pack_lifecycle_record(org_id, pack_id):
         raise _pack_not_found(pack_id)
     return {
         "orgId": org_id,
         "packId": pack_id,
+        "registered": registered,
         "transitions": pack_state_history(org_id, pack_id),
     }
 

@@ -895,10 +895,19 @@ def is_pack_disabled(org_id: str, pack_id: str) -> bool:
 
 
 def pack_state_view(org_id: str) -> List[Dict[str, Any]]:
-    """Every registered pack with its state for this org — the surfacing shape.
+    """Every pack with lifecycle state for this org — the surfacing shape.
 
-    Packs with no explicit row report ``active`` with ``revision: 0``, so the view
-    always covers the whole registry rather than only the rows that exist.
+    Covers the whole registry (packs with no explicit row report ``active`` at
+    ``revision: 0``) PLUS any **orphaned** rows: state this org set for a pack that
+    has since been REMOVED from the registry.
+
+    2.0-C1 T4 (AT-829): orphaned rows are included on purpose. A removed pack's
+    lifecycle row and its append-only history still exist in the database, and
+    dropping them from the view would make that history unreachable — history you
+    cannot reach is functionally deleted, which is exactly what AC4 forbids. Such a
+    row is flagged ``registered: False``, and its version fields are reported as
+    ``None`` because the registry no longer declares them: the platform states what
+    it still knows and does not invent a version for a pack it no longer ships.
     """
     from discovery.packs.pack_config import (
         PACK_REGISTRY,
@@ -931,9 +940,56 @@ def pack_state_view(org_id: str) -> List[Dict[str, Any]]:
                 "pinnedVersion": pinned,
                 "effectiveVersion": pinned or current_version,
                 "availableVersions": get_rollbackable_versions(pack_id),
+                "registered": True,
+            }
+        )
+
+    for pack_id in sorted(set(rows) - set(PACK_REGISTRY)):
+        row = rows[pack_id]
+        view.append(
+            {
+                "packId": pack_id,
+                "packName": pack_id,
+                "packVersion": None,
+                "state": str(row.get("state") or STATE_ACTIVE),
+                "revision": int(row.get("revision") or 0),
+                "reason": row.get("reason"),
+                "updatedBy": row.get("updated_by"),
+                "updatedAt": row.get("updated_at"),
+                "pinnedVersion": row.get("pinned_version") or None,
+                "effectiveVersion": None,
+                "availableVersions": [],
+                # The pack is no longer in the registry: it cannot run, but its
+                # lifecycle state and history are retained and reachable.
+                "registered": False,
             }
         )
     return view
+
+
+def has_pack_lifecycle_record(org_id: str, pack_id: str) -> bool:
+    """True when this org has ANY lifecycle state or history for a pack.
+
+    2.0-C1 T4 (AT-829): lets a read surface serve a REMOVED pack's retained history
+    instead of 404-ing on a registry lookup. Fail-soft — an unreadable store reports
+    False, so an unknown id still reads as not-found rather than erroring.
+    """
+    org = str(org_id or "").strip()
+    pack = str(pack_id or "").strip()
+    if not org or not pack:
+        return False
+    if pack in _safe_state_rows(org):
+        return True
+    try:
+        return bool(pack_state_history(org, pack))
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Could not read pack lifecycle history for org=%s pack=%s",
+            org,
+            pack,
+            exc_info=True,
+        )
+        return False
 
 
 def _safe_state_rows(org_id: Optional[str]) -> Dict[str, Dict[str, Any]]:

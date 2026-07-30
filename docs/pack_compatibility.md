@@ -7,15 +7,16 @@
 | **T1 — AT-826** | Compatibility declaration + activation gate | **AC1** — a pack declaring an unmet platform range cannot be activated; the refusal names the unmet requirement |
 | **T2 — AT-827** | Safe disable state machine (§8) | **AC2** — disabling stops future execution while all historical findings remain retrievable and correctly labelled |
 | **T3 — AT-828** | Version rollback (§9) | **AC3** — rollback causes subsequent runs to use the prior version; existing findings retain their original version stamps |
+| **T4 — AT-829** | Never delete history (§10) | **AC4** — no path in disable/rollback/remove deletes findings, evidence, or run records — enforced at the data layer |
 
 Packs are versioned and stamped per run (R16-B1 §4), 1.9 added two more packs, and
 1.9.1 enabled multi-pack runs. What was missing: what happens when a pack version
 is incompatible with the platform version, when a customer wants a pack turned off,
 and when a pack upgrade must be reversed — **without destroying run history**.
 
-> **Scope.** The exhaustive never-delete-history data-layer sweep (AT-829) and UI
-> surfacing (AT-830) are separate tasks layered on top of what is described here.
-> §1–§7 cover compatibility (T1); §8 covers disable (T2); §9 covers rollback (T3).
+> **Scope.** UI surfacing (AT-830) is a separate task layered on top of what is
+> described here. §1–§7 cover compatibility (T1); §8 disable (T2); §9 rollback (T3);
+> §10 the never-delete-history guarantee (T4).
 
 ## The three lifecycle dimensions
 
@@ -503,3 +504,113 @@ ships.
 | Audit | `pack_state_changed` with the version fields |
 | Telemetry | `pack.version_pinned`, `pack.version_pin_unservable` |
 | Domain audit trail | `pack_state_history` (`rollback` / `restore` transitions) |
+
+---
+
+# 10. Never delete history (T4 / AT-829)
+
+**Criterion discharged:** AC4 — *no path in disable / rollback / remove deletes
+findings, evidence, or run records — enforced at the data layer, tested.*
+
+## 10.1 What was actually true before this task
+
+Worth stating plainly, because it shaped the design. `app/db.py` carried a comment
+claiming *"the app DB role has UPDATE but not DELETE"*. That was **not true** of this
+provisioning path: `provision.sql` grants each app role `ALL PRIVILEGES ON ALL
+TABLES`, which includes `DELETE` and `TRUNCATE`. There was no data-layer enforcement —
+only the incidental fact that no code happened to delete run history. AC4 asks for
+enforcement, so this task built it and corrected the comment.
+
+## 10.2 The protected set
+
+[`app/history_retention.py`](../backend/app/history_retention.py) is the **single
+declaration** of which tables hold run history. Three enforcement layers read it, so
+the guarantee never rests on one mechanism.
+
+| Table | Why protected |
+|-------|---------------|
+| `runs` | run records — pack ids, pack versions, the configuration executed |
+| `run_events` | the run event log (soft-deleted, never removed) |
+| `kv` | run-scoped artifacts: findings (`opps:{run_id}`), evidence, clusters, roadmap, report |
+| `opportunity_instances` | per-instance pack id + pack version stamps (R16-B1 §4) |
+| `pack_state_history` | the append-only pack lifecycle trail (T2/T3) |
+
+**Deliberately NOT protected**, each with a justification in the same module — listed
+explicitly so a reviewer sees these were decisions, not omissions:
+
+| Table | Why deletion is correct |
+|-------|-------------------------|
+| `retrieval_chunks` | derived vector index; R18-B2 freshness purges chunks when a source artifact changes. Re-embeddable, loses no history — the finding, its evidence, and the evidence pointer all survive. |
+| `retrieval_refresh_queue` | transient worker queue, not a record |
+| `entity_relationships` | cross-run graph state that `relationship_mapper` prunes when a relationship no longer holds; a current view, not history |
+
+## 10.3 Three enforcement layers
+
+**1. Database privileges — the real data-layer enforcement.** `provision.sql` and
+migration `0033` `REVOKE DELETE, TRUNCATE` on every protected table from each app
+login role, *after* the `GRANT ALL PRIVILEGES` block (ordering is load-bearing — a
+REVOKE before the GRANT would be undone; a test pins the order). A bug, a rogue query,
+or a future code path physically cannot remove a finding.
+
+**2. A build-breaking static sweep.**
+[`tests/unit/test_never_delete_history.py`](../backend/tests/unit/test_never_delete_history.py)
+walks the tree at test time and fails CI on any `DELETE`/`TRUNCATE` against a
+protected table, so the problem surfaces in review rather than as a privilege error in
+production. Two details make it trustworthy:
+
+- it scans **non-docstring string literals via AST**, because prose *about* SQL
+  produces nonsense matches (`"a DELETE or TRUNCATE against any of these"` parses
+  "against" as a table name);
+- it asserts the sweep **finds** known files and a known legitimate delete, so a
+  broken matcher fails loudly instead of passing vacuously.
+
+It also fails on a delete against an *unclassified* table — forcing the
+protected-or-deletable decision to be made and justified rather than skipped.
+
+**3. A runtime guard.** `guard_delete(table)` / `assert_no_history_deletion(sql)` are
+the seam any code that must touch history-adjacent SQL calls. `db.delete_run_events`
+self-checks through it, so if that function ever became a hard delete it fails with the
+named retention reason rather than an opaque permission error.
+
+## 10.4 Soft delete is not deletion
+
+`db.delete_run_events` is named for what it means, not what it does: it is an `UPDATE`
+setting `is_deleted`. `insert_run_events` re-activates a rewritten `(run_id, seq)` and
+`get_run_events` filters the flag, so rewriting a shrunk event list drops stale rows
+from **reads** while the rows remain. That shape is compatible with the REVOKE and is
+the pattern any future "removal" should take. A test pins the function body.
+
+## 10.5 The third verb: "remove"
+
+Disable and rollback are features (T2/T3). **Remove** is not a runtime API — there is
+deliberately no "delete pack" endpoint. Removal means a pack leaving the registry, a
+deploy-time change. What must hold is that its history stays present **and reachable**.
+
+Testing this surfaced a real defect in the T2/T3 work: a removed pack's rows survived
+in the database, but `GET /api/packs/{id}/state/history` 404'd on a registry lookup and
+`GET /api/packs/state` dropped the row entirely. **History you cannot reach is
+functionally deleted**, so both were fixed:
+
+- `pack_state_view` now includes **orphaned rows** — state for a pack no longer in the
+  registry — flagged `registered: false`, with version fields `null` because the
+  registry no longer declares them (the platform reports what it still knows and does
+  not invent a version for a pack it no longer ships);
+- the history endpoint serves a removed pack's retained trail, gated on
+  `has_pack_lifecycle_record` rather than registry membership.
+
+The read/write asymmetry is intentional: **reads stay open** so history is reachable,
+while **writes 404** — a pack that is gone has nothing to disable. A genuinely unknown
+id (a typo, no lifecycle record) is still a 404, so the allowance cannot turn every bad
+id into a 200.
+
+## 10.6 Tests
+
+| Suite | Covers |
+|-------|--------|
+| [`tests/unit/test_never_delete_history.py`](../backend/tests/unit/test_never_delete_history.py) | The static sweep + provision/migration/protected-set coherence. DB-free. |
+| [`tests/unit/test_never_delete_history_data_layer.py`](../backend/tests/unit/test_never_delete_history_data_layer.py) | **The AC4 data-layer test.** Runs the production `PostgresPackStateStore` against a fake connection that RECORDS every statement, attempts disable / rollback / remove, and asserts no statement deletes a protected table and the seeded findings/evidence/runs are byte-identical. Plus a direct delete attempt on every protected table. DB-free. |
+| [`tests/contract/test_pack_lifecycle_retention.py`](../backend/tests/contract/test_pack_lifecycle_retention.py) | End-to-end through the real database: all three verbs in sequence with findings, evidence, and run records re-read over the API after each. Needs the contract DB. |
+
+The data-layer suite asserts against the SQL the production code path **actually
+emits**, not against a re-implementation of it — which is what makes it a data-layer
+test rather than a mock of one.
