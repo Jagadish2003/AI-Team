@@ -8,15 +8,16 @@
 | **T2 — AT-827** | Safe disable state machine (§8) | **AC2** — disabling stops future execution while all historical findings remain retrievable and correctly labelled |
 | **T3 — AT-828** | Version rollback (§9) | **AC3** — rollback causes subsequent runs to use the prior version; existing findings retain their original version stamps |
 | **T4 — AT-829** | Never delete history (§10) | **AC4** — no path in disable/rollback/remove deletes findings, evidence, or run records — enforced at the data layer |
+| **T5 — AT-830** | Surfacing (§11) | **AC5** — run health reflects pack state and version accurately across all transitions |
 
 Packs are versioned and stamped per run (R16-B1 §4), 1.9 added two more packs, and
 1.9.1 enabled multi-pack runs. What was missing: what happens when a pack version
 is incompatible with the platform version, when a customer wants a pack turned off,
 and when a pack upgrade must be reversed — **without destroying run history**.
 
-> **Scope.** UI surfacing (AT-830) is a separate task layered on top of what is
-> described here. §1–§7 cover compatibility (T1); §8 disable (T2); §9 rollback (T3);
-> §10 the never-delete-history guarantee (T4).
+> **Scope.** §1–§7 cover compatibility (T1); §8 disable (T2); §9 rollback (T3);
+> §10 the never-delete-history guarantee (T4); §11 the UI surfacing (T5). With T5 the
+> 2.0-C1 story is complete — all five acceptance criteria are discharged.
 
 ## The three lifecycle dimensions
 
@@ -614,3 +615,88 @@ id into a 200.
 The data-layer suite asserts against the SQL the production code path **actually
 emits**, not against a re-implementation of it — which is what makes it a data-layer
 test rather than a mock of one.
+
+---
+
+# 11. Surfacing (T5 / AT-830)
+
+**Criterion discharged:** AC5 — *run health reflects pack state and version accurately
+across all transitions.* Two surfaces: the Run Health packs panel, and the finding
+itself.
+
+Everything here reads fields the backend already produced in T1–T4; no new backend
+behaviour. The work is making them legible.
+
+## 11.1 Run health: two pills, not one word
+
+The packs panel shows **state** and **version** as separate pills, because they are
+two orthogonal facts and a pack can be both disabled and rolled back at once:
+
+| Pill | Values | Source |
+|------|--------|--------|
+| State | `Active` / `Disabled` | `pack_state` — read LIVE (T2) |
+| Version | `Version 1.2.0` / `Rolled back to 1.1.0` / `Version unavailable` | `pack_version` + `rolled_back` (T3) |
+
+`packLifecycleLabel()` (exported from `RunHealthDashboardPage.tsx` and unit-tested
+directly) is the single place that mapping lives. Collapsing them into one word —
+"rolled back" as if it were a state — would have made the both-at-once case
+unrepresentable.
+
+Two explanatory notes render beneath the pills when relevant:
+
+- **disabled** — "will not run again … everything it produced below is kept exactly as
+  it executed", so a reader does not read a disable as data loss;
+- **rolled back** — "pinned to version X — a deliberate rollback, not the version
+  currently shipped", so a lower version number is not mistaken for drift.
+
+**A disabled pack does not make the panel look unhealthy.** Disabling is intentional
+configuration, so the panel's `data-state` stays `healthy` — a test pins this. Tone
+follows the same logic: `warn` (informational, visible) and never `bad`.
+
+## 11.2 Run health: packs that did not run
+
+`excluded_packs` is rendered as a *Selected but not run* block naming each pack and
+stating the reason, so an analyst seeing one pack where two were selected is never left
+to infer why. It also notes that earlier runs' findings are unaffected.
+
+The empty state is branched on the same data: when **every** selected pack is
+disabled, the panel says *"No pack executed for this run — every selected pack is
+disabled…"* instead of the generic *"No pack executions yet"*, which would be actively
+misleading in that case.
+
+## 11.3 Findings: the version that produced them
+
+`PackProvenanceRow` adds a **Produced by** row to the finding detail showing the pack
+id and `v{packVersion}`, following the existing "Identifier" row pattern.
+
+The version stamp is R16-B1 §4 provenance — what lets a reader tell a DATA change from
+a PACK LOGIC change — so it belongs on the finding, not only in run health. It is the
+version that produced **this** finding and never moves: rolling the pack back or
+disabling it afterwards leaves it alone (AC3).
+
+When the producing pack is disabled today, the backend's `packStateLabel` (T2) renders
+alongside it — the label sits *next to* the finding, it never replaces or suppresses
+it, which is the reader-facing half of AC2. A finding with no pack stamp (runs
+materialised before R191-P1 T3) renders nothing rather than an invented value.
+
+## 11.4 Contract
+
+`contracts/API_CONTRACT.md` **v1.15 → v1.16**, per the repo rule that a
+`frontend/src/types/*.ts` change requires a contract bump. Everything is additive and
+optional, so pre-v1.16 consumers are unaffected:
+
+- `runHealth.ts` — `pack_state`, `pinned_version`, `rolled_back` per pack row;
+  `excluded_packs`, `pinned_pack_versions` on the response;
+- `analystReview.ts` — `packState`, `packStateLabel` on `OpportunityCandidate`
+  (`packId`/`packVersion` were already documented at v1.11).
+
+v1.16 also documents the four pack-lifecycle routes from T2/T3 and the new 409s on
+launch/compute, which had shipped but were not yet in the contract.
+
+## 11.5 Tests
+
+[`frontend/src/__tests__/PackLifecycleSurfacing.test.tsx`](../frontend/src/__tests__/PackLifecycleSurfacing.test.tsx)
+(26 tests) walks the transitions rather than checking one static shape: active →
+disabled → rolled back → both, plus multi-pack independence, the excluded block, the
+branched empty state, the healthy-not-broken panel state, and a pre-2.0-C1 response
+with none of the lifecycle fields present.

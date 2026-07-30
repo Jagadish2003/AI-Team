@@ -51,6 +51,14 @@ export interface OpportunityCandidate {
   // same type), satisfying "every roadmap entry carries its packId".
   packId?: string;
   packVersion?: string;
+  // 2.0-C1 T2 (AT-827) — the producing pack's state TODAY, stamped at serve time.
+  // A finding is NEVER removed or rewritten when its pack is disabled; these two
+  // additive fields are how a reader can tell that the finding came from a pack
+  // that is no longer running. `packVersion` above still reports the version that
+  // produced it, so provenance is intact either way. Absent on responses served
+  // before the fields existed.
+  packState?: "active" | "disabled";
+  packStateLabel?: string;
 }
 
 export interface ReviewAuditEvent {

@@ -1,15 +1,17 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0030.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0033.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
 -- 03_lazy_runtime_tables.sql. Creates the agentiq role, all tables (incl.
 -- org_licenses, ingestion_checkpoints, opportunity_instances, the R18-B1/B2
 -- pgvector-backed retrieval_chunks + retrieval_refresh_queue, the MSP-B8
 -- ops_event_staging + ops_event_load_batches, the MSP-B5 runbook_matches /
--- runbook_match_decision_history / runbook_match_feedback, and the R-1.9.1-L3
+-- runbook_match_decision_history / runbook_match_feedback, the 2.0-C1
+-- pack_states + append-only pack_state_history, and the R-1.9.1-L3
 -- vendor-side license_registry + append-only issuance_audit),
 -- indexes/constraints/rules, seeds the connector catalog, grants the app login
--- role(s) privileges on the schema, and stamps alembic_version to head 0030.
+-- role(s) privileges on the schema, REVOKES DELETE/TRUNCATE on the run-history
+-- tables (2.0-C1 AC4), and stamps alembic_version to head 0033.
 --
 -- BEFORE RUNNING ON PRODUCTION — two values in this file are dev defaults and
 -- MUST be set for the target environment. Both are marked "TODO(deploy)" below:
@@ -1493,7 +1495,13 @@ INSERT INTO "public"."connectors" ("id", "payload") VALUES ('zendesk', '{"id": "
 -- backend/migrations/versions/ — a DB stamped lower will have `alembic upgrade
 -- head` re-run intervening migrations against tables that already exist.
 --
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0030') ON CONFLICT DO NOTHING;
+-- 2.0-C1: this file now carries the 0031 (pack_states / pack_state_history),
+-- 0032 (version-pin columns) and 0033 (REVOKE DELETE/TRUNCATE on the history
+-- tables) objects, so it must stamp 0033 — not 0030. A stale stamp would leave a
+-- freshly provisioned database claiming a head it is ahead of, and `alembic upgrade
+-- head` would then re-run 0031-0033. Those are all idempotent, so it would not
+-- break, but the recorded head would be wrong. Bump this whenever you add DDL here.
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0033') ON CONFLICT DO NOTHING;
 
 
 --

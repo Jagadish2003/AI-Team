@@ -241,6 +241,26 @@ class TestProvisioningRevokesEveryProtectedTable:
     def test_revoke_block_exists(self, provision_sql):
         assert "REVOKE DELETE, TRUNCATE ON TABLE" in provision_sql
 
+    def test_provision_sql_stamps_the_current_alembic_head(self, provision_sql):
+        """``provision.sql`` must stamp the head whose DDL it actually carries.
+
+        The pure-SQL path does not run alembic — it hardcodes the stamp. Because this
+        file now carries the 0031/0032/0033 objects, a stale stamp would leave a
+        freshly provisioned database claiming a head it is ahead of, and a later
+        ``alembic upgrade head`` would re-run those revisions. They are idempotent so
+        nothing breaks, but the recorded head would be wrong. Derived from the
+        migrations directory so it cannot drift.
+        """
+        versions = sorted(
+            path.name.split("_", 1)[0]
+            for path in (_BACKEND_DIR / "migrations" / "versions").glob("[0-9]*.py")
+        )
+        assert versions, "no migration files discovered"
+        head = versions[-1]
+        assert (
+            f"VALUES ('{head}')" in provision_sql
+        ), f"provision.sql does not stamp alembic head {head}"
+
     @pytest.mark.parametrize("table", sorted(PROTECTED_TABLES))
     def test_every_protected_table_is_in_the_revoke_block(
         self, provision_sql, table

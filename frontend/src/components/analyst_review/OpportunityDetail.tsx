@@ -95,6 +95,59 @@ function WhyBulletList({ items }: { items: string[] }) {
   );
 }
 
+/**
+ * 2.0-C1 T5 (AT-830): "findings display the pack version that produced them."
+ *
+ * The version stamp is R16-B1 §4 provenance — it is what lets a reader tell a DATA
+ * change from a PACK LOGIC change, so it belongs on the finding itself rather than
+ * only in run health. It is the version that produced THIS finding and never moves:
+ * rolling the pack back or disabling it afterwards leaves this value alone.
+ *
+ * When the producing pack is disabled TODAY, the backend also stamps
+ * `packStateLabel` (AT-827). Showing it here is what stops a reader mistaking
+ * retained history for something a live pack produced — the finding stays fully
+ * readable either way.
+ *
+ * Renders nothing when the finding carries no pack stamp (runs materialised before
+ * R191-P1 T3), rather than inventing one.
+ */
+export function PackProvenanceRow({ opp }: { opp: OpportunityCandidate }) {
+  if (!opp.packId && !opp.packVersion) return null;
+
+  const isDisabled = opp.packState === "disabled";
+  return (
+    <div data-testid="pack-provenance" className="flex items-start gap-4 text-sm">
+      <span className="text-muted w-24 shrink-0 pt-0.5">Produced by</span>
+      <div className="flex flex-wrap items-center gap-2">
+        {opp.packId && (
+          <span
+            data-testid="pack-provenance-id"
+            className="rounded border border-border bg-panel2 px-2 py-0.5 font-mono text-xs font-medium text-text"
+          >
+            {opp.packId}
+          </span>
+        )}
+        {opp.packVersion && (
+          <span
+            data-testid="pack-provenance-version"
+            className="rounded border border-border bg-panel2 px-2 py-0.5 font-mono text-xs font-medium text-text"
+          >
+            v{opp.packVersion}
+          </span>
+        )}
+        {isDisabled && (
+          <span
+            data-testid="pack-provenance-disabled"
+            className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] leading-tight text-amber-700"
+          >
+            {opp.packStateLabel ?? "Produced by a now-disabled pack"}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function EnrichmentPanel({
   opp,
   enrichment,
@@ -782,6 +835,9 @@ export default function OpportunityDetail({
         {opp.evidenceIds &&
           opp.evidenceIds.length > 0 &&
           !opp.evidenceItems && <EvidenceIdsBox ids={opp.evidenceIds} />}
+
+        {/* 2.0-C1 T5 (AT-830): the pack VERSION that produced this finding. */}
+        <PackProvenanceRow opp={opp} />
 
         <div className="border-t border-border" />
 
