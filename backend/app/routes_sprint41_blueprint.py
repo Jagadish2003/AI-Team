@@ -213,7 +213,7 @@ _DETECTOR_META: Dict[str, Dict[str, Any]] = {
             {
                 "action": "Assign loan to correct underwriter on first touch",
                 "object": "LLC_BI__Loan__c OwnerId",
-                "detail": "Agent sets underwriter assignment based on loan type and workload, eliminating manual routing steps.",
+                "detail": "Agent sets underwriter assignment based on loan type and workload, handling the routing steps a banker performs by hand today.",
             },
             {
                 "action": "Monitor stage transition frequency and flag routing anomalies",
@@ -407,12 +407,28 @@ def _build_blueprint(
     llm_generated: bool = bool(opp_enrich.get("llmGenerated", False))
     ai_summary: str = opp_enrich.get("aiSummary") or ""
 
+    # 2.0-A1 T5 — Agent Purpose is scrubbed of projection claims whatever its
+    # source. The LLM summary is a generated string and the aiRationale fallback
+    # is a template; neither may present the agent as a guaranteed saving.
+    from discovery.projection.vocabulary import sanitize_text
+
     if llm_generated and ai_summary.strip():
-        agent_topic = ai_summary
+        agent_topic = sanitize_text(ai_summary)
         agent_topic_is_llm = True
     else:
-        agent_topic = opp.get("aiRationale") or ""
+        agent_topic = sanitize_text(opp.get("aiRationale") or "")
         agent_topic_is_llm = False
+
+    # The intervention-language recommendation is the honest statement of what
+    # this agent is FOR. When the finding carries one it leads the purpose, with
+    # the narrative summary kept after it rather than replaced — the analysis is
+    # still worth reading, it just must not be the headline claim.
+    projection = opp.get("projection") if isinstance(opp.get("projection"), dict) else None
+    recommendation = (projection or {}).get("recommendation")
+    if isinstance(recommendation, dict):
+        headline = str(recommendation.get("headline") or "").strip()
+        if headline:
+            agent_topic = f"{headline} {agent_topic}".strip() if agent_topic else headline
 
     effort_raw = opp.get("effort") or 5
     try:
@@ -432,6 +448,9 @@ def _build_blueprint(
         "complexity":           _derive_complexity(effort, tier),
         "evidenceIds":          opp.get("evidenceIds") or [],
         "detectorId":           detector_id,
+        "projection": (
+            opp.get("projection") if isinstance(opp.get("projection"), dict) else None
+        ),
         # Carries pack ownership through combined-run terminology and keeps the
         # generated blueprint traceable to the pack that produced its finding.
         "packId":               opp.get("packId"),
@@ -463,6 +482,7 @@ class BlueprintResponse(BaseModel):
     complexity: BlueprintComplexity
     evidenceIds: List[str]
     detectorId: str
+    projection: Optional[Dict[str, Any]] = None
     packId: Optional[str] = None
 
 

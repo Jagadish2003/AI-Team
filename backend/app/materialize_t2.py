@@ -92,6 +92,98 @@ def _org_id_for_run(run: Dict[str, Any] | None, fallback: str | None = None) -> 
     return run.get("orgId") or run.get("org_id") or input_org_id or fallback
 
 
+def _apply_intervention_projection(
+    run_id: str, opps: List[Dict[str, Any]], org_id: str | None = None
+) -> int:
+    """2.0-A1 — compute, identify, and STORE the intervention projection.
+
+    Shared by both materialization paths (this module and routes_sprint4_t1).
+    Call AFTER temporal enrichment: the projection widens its magnitude band from
+    the observed recurrence series and cites the baseline it moves against, both
+    of which temporal enrichment puts on the in-memory opportunity.
+
+    Three steps, in this order and for these reasons:
+
+    1. **Compute** (T1–T5). ``project_opportunities`` is pure and deterministic —
+       no clock, no run context — which is what makes AC5 hold.
+    2. **Identify** (T6). ``stamp_projections`` adds the provenance spine (run id,
+       opportunity id, stable cross-run identity, timestamp, pack + schema
+       versions). Separate from step 1 precisely so the computed core stays
+       byte-identical to a later recomputation.
+    3. **Store** (T6 / AC6). The stamped payload is written back to run_kv
+       ``"opps"`` — the copy every read surface serves — and onto the
+       opportunity-instance row, which is the copy 2.0-A2 can query ACROSS runs
+       by identity. Run KV cannot answer "every projection ever made about this
+       problem"; the instance row can.
+
+    Non-blocking by contract at every step: a projection failure must never fail
+    a run or lose an opportunity.
+
+    Returns the number of opportunities that received a stored projection.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        from discovery.projection import project_opportunities
+
+        projected = project_opportunities(opps)
+        if projected:
+            from .projection_store import (
+                record_projections_on_instances,
+                stamp_projections,
+            )
+
+            stamp_projections(opps, run_id, org_id=org_id)
+            db.run_kv_set("opps", run_id, opps)
+            # Cross-run tracking copy. Best-effort and deliberately AFTER the KV
+            # write: the serving copy is what the run depends on, and a missing
+            # instance row (identity not stamped, table not migrated) must not
+            # cost the run its projections.
+            record_projections_on_instances(opps, run_id)
+        logger.info(
+            "Attached intervention projections to %d/%d opportunities for run %s",
+            projected,
+            len(opps or []),
+            run_id,
+        )
+        return projected
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Intervention projection failed (non-blocking): %s", exc)
+        return 0
+
+
+def _rebuild_roadmap_with_projections(run_id: str, opps: List[Dict[str, Any]]) -> None:
+    """2.0-A1 T6 — re-store the roadmap once projections exist.
+
+    The roadmap is built and stored EARLY in materialization (before temporal
+    enrichment), but a projection can only be computed AFTER it — so the stored
+    roadmap artifact carried opportunities with no projection at all, and
+    ``GET /api/runs/{run_id}/roadmap`` served them that way. That also meant
+    2.0-A1 T4's capped-confidence ordering rule, which reads each opportunity's
+    projection, was ordering a stage where every projection was absent.
+
+    Rebuilding here rather than moving the original build keeps the roadmap
+    available early (it is emitted as a pipeline event and other steps read it)
+    while making the STORED artifact the complete one. ``build_roadmap`` is
+    deterministic over the same opportunities, so this re-store changes nothing
+    except the presence of the projections.
+
+    Non-blocking: a roadmap that fails to rebuild keeps its earlier version.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        from .roadmap_engine import build_roadmap
+
+        db.run_kv_set("roadmap", run_id, build_roadmap(opps))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Roadmap rebuild with projections failed (non-blocking): %s", exc
+        )
+
+
 def _audit_prepend(run_id: str, event: Dict[str, Any]) -> None:
     audit = db.run_kv_get("audit", run_id, [])
     db.run_kv_set("audit", run_id, [event] + audit)
@@ -388,10 +480,74 @@ def run_trackb_and_persist(
             enabled=secops_enabled,
         )
 
+        # R16-B1 (§2): stamp the stable cross-run opportunity_identity onto each
+        # stored opportunity BEFORE it is persisted, so the served record carries
+        # the id used to group an opportunity with its own history. Idempotent and
+        # additive; non-blocking — never breaks the run.
+        #
+        # 2.0-A1 AC6 depends on this: the stored projection's provenance records
+        # this identity, and it is the ONLY key by which 2.0-A2 can follow one
+        # problem's projections across runs. Without it a projection is still
+        # stored, but only comparable within its own run.
+        try:
+            from .opportunity_instances import stamp_opportunity_identities
+
+            stamp_opportunity_identities(opps, run_id, org_id=run_org_id)
+        except Exception as e:  # noqa: BLE001
+            errors["opportunity_identity"] = str(e)
+            logger.warning(
+                "Opportunity identity stamping failed (non-blocking): %s", e
+            )
+
         db.run_kv_set("opps", run_id, opps)
         db.run_kv_set("evidence", run_id, ev)
         if payload.get("secopsVolume") is not None:
             db.run_kv_set("secops_volume", run_id, payload["secopsVolume"])
+
+        # R16-B1 (T4): persist one per-run opportunity_instance per opportunity.
+        # Built from the RAW runner opportunities, which keep orgId/detector_id/
+        # signal_source at top level — the inputs identity is derived from. These
+        # rows are also what 2.0-A1 T6 attaches the stored projection to, so the
+        # cross-run projection history has somewhere to live. Non-blocking.
+        try:
+            from .opportunity_instances import record_opportunity_instances
+
+            n_instances = record_opportunity_instances(
+                run_id, payload.get("opportunities", []), org_id=run_org_id
+            )
+            logger.info(
+                "Recorded %d opportunity instances for run %s", n_instances, run_id
+            )
+        except Exception as e:  # noqa: BLE001
+            errors["opportunity_instances"] = str(e)
+            logger.warning(
+                "Opportunity instance recording failed (non-blocking): %s", e
+            )
+
+        # 2.0-A2 T1: begin lifecycle tracking for every opportunity this run
+        # surfaced. INSERT-ONLY — an opportunity that re-appears in a later run
+        # keeps whatever state an analyst put it in; only its last-seen run
+        # pointer moves. Non-blocking: lifecycle tracking never fails a run.
+        try:
+            from .opportunity_lifecycle import (
+                ensure_opportunity_lifecycle_tables,
+                ensure_tracked_many,
+            )
+
+            ensure_opportunity_lifecycle_tables()
+            n_tracked = ensure_tracked_many(
+                run_org_id,
+                [o.get("opportunity_identity") for o in opps if isinstance(o, dict)],
+                run_id=run_id,
+            )
+            logger.info(
+                "Lifecycle-tracked %d opportunities for run %s", n_tracked, run_id
+            )
+        except Exception as e:  # noqa: BLE001
+            errors["opportunity_lifecycle"] = str(e)
+            logger.warning(
+                "Opportunity lifecycle tracking failed (non-blocking): %s", e
+            )
 
         # R16-B1 (T6): persist the queryable evidence-pointer trail so a finding
         # can later be walked back to the source artifacts that produced it
@@ -557,7 +713,14 @@ def run_trackb_and_persist(
             )
             db.run_kv_set(KV_LLM_ENRICHMENT, run_id, enrichment)
             if enrichment.get("executiveSummary"):
-                exec_report["aiExecutiveSummary"] = enrichment["executiveSummary"]
+                # 2.0-A1 T5 / AC3 — the guard runs at generation AND here, at the
+                # report boundary, so a summary arriving by any future path
+                # cannot carry a savings claim into the executive report.
+                from .projection_copy_guard import scrub_executive_summary
+
+                exec_report["aiExecutiveSummary"] = scrub_executive_summary(
+                    enrichment["executiveSummary"]
+                )
                 db.run_kv_set("executive_report", run_id, exec_report)
             _emit_event(run_id, "COMPLETE", "AI analysis and enrichment completed")
         except SecOpsAggregationFloorViolation:
@@ -624,6 +787,16 @@ def run_trackb_and_persist(
             )
         except Exception as e:
             logger.warning("T7 temporal enrichment failed (non-blocking): %s", e)
+
+        # 2.0-A1 — intervention projection (non-blocking). See the helper
+        # docstring: runs after temporal enrichment, stamps provenance, and
+        # stores the projection with the opportunity (AC6). The roadmap is then
+        # re-stored so its artifact carries the projections too — it was built
+        # before they existed.
+        # run_org_id (not the temporal block's _org_id, which is bound inside a
+        # try and would be unbound if temporal enrichment failed).
+        _apply_intervention_projection(run_id, opps, org_id=run_org_id)
+        _rebuild_roadmap_with_projections(run_id, opps)
 
         status = "complete" if len(succeeded) == len(systems) else "partial"
         audit_action = (

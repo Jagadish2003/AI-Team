@@ -20,6 +20,7 @@ T4-AC4  Introducing a direct model call in a new file causes this test to
 """
 from __future__ import annotations
 
+import sys
 import textwrap
 import tempfile
 from pathlib import Path
@@ -67,6 +68,49 @@ FORBIDDEN_PATTERNS: List[str] = [
 
 
 # ---------------------------------------------------------------------------
+# Allow-list — narrow, justified exemptions.
+#
+# Some forbidden patterns are not exclusive to model providers. ``x-api-key`` in
+# particular is a generic HTTP auth header (AWS API Gateway uses it), so a file
+# that talks to a NON-model service can trip the scan without any model call
+# existing. Rather than weaken the pattern (which would blind the scan to real
+# provider calls everywhere) or obfuscate the header at the call site (which
+# would hide a genuine bypass from this very test), each false positive is
+# exempted here as an explicit ``(path, pattern)`` pair with a justification.
+#
+# Keys are POSIX paths relative to BACKEND_ROOT. The exemption is per-PATTERN,
+# never per-file: every other forbidden pattern still fails the listed file, so
+# introducing an actual model call there is still caught immediately.
+# ``test_allowlist_has_no_stale_entries`` fails if an entry stops matching a real
+# line, so an exemption cannot silently outlive its cause.
+# ---------------------------------------------------------------------------
+
+_ALLOWLIST: dict = {
+    ("license/issuance.py", _PAT_XAPI_KEY): (
+        "R-1.9.1-L3 (AT-680): this header authenticates the license-SIGNING "
+        "service (the DevOps Lambda behind LICENSE_API_URL / AWS API Gateway) — "
+        "it is not a model-provider credential. backend/license/ is vendor ops "
+        "tooling excluded from the customer image via backend/.dockerignore, and "
+        "holds no anthropic/openai/SDK reference at all, so it cannot affect the "
+        "R16-D1 data-boundary guarantee."
+    ),
+}
+
+
+def _allowlist_key(path: Path) -> str:
+    """Return the allow-list key for a path (POSIX, relative to BACKEND_ROOT).
+
+    A path outside BACKEND_ROOT (e.g. a tmp_path file written by the scanner's
+    own self-tests) can never be allow-listed, so it gets a sentinel that never
+    matches a key.
+    """
+    try:
+        return path.resolve().relative_to(BACKEND_ROOT.resolve()).as_posix()
+    except ValueError:
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -102,12 +146,18 @@ def _scan_file(path: Path) -> List[Tuple[int, str, str]]:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return violations
+    rel_key = _allowlist_key(path)
     for lineno, line in enumerate(text.splitlines(), start=1):
         lowered = line.lower()
         for pattern in FORBIDDEN_PATTERNS:
-            if pattern.lower() in lowered:
-                violations.append((lineno, line.rstrip(), pattern))
-                break  # one report per line is enough
+            if pattern.lower() not in lowered:
+                continue
+            # An allow-listed pattern is skipped WITHOUT breaking, so a genuine
+            # violation from a different pattern on the same line is still found.
+            if (rel_key, pattern) in _ALLOWLIST:
+                continue
+            violations.append((lineno, line.rstrip(), pattern))
+            break  # one report per line is enough
     return violations
 
 
@@ -234,6 +284,120 @@ def test_ac4_full_scan_pipeline_collects_and_flags_bypass_under_backend(
     flagged = {t for t in targets if _scan_file(t)}
     assert rogue in flagged, "the collected bypass file must be flagged by the scanner"
     assert allowed not in flagged, "gateway file must never be flagged (it was excluded)"
+
+
+# ---------------------------------------------------------------------------
+# Allow-list integrity — an exemption must stay narrow, live, and justified
+# ---------------------------------------------------------------------------
+
+
+def test_allowlist_has_no_stale_entries():
+    """Every allow-list entry names a real file that really contains the pattern.
+
+    Keeps the exemption list honest: once the flagged line is removed (or the
+    file deleted), the entry must go too. Without this, a stale exemption would
+    silently keep a future genuine violation hidden.
+    """
+    stale: List[str] = []
+    for (rel_path, pattern), justification in _ALLOWLIST.items():
+        assert justification.strip(), (
+            f"allow-list entry {rel_path!r}/{pattern!r} has no justification — "
+            "every exemption must say why it is not a model call."
+        )
+        target = BACKEND_ROOT / rel_path
+        if not target.is_file():
+            stale.append(f"  {rel_path}: file does not exist")
+            continue
+        text = target.read_text(encoding="utf-8", errors="replace").lower()
+        if pattern.lower() not in text:
+            stale.append(f"  {rel_path}: no longer contains [{pattern!r}]")
+
+    assert not stale, (
+        "Stale no-bypass allow-list entries — remove them from _ALLOWLIST:\n"
+        + "\n".join(stale)
+    )
+
+
+def test_allowlist_never_exempts_an_entire_file():
+    """No file is exempted from ALL forbidden patterns.
+
+    An exemption is per-(file, pattern). A file exempted from every pattern
+    would be a blind spot where a real direct model call could hide.
+    """
+    exempt_by_file: dict = {}
+    for rel_path, pattern in _ALLOWLIST:
+        exempt_by_file.setdefault(rel_path, set()).add(pattern)
+
+    for rel_path, patterns in exempt_by_file.items():
+        remaining = set(FORBIDDEN_PATTERNS) - patterns
+        assert remaining, (
+            f"{rel_path} is exempted from every forbidden pattern — that is a "
+            "blanket exclusion, not a targeted false-positive exemption."
+        )
+
+
+def test_allowlist_does_not_mask_a_real_bypass_in_the_same_file(tmp_path, monkeypatch):
+    """An allow-listed file is STILL flagged for a non-exempt pattern.
+
+    Builds a fake backend tree containing the allow-listed path, with both the
+    exempted line and a genuine direct-model-call line (including one line that
+    holds BOTH patterns at once). The exempted pattern must be ignored while the
+    real bypass is reported — proving the exemption is narrow and cannot be used
+    to smuggle a model call into that file.
+    """
+    fake_root = tmp_path / "backend"
+    target = fake_root / "license" / "issuance.py"
+    target.parent.mkdir(parents=True)
+
+    # Built at runtime so this test file does not self-match the scan.
+    exempt = "x-api-" + "key"
+    real_bypass = "api.anthrop" + "ic.com"
+
+    target.write_text(
+        textwrap.dedent(f"""\
+            HEADERS = {{"{exempt}": token}}                 # exempt — signing service
+            URL = "https://{real_bypass}/v1/messages"      # genuine bypass
+            BOTH = {{"{exempt}": k, "url": "{real_bypass}"}}  # exempt + bypass on one line
+        """),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(sys.modules[__name__], "BACKEND_ROOT", fake_root)
+
+    flagged = _scan_file(target)
+    patterns = {p for _, _, p in flagged}
+    lines = {lineno for lineno, _, _ in flagged}
+
+    assert exempt not in patterns, (
+        "the allow-listed pattern must not be reported for the allow-listed file"
+    )
+    assert patterns == {real_bypass}, (
+        f"expected only the genuine bypass to be reported, got {patterns}"
+    )
+    # Line 3 carries both patterns — the exemption must not suppress its report.
+    assert lines == {2, 3}, (
+        f"expected both bypass lines (2 and 3) to be flagged, got {sorted(lines)}"
+    )
+
+
+def test_allowlist_is_not_consulted_for_other_files(tmp_path, monkeypatch):
+    """The same exempted pattern in a DIFFERENT file is still a violation.
+
+    The exemption is keyed to one path; any other file using the header is
+    reported as before.
+    """
+    fake_root = tmp_path / "backend"
+    other = fake_root / "app" / "some_feature.py"
+    other.parent.mkdir(parents=True)
+
+    exempt = "x-api-" + "key"
+    other.write_text(f'HEADERS = {{"{exempt}": "sk-..."}}\n', encoding="utf-8")
+
+    monkeypatch.setattr(sys.modules[__name__], "BACKEND_ROOT", fake_root)
+
+    assert _scan_file(other), (
+        "an allow-listed pattern must still be flagged in a non-allow-listed file"
+    )
 
 
 # ---------------------------------------------------------------------------

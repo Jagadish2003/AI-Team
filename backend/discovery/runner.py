@@ -570,10 +570,16 @@ def _ingest_aws_events(org_id: str, run_id: str) -> Dict[str, Any]:
 
     status = "degraded" if result.error is not None else "ok"
     accounts = _aws_account_health(ingestor)
+    poll = _cloud_poll_health(ingestor)
     # AC8: a per-account auth/throttle failure is LOUD. Even when the run itself
     # succeeded, an account that failed degrades the connector's reported status —
     # a partial ingest must never read as a clean one.
     if accounts and not accounts.get("all_healthy", True):
+        status = "degraded"
+    # Same rule for an undrained backlog: a scope that stopped on the per-run poll
+    # bound (poll cap / deadline / B7 budget) resumes next run, but this run's ingest
+    # was partial and must say so rather than reporting a clean pass.
+    if poll and not poll.get("complete", True):
         status = "degraded"
     health: Dict[str, Any] = {
         "status": status,
@@ -584,6 +590,7 @@ def _ingest_aws_events(org_id: str, run_id: str) -> Dict[str, Any]:
         "first_run": bool(result.first_run),
         "checkpoint_advanced": bool(result.checkpoint_advanced),
         "accounts": accounts,
+        "poll": poll,
     }
     if result.error is not None:
         health["reason"] = type(result.error).__name__
@@ -602,6 +609,21 @@ def _ingest_aws_events(org_id: str, run_id: str) -> Dict[str, Any]:
         )
     _surface_cloud_account_health(org_id, run_id, "aws_events", accounts)
     return {"records": collected, "health": health}
+
+
+def _cloud_poll_health(ingestor: Any) -> Dict[str, Any]:
+    """The native cloud connector's poll-phase report, or ``{}`` when unavailable.
+
+    Names the scopes whose backlog did NOT drain this run and the per-run bound that
+    stopped each (MSP-B1: an early stop is resume, not truncation — but it must be
+    visible). Never raises: reporting must not be able to fail a good run.
+    """
+    try:
+        report = getattr(ingestor, "poll_report", None)
+        return dict(report()) if callable(report) else {}
+    except Exception:  # noqa: BLE001 — health is advisory, never fatal
+        logger.debug("Could not read cloud connector poll report (non-blocking)", exc_info=True)
+        return {}
 
 
 def _aws_account_health(ingestor: Any) -> Dict[str, Any]:

@@ -34,6 +34,13 @@ import {
 } from '../utils/blueprintNaming';
 import { useResource } from '../lib/dataCache';
 import { cacheKeys } from '../lib/cacheKeys';
+import {
+  ProjectionAssumptionList,
+  projectionAssumptions,
+} from '../components/projection/ProjectionAssumptionLedger';
+import { ProjectionBandCompact } from '../components/projection/ProjectionBand';
+import { ProjectionRecommendationCompact } from '../components/projection/ProjectionRecommendation';
+import { ProjectionBasisCompact } from '../components/projection/ProjectionBasis';
 
 function TierBadge({ tier }: { tier?: string }) {
   const t = tier ?? 'Unknown';
@@ -340,6 +347,8 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
   const actions = blueprint.suggestedActions ?? [];
   const guardrails = blueprint.guardrails ?? [];
   const permissions = blueprint.agentforcePermissions ?? [];
+  const projection = blueprint.projection ?? null;
+  const assumptions = projectionAssumptions(projection);
   const complexity = blueprint.complexity ?? {
     label: 'Assessment unavailable',
     description: 'Implementation complexity will be assessed during design.',
@@ -364,7 +373,28 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
               ? blueprint.agentTopic
               : 'Agent purpose not available for this opportunity.'}
           </p>
+          {/* 2.0-A1 T5: the intervention statement — what the agent handles and
+              what still needs a person — sits with the purpose, so the purpose
+              is never read as a promised outcome. */}
+          <div className="mt-3">
+            <ProjectionRecommendationCompact projection={projection} />
+          </div>
         </SectionBlock>
+
+        {/* 2.0-A1 T4 — the projection band, its evidence label, and its
+            strength (with the capped caveat where one applies). Placed above
+            the assumptions so the band is never read without them nearby. */}
+        {projection?.magnitudeBand && (
+          <SectionBlock icon={<BarChart2 size={16} />} title="Projection Band">
+            <ProjectionBandCompact projection={projection} />
+          </SectionBlock>
+        )}
+
+        {assumptions.length > 0 && (
+          <SectionBlock icon={<ListChecks size={16} />} title="Projection Assumptions">
+            <ProjectionAssumptionList projection={projection} />
+          </SectionBlock>
+        )}
 
         <SectionBlock icon={<Zap size={16} />} title="Suggested Agent Actions">
           {actions.length > 0 ? (
@@ -427,6 +457,12 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
           )}
         </SectionBlock>
 
+        {projection?.basis && (
+          <SectionBlock icon={<BarChart2 size={16} />} title="Projection Basis">
+            <ProjectionBasisCompact projection={projection} showTitle={false} />
+          </SectionBlock>
+        )}
+
         <SectionBlock icon={<BarChart2 size={16} />} title="Implementation Complexity">
           <div className="text-sm font-semibold text-text">{complexity.label}</div>
           <p className="mt-2 text-sm leading-relaxed text-text">{complexity.description}</p>
@@ -461,7 +497,12 @@ function EvidencePanel({
   // and filter client-side by evidenceIds. Previously this re-fetched ALL
   // evidence on every opportunity switch via a keyed effect; now switching
   // opportunities is instant and makes no network call.
-  const { data: allEvidence } = useResource<EvidenceReview[]>(
+  const {
+    data: allEvidence,
+    loading: evidenceLoading,
+    error: evidenceError,
+    refetch: refetchEvidence,
+  } = useResource<EvidenceReview[]>(
     runId ? cacheKeys.runEvidence(runId) : null,
     () => fetchEvidence(runId as string),
   );
@@ -489,6 +530,22 @@ function EvidencePanel({
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+        {/* A failed evidence load is reported, with a retry — never left looking
+            like an in-progress load. The run-scoped evidence endpoint 404s until
+            the run materialises the artifact, so a fetch started while the run
+            was still finishing legitimately fails; the panel must say so. */}
+        {evidenceError && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+            <div className="text-sm text-text">Evidence could not be loaded for this run.</div>
+            <button
+              type="button"
+              onClick={refetchEvidence}
+              className="mt-2 rounded-md border border-accent/20 bg-accent/5 px-2.5 py-1 text-xs font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
+            >
+              Retry
+            </button>
+          </div>
+        )}
         {evidenceIds.length > 0 ? (
           evidenceIds.map((id) => {
             const ev = evidenceMap[id];
@@ -509,7 +566,18 @@ function EvidencePanel({
                 ) : (
                   <>
                     <div className="font-mono text-xs text-muted">{id}</div>
-                    <div className="mt-1 text-sm text-text">Loading evidence...</div>
+                    {/* Only say "loading" while a fetch is actually in flight.
+                        Once the set has loaded, an id that is not in it is a
+                        genuine miss and is reported as one — the old blanket
+                        "Loading evidence..." hid both a failed fetch and a
+                        missing item behind a spinner that never resolved. */}
+                    <div className="mt-1 text-sm text-text">
+                      {evidenceLoading
+                        ? 'Loading evidence...'
+                        : evidenceError
+                          ? 'Evidence unavailable.'
+                          : 'Evidence not found in this run.'}
+                    </div>
                   </>
                 )}
               </div>

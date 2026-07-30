@@ -7,8 +7,8 @@ import SourceConfigPanel from './SourceConfigPanel';
 
 export default function RightPanel({
   selected, onConfigure, confidence, recommendedConnectedCount, recommendedTotal, next, onConnectNext,
-  outboundSetupRequest = null,
-}: { selected: Connector | null; onConfigure: ()=>void; confidence: Confidence; recommendedConnectedCount: number; recommendedTotal: number; next: Connector | null; onConnectNext: ()=>void; outboundSetupRequest?: OutboundSetupRequest | null }) {
+  outboundSetupRequest = null, connectingNext = false,
+}: { selected: Connector | null; onConfigure: ()=>void; confidence: Confidence; recommendedConnectedCount: number; recommendedTotal: number; next: Connector | null; onConnectNext: ()=>void; outboundSetupRequest?: OutboundSetupRequest | null; connectingNext?: boolean }) {
   return (
     <div className="sticky top-[76px] flex flex-col gap-3">
       {/* key on connector id: switching connectors remounts the detail panel so
@@ -20,7 +20,7 @@ export default function RightPanel({
       {/* T41-8: File upload config merged from SourceIntakePage into right panel.
           Collapsible so it does not dominate the connector detail view. */}
       <SourceConfigPanel />
-      <NextBestSourcePanel confidence={confidence} recommendedConnectedCount={recommendedConnectedCount} recommendedTotal={recommendedTotal} next={next} onConnectNext={onConnectNext} />
+      <NextBestSourcePanel confidence={confidence} recommendedConnectedCount={recommendedConnectedCount} recommendedTotal={recommendedTotal} next={next} onConnectNext={onConnectNext} connecting={connectingNext} />
     </div>
   );
 }

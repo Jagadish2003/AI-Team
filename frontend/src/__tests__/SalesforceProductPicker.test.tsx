@@ -123,6 +123,106 @@ describe('SalesforceProductPicker', () => {
       { products: ['salesforce_ncino'] },
     );
   });
+
+  // ── Multi-select (checkbox) behaviour ──────────────────────────────────────
+  // The declaration is a MULTI-select: a workspace can declare more than one
+  // Salesforce product, and each maps to a discovery pack (→ a multi-pack run).
+
+  it('exposes the product toggles as checkboxes, not radios', async () => {
+    render(<SalesforceProductPicker />);
+    await screen.findByText('nCino');
+    const checkboxes = screen.getAllByRole('checkbox');
+    expect(checkboxes.length).toBe(6);
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+  });
+
+  it('keeps MULTIPLE products selected and PATCHes all of them', async () => {
+    mockApiPatch.mockResolvedValue({
+      ok: true,
+      products: ['salesforce_sc', 'salesforce_ncino'],
+      labels: ['Service Cloud', 'nCino'],
+    });
+    render(<SalesforceProductPicker />);
+
+    fireEvent.click(await screen.findByText('Service Cloud'));
+    fireEvent.click(await screen.findByText('nCino'));
+    fireEvent.click(screen.getByText('Save product declaration'));
+
+    await waitFor(() => expect(mockApiPatch).toHaveBeenCalledTimes(1));
+    expect(mockApiPatch).toHaveBeenCalledWith(
+      '/api/connectors/salesforce/products',
+      { products: ['salesforce_sc', 'salesforce_ncino'] },
+    );
+  });
+
+  it('clicking a selected product toggles it off (deselect)', async () => {
+    mockApiPatch.mockResolvedValue({ ok: true, products: [], labels: [] });
+    render(<SalesforceProductPicker />);
+
+    const ncino = await screen.findByText('nCino');
+    fireEvent.click(ncino); // select
+    fireEvent.click(ncino); // deselect
+    fireEvent.click(screen.getByText('Save product declaration'));
+
+    await waitFor(() => expect(mockApiPatch).toHaveBeenCalledTimes(1));
+    expect(mockApiPatch).toHaveBeenCalledWith(
+      '/api/connectors/salesforce/products',
+      { products: [] },
+    );
+  });
+});
+
+// ── Shared Integration Hub picker design ──────────────────────────────────────
+// The product declaration is one of seven Integration Hub multi-select pickers
+// (the others: Jira projects, Slack/Teams channels, Confluence spaces,
+// SharePoint sites, GitHub repos). They must read as ONE control — the same
+// capped scrollable list box, the same filled-square selection mark, and the
+// same "X of Y … selected" count. This block pins the parts that had drifted.
+
+describe('SalesforceProductPicker — shared picker design', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDefaultMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('shows the shared selection count, including before anything is picked', async () => {
+    render(<SalesforceProductPicker />);
+    await screen.findByText('nCino');
+
+    expect(screen.getByText('0 of 6 products selected')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('nCino'));
+    expect(screen.getByText('1 of 6 products selected')).toBeInTheDocument();
+  });
+
+  it('caps the option list in the shared scrollable box', async () => {
+    render(<SalesforceProductPicker />);
+    await screen.findByText('nCino');
+
+    const group = screen.getByRole('group', { name: 'Salesforce products' });
+    expect(group.className).toContain('max-h-[15rem]');
+    expect(group.className).toContain('overflow-y-auto');
+  });
+
+  it('marks a selected product with the shared square mark, not a tick glyph', async () => {
+    render(<SalesforceProductPicker />);
+    const row = (await screen.findByText('nCino')).closest(
+      '[role="checkbox"]',
+    ) as HTMLElement;
+
+    expect(row.querySelector('.bg-accent')).toBeNull(); // nothing marked yet
+    fireEvent.click(row);
+
+    expect(row).toHaveAttribute('aria-checked', 'true');
+    // The mark is the shared filled square — never an icon/tick, which is what
+    // made this picker look different from the other six.
+    expect(row.querySelector('.rounded-\\[1px\\].bg-accent')).not.toBeNull();
+    expect(row.querySelector('svg')).toBeNull();
+  });
 });
 
 // ── Placement inside ConnectorDetailPanel ─────────────────────────────────────

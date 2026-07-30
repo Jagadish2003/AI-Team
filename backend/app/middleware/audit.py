@@ -63,6 +63,13 @@ INGESTION_CHECKPOINT_RESET = "ingestion_checkpoint_reset"
 # match. The dedicated decision-history table is the domain record; this event
 # also places the action in the organisation-wide audit stream.
 RUNBOOK_MATCH_DECIDED = "runbook_match_decided"
+# 2.0-A2 T1: an opportunity's lifecycle state changed (open -> actioned ->
+# monitoring -> measured, plus dismissed/stalled). The dedicated append-only
+# opportunity_lifecycle_history table is the domain record; this event places the
+# transition in the organisation-wide audit stream with actor, org, target and
+# timestamp. Emitted for SYSTEM transitions too, so a state change never appears
+# in the portfolio without a corresponding audit row.
+OPPORTUNITY_LIFECYCLE_TRANSITIONED = "opportunity_lifecycle_transitioned"
 
 # ---------------------------------------------------------------------------
 # Registry — every accepted event type listed here.
@@ -85,6 +92,7 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     SCHEMA_DISCOVERED,
     INGESTION_CHECKPOINT_RESET,
     RUNBOOK_MATCH_DECIDED,
+    OPPORTUNITY_LIFECYCLE_TRANSITIONED,
 })
 
 # ---------------------------------------------------------------------------

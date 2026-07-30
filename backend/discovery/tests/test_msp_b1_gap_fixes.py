@@ -180,7 +180,16 @@ def _source(factory, *, surfaces, page_size=100, account=None):
 
 
 def _drain(source, since=None):
-    conn = AWSEventConnector(source)
+    """Drive one full run over ``source``, with the per-run poll bound disabled.
+
+    These tests exercise the READER/watermark semantics (ordering, truncation,
+    boundary instants) under a deliberately tiny page budget, so a single logical
+    backlog is spread over many polls. The per-run continuation bound the skeleton
+    applies in production (poll cap / deadline / B7 budget — see
+    ``test_msp_b1_poll_bounds.py``) is a different concern and is switched off here so
+    it cannot mask a genuine reader defect.
+    """
+    conn = AWSEventConnector(source, max_polls_per_scope=0, poll_deadline_seconds=0)
     batches = list(conn.ingest_changes(_ORG, since))
     return [r for b in batches for r in b.records], batches[-1].next_checkpoint
 
