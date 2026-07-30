@@ -498,6 +498,7 @@ def _packs_view_multi(
 
     primary_pack_id = str(latest.get("packId") or "")
     run_executed = latest.get("executedDetectorIds")
+    run_pins = _run_pinned_versions(run_id, latest)
 
     packs_out: List[Dict[str, Any]] = []
     for meta in run_packs:
@@ -544,10 +545,78 @@ def _packs_view_multi(
                 "evaluated_count": event_payload.get("evaluated_count"),
                 "not_evaluated_count": event_payload.get("not_evaluated_count"),
                 "executed_at": executed_at,
+                # 2.0-C1 T2 (AC5): the pack's state TODAY. The row above still
+                # reports exactly what executed (immutable run fields); this says
+                # whether the pack that produced it is still running. A pack
+                # disabled after this run reads "disabled" here while its
+                # execution record is untouched.
+                "pack_state": _current_pack_state(org_id, pack_id),
+                # 2.0-C1 T3 (AC5): the version this run was PINNED to, if any.
+                # `pack_version` above is what actually executed — for a pinned run
+                # they are the same value, and this field is what says the version
+                # was a deliberate rollback rather than the shipped default.
+                "pinned_version": run_pins.get(pack_id),
+                "rolled_back": pack_id in run_pins,
             }
         )
 
-    return {"run_id": run_id, "packs": packs_out}
+    return {
+        "run_id": run_id,
+        "packs": packs_out,
+        "excluded_packs": _excluded_packs_for_run(run_id, latest),
+        "pinned_pack_versions": run_pins,
+    }
+
+
+def _current_pack_state(org_id: str, pack_id: str) -> str:
+    """This org's CURRENT state for a pack (2.0-C1 T2 / AC5).
+
+    Unlike every other field in the packs panel — which comes from immutable run
+    fields precisely so a later pack change cannot rewrite history — this one is
+    deliberately read LIVE, because "is this pack still running?" is a question
+    about now, not about the run. Fail-soft: an unreadable state store reports
+    ``active`` rather than blanking the panel.
+    """
+    from .pack_state import STATE_ACTIVE, STATE_DISABLED, disabled_pack_ids_safe
+
+    return STATE_DISABLED if pack_id in disabled_pack_ids_safe(org_id) else STATE_ACTIVE
+
+
+def _run_pinned_versions(run_id: str, run: Dict[str, Any]) -> Dict[str, str]:
+    """``{pack_id: version}`` this RUN executed at a rolled-back version.
+
+    A historical fact about the run, read from the run record (the runner persists
+    it), NOT from the org's current pin — a rollback that happened after this run
+    must not make the run look as though it used the pinned version (2.0-C1 AC3:
+    nothing is rewritten retroactively).
+    """
+    from_run = run.get("pinnedPackVersions")
+    if isinstance(from_run, dict) and from_run:
+        return {str(k): str(v) for k, v in from_run.items() if k and v}
+    try:
+        stored = db.run_kv_get("pinned_pack_versions", run_id, {}) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(stored, dict):
+        return {}
+    return {str(k): str(v) for k, v in stored.items() if k and v}
+
+
+def _excluded_packs_for_run(run_id: str, run: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Packs selected for this run that did not execute because they are disabled.
+
+    Read from the run record first, then the run-scoped KV the launch edge and the
+    runner both write. Reported so an analyst seeing fewer packs than they selected
+    gets the reason instead of an unexplained gap (2.0-C1 AC5).
+    """
+    from_run = run.get("excludedPacks")
+    if isinstance(from_run, list) and from_run:
+        return [row for row in from_run if isinstance(row, dict)]
+    try:
+        stored = db.run_kv_get("excluded_packs", run_id, []) or []
+    except Exception:  # noqa: BLE001
+        return []
+    return [row for row in stored if isinstance(row, dict)]
 
 
 def packs_view(org_id: str) -> Dict[str, Any]:
@@ -565,11 +634,21 @@ def packs_view(org_id: str) -> Dict[str, Any]:
     """
     latest = _latest_run(org_id)
     if latest is None:
-        return {"run_id": None, "packs": []}
+        return {
+            "run_id": None,
+            "packs": [],
+            "excluded_packs": [],
+            "pinned_pack_versions": {},
+        }
 
     run_id = str(latest.get("id") or "")
     if not run_id:
-        return {"run_id": None, "packs": []}
+        return {
+            "run_id": None,
+            "packs": [],
+            "excluded_packs": [],
+            "pinned_pack_versions": {},
+        }
 
     run_packs = latest.get("packs")
     if isinstance(run_packs, list) and run_packs:
@@ -589,8 +668,16 @@ def packs_view(org_id: str) -> Dict[str, Any]:
         or db.run_kv_get("pack_id", run_id, None)
         or ""
     )
+    # Historical fact about THIS run — resolved once and reused below.
+    run_pins = _run_pinned_versions(run_id, latest)
+
     if not pack_id:
-        return {"run_id": run_id, "packs": []}
+        return {
+            "run_id": run_id,
+            "packs": [],
+            "excluded_packs": _excluded_packs_for_run(run_id, latest),
+            "pinned_pack_versions": run_pins,
+        }
 
     run_detectors = latest.get("executedDetectorIds")
     event_detectors = event_payload.get("detector_ids")
@@ -615,7 +702,14 @@ def packs_view(org_id: str) -> Dict[str, Any]:
     if not execution_exists:
         # A selected pack is not proof that its detectors ran. A run that failed
         # during ingestion must not be presented as a successful pack execution.
-        return {"run_id": run_id, "packs": []}
+        # The excluded list is still reported — "this pack was skipped because it is
+        # disabled" is exactly the explanation an empty packs list needs.
+        return {
+            "run_id": run_id,
+            "packs": [],
+            "excluded_packs": _excluded_packs_for_run(run_id, latest),
+            "pinned_pack_versions": run_pins,
+        }
 
     detector_count = len(detectors)
     if not detectors and event_payload.get("detector_count") is not None:
@@ -635,8 +729,14 @@ def packs_view(org_id: str) -> Dict[str, Any]:
                 "evaluated_count": event_payload.get("evaluated_count"),
                 "not_evaluated_count": event_payload.get("not_evaluated_count"),
                 "executed_at": execution_recorded_at,
+                # 2.0-C1 T2/T3 (AC5) — see _current_pack_state / _run_pinned_versions.
+                "pack_state": _current_pack_state(org_id, pack_id),
+                "pinned_version": run_pins.get(pack_id),
+                "rolled_back": pack_id in run_pins,
             }
         ],
+        "excluded_packs": _excluded_packs_for_run(run_id, latest),
+        "pinned_pack_versions": run_pins,
     }
 
 

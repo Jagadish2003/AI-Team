@@ -50,7 +50,14 @@ from .middleware.tenancy import get_current_org_id
 from .security import require_auth
 from .rbac import require_role
 
+from .pack_activation import (
+    AllPacksDisabledError,
+    compatibility_snapshot,
+    resolve_activatable_packs,
+)
+from discovery.packs.pack_compatibility import PackIncompatibleError
 from discovery.packs.pack_config import get_pack_version, normalize_pack_ids
+from discovery.packs.platform_capabilities import get_platform_version
 from discovery.packs.template_registry import (
     get_template,
     normalize_template_ids,
@@ -153,6 +160,11 @@ class LaunchResponse(BaseModel):
     focusId: Optional[str] = None
     industryId: Optional[str] = None
     systemCount: int
+    # 2.0-C1 T2 (AT-827): packs the caller selected that will NOT run because this
+    # org has disabled them. packIds above already excludes them, so a caller that
+    # ignores this field still sees the truthful pack set — this names WHAT was
+    # dropped so the exclusion is never silent. Empty for the common case.
+    excludedPacks: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 # ── Route registration ────────────────────────────────────────────────────────
@@ -228,10 +240,48 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
                 detail="pack_id is required",
             )
 
+        # 2.0-C1 activation resolution. This is the primary activation edge, so
+        # both rules run before any run record or KV entry exists:
+        #
+        #   T2 (AT-827 / AC2) — a DISABLED pack is dropped from the selection so it
+        #     cannot execute in this or any future run. The exclusion is recorded on
+        #     the run record (and as telemetry), never silent. If every selected
+        #     pack is disabled there is nothing to run → 409.
+        #   T1 (AT-826 / AC1) — a pack whose declared platform range or required
+        #     normalised concepts are unmet CANNOT be activated → 409 naming the
+        #     unmet requirement.
+        #
+        # eff_pack_ids is then narrowed to what will ACTUALLY run, so the run record,
+        # KV, and response report the real pack set rather than the requested one.
+        try:
+            activation = resolve_activatable_packs(
+                org_id=get_current_org_id(), pack_ids=eff_pack_ids
+            )
+        except AllPacksDisabledError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except PackIncompatibleError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        eff_pack_ids = activation.activated_pack_ids
+        eff_pack = eff_pack_ids[0] if eff_pack_ids else eff_pack
+        excluded_packs = [item.to_dict() for item in activation.excluded]
+        pack_compatibility = compatibility_snapshot(activation.activated)
+        platform_version_at_launch = get_platform_version()
+        # 2.0-C1 T3 (AT-828): packs this org has rolled back. Recorded separately
+        # from pack_versions so the run says both "it ran 1.1.0" and "1.1.0 was a
+        # deliberate pin", not just the former.
+        pinned_pack_versions = dict(activation.pinned_versions)
+
         # Versions are captured at launch so historical provenance cannot drift
-        # when a registry entry or pack is updated later.
+        # when a registry entry or pack is updated later. A ROLLED-BACK pack records
+        # its PINNED version here, because that is the version the run will actually
+        # execute and stamp — recording the registry's current version would make the
+        # run record disagree with its own findings.
         pack_versions = {
-            selected_pack_id: get_pack_version(selected_pack_id)
+            selected_pack_id: (
+                pinned_pack_versions.get(selected_pack_id)
+                or get_pack_version(selected_pack_id)
+            )
             for selected_pack_id in eff_pack_ids
         }
         template_versions = {
@@ -278,6 +328,18 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             "packId": eff_pack,
             "packIds": eff_pack_ids,
             "packVersions": pack_versions,
+            # 2.0-C1 T1: the compatibility verdict AS EVALUATED AT LAUNCH (declared
+            # range, required concepts, platform version). Captured here for the
+            # same reason as packVersions — a later registry or platform change
+            # must not rewrite what this run was actually launched against.
+            "packCompatibility": pack_compatibility,
+            "platformVersion": platform_version_at_launch,
+            # 2.0-C1 T2 (AT-827 / AC5): packs the caller selected that will NOT run
+            # because this org has disabled them. Recorded so the exclusion is
+            # visible on the run and in run health rather than being silent.
+            "excludedPacks": excluded_packs,
+            # 2.0-C1 T3 (AT-828 / AC5): which packs were rolled back for this run.
+            "pinnedPackVersions": pinned_pack_versions,
             "focusId": eff_focus,
             "industryId": body.industry_id,
             "templateId": eff_template,
@@ -301,6 +363,12 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         # changes and downstream multi-pack execution can read pack_ids.
         run_kv_set("pack_ids", run_id, eff_pack_ids)
         run_kv_set("pack_versions", run_id, pack_versions)
+        # 2.0-C1 T1: run-scoped compatibility snapshot — the accurate pack
+        # range/version record run health reads instead of re-deriving it from the
+        # mutable registry after the fact.
+        run_kv_set("pack_compatibility", run_id, pack_compatibility)
+        run_kv_set("excluded_packs", run_id, excluded_packs)
+        run_kv_set("pinned_pack_versions", run_id, pinned_pack_versions)
         run_kv_set("template_ids", run_id, eff_template_ids)
         run_kv_set("template_versions", run_id, template_versions)
         run_kv_set("effective_configuration", run_id, effective)
@@ -340,4 +408,5 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             focusId=eff_focus,
             industryId=body.industry_id,
             systemCount=len(eff_systems),
+            excludedPacks=excluded_packs,
         )

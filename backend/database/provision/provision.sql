@@ -1,15 +1,17 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0030.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0033.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
 -- 03_lazy_runtime_tables.sql. Creates the agentiq role, all tables (incl.
 -- org_licenses, ingestion_checkpoints, opportunity_instances, the R18-B1/B2
 -- pgvector-backed retrieval_chunks + retrieval_refresh_queue, the MSP-B8
 -- ops_event_staging + ops_event_load_batches, the MSP-B5 runbook_matches /
--- runbook_match_decision_history / runbook_match_feedback, and the R-1.9.1-L3
+-- runbook_match_decision_history / runbook_match_feedback, the 2.0-C1
+-- pack_states + append-only pack_state_history, and the R-1.9.1-L3
 -- vendor-side license_registry + append-only issuance_audit),
 -- indexes/constraints/rules, seeds the connector catalog, grants the app login
--- role(s) privileges on the schema, and stamps alembic_version to head 0030.
+-- role(s) privileges on the schema, REVOKES DELETE/TRUNCATE on the run-history
+-- tables (2.0-C1 AC4), and stamps alembic_version to head 0033.
 --
 -- BEFORE RUNNING ON PRODUCTION — two values in this file are dev defaults and
 -- MUST be set for the target environment. Both are marked "TODO(deploy)" below:
@@ -1369,6 +1371,68 @@ CREATE INDEX IF NOT EXISTS idx_runbook_match_feedback_org_created
 
 
 --
+-- Name: pack_states, pack_state_history — 2.0-C1 T2 (AT-827) alembic 0031
+--
+-- Per-org pack lifecycle state (active/disabled) and its append-only transition
+-- history. Like the runbook tables above these have NO runtime ensure_* helper:
+-- app/pack_state.py only reads and writes them, so provisioning is the only thing
+-- that can create them.
+--
+-- ABSENCE OF A ROW MEANS 'active'. There is no seed step: provisioning these
+-- tables changes no behaviour until a customer disables a pack. The read path in
+-- app/pack_state.py is fail-soft, so a deployment that has not yet run this
+-- migration serves every pack as active rather than failing.
+--
+
+-- pinned_version / previous_version / resulting_version are the 2.0-C1 T3 (AT-828)
+-- version-rollback columns (alembic 0032). NULL means "not pinned" — the pack runs
+-- its current registry version, exactly as before rollback existed.
+CREATE TABLE IF NOT EXISTS pack_states (
+    org_id         VARCHAR(64)  NOT NULL,
+    pack_id        VARCHAR(64)  NOT NULL,
+    state          VARCHAR(16)  NOT NULL,
+    revision       INTEGER      NOT NULL DEFAULT 0,
+    reason         TEXT,
+    updated_by     VARCHAR(128),
+    created_at     TIMESTAMPTZ  NOT NULL,
+    updated_at     TIMESTAMPTZ  NOT NULL,
+    pinned_version VARCHAR(32),
+    PRIMARY KEY (org_id, pack_id)
+);
+
+CREATE TABLE IF NOT EXISTS pack_state_history (
+    id                VARCHAR(64)  PRIMARY KEY,
+    org_id            VARCHAR(64)  NOT NULL,
+    pack_id           VARCHAR(64)  NOT NULL,
+    revision          INTEGER      NOT NULL,
+    transition        VARCHAR(16)  NOT NULL,
+    previous_state    VARCHAR(16)  NOT NULL,
+    resulting_state   VARCHAR(16)  NOT NULL,
+    reason            TEXT,
+    actor_id          VARCHAR(128) NOT NULL,
+    changed_at        TIMESTAMPTZ  NOT NULL,
+    previous_version  VARCHAR(32),
+    resulting_version VARCHAR(32),
+    UNIQUE (org_id, pack_id, revision)
+);
+
+-- Idempotent guards for a database provisioned before 0032 (the CREATE above only
+-- applies to a fresh install).
+ALTER TABLE pack_states
+    ADD COLUMN IF NOT EXISTS pinned_version VARCHAR(32);
+ALTER TABLE pack_state_history
+    ADD COLUMN IF NOT EXISTS previous_version VARCHAR(32);
+ALTER TABLE pack_state_history
+    ADD COLUMN IF NOT EXISTS resulting_version VARCHAR(32);
+
+CREATE INDEX IF NOT EXISTS idx_pack_state_history_org_pack
+    ON pack_state_history (org_id, pack_id, revision DESC);
+
+CREATE INDEX IF NOT EXISTS idx_pack_states_org_state
+    ON pack_states (org_id, state);
+
+
+--
 -- PostgreSQL database dump complete
 --
 
@@ -1431,7 +1495,13 @@ INSERT INTO "public"."connectors" ("id", "payload") VALUES ('zendesk', '{"id": "
 -- backend/migrations/versions/ — a DB stamped lower will have `alembic upgrade
 -- head` re-run intervening migrations against tables that already exist.
 --
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0030') ON CONFLICT DO NOTHING;
+-- 2.0-C1: this file now carries the 0031 (pack_states / pack_state_history),
+-- 0032 (version-pin columns) and 0033 (REVOKE DELETE/TRUNCATE on the history
+-- tables) objects, so it must stamp 0033 — not 0030. A stale stamp would leave a
+-- freshly provisioned database claiming a head it is ahead of, and `alembic upgrade
+-- head` would then re-run 0031-0033. Those are all idempotent, so it would not
+-- break, but the recorded head would be wrong. Bump this whenever you add DDL here.
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0033') ON CONFLICT DO NOTHING;
 
 
 --
@@ -1473,6 +1543,65 @@ BEGIN
             EXECUTE format('GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO %I', r);
             EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO %I', r);
             EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO %I', r);
+        END IF;
+    END LOOP;
+END
+$$;
+
+
+--
+-- Run-history retention — 2.0-C1 T4 (AT-829) alembic 0033
+--
+-- The GRANT block above hands each app role ALL PRIVILEGES, which includes DELETE
+-- and TRUNCATE. Claw those two back on the tables holding run history, so no
+-- application path — intended or buggy — can remove a finding, its evidence, a run
+-- record, or the pack lifecycle audit trail (2.0-C1 AC4). The DATABASE refuses it.
+--
+-- MUST run AFTER the GRANT block, or the grant hands DELETE straight back.
+--
+-- The protected set is declared once in backend/app/history_retention.py
+-- (PROTECTED_TABLE_REASONS) and mirrored here; a contract test asserts the two
+-- agree, so adding a table there without updating this block fails CI.
+--
+-- Deliberately NOT protected (deletion is correct for them):
+--   retrieval_chunks / retrieval_refresh_queue — derived vector index + work queue;
+--       R18-B2 freshness purges chunks when a source artifact changes. Re-embeddable,
+--       loses no history.
+--   entity_relationships — cross-run graph state that relationship_mapper prunes when
+--       a relationship no longer holds; a current view, not a historical record.
+--
+-- NOTE run_events: db.delete_run_events is a SOFT delete (UPDATE is_deleted = TRUE),
+-- which is why revoking DELETE here does not break rewriting a run's event list.
+--
+-- Idempotent: REVOKE on an already-revoked privilege is a no-op, and both the role
+-- and the table are existence-guarded.
+--
+DO
+$$
+DECLARE
+    r text;
+    t text;
+    app_roles text[] := ARRAY['agentiq', 'aiqdevusr'];  -- TODO(deploy): add the prod app role
+    protected_tables text[] := ARRAY[
+        'kv',                   -- run-scoped artifacts: findings, evidence, roadmap, report
+        'opportunity_instances',-- per-instance pack id + pack version stamps (R16-B1 §4)
+        'pack_state_history',   -- append-only pack lifecycle trail (2.0-C1 T2/T3)
+        'run_events',           -- run event log (soft-deleted, never removed)
+        'runs'                  -- run records
+    ];
+BEGIN
+    FOREACH r IN ARRAY app_roles LOOP
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+            FOREACH t IN ARRAY protected_tables LOOP
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = 'public' AND table_name = t
+                ) THEN
+                    EXECUTE format(
+                        'REVOKE DELETE, TRUNCATE ON TABLE public.%I FROM %I', t, r
+                    );
+                END IF;
+            END LOOP;
         END IF;
     END LOOP;
 END

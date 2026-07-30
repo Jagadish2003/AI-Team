@@ -16,7 +16,7 @@ import { isViewerRole } from '../utils/roles';
 import { CheckCircle2, Database, Layers3, Target } from 'lucide-react';
 import type { WorkspaceCatalogResponse } from '../types/workspace_catalog';
 import { getCatalogSystemIds } from '../types/workspace_catalog';
-import { fetchTokenStatus, type TokenStatus } from '../services/staticApi';
+import { checkConnectorExpiry, connectorsToCheck } from '../services/connectorExpiry';
 import { useToast } from '../components/common/Toast';
 import { useResource } from '../lib/dataCache';
 import { Skeleton } from '../components/common/Skeleton';
@@ -337,25 +337,23 @@ export function connectorDisplayName(id: string): string {
 // actually engaged (connected or needs_auth per the catalog). A never-configured
 // or unknown system is ignored here — the run degrades gracefully for those, and
 // checking them would false-positive (e.g. a not-connected system reads needs_auth).
+//
+// Thin catalog-shaped wrapper over the shared guard in services/connectorExpiry,
+// which is now used by BOTH launch entry points (this page and the Discovery Run
+// page). Kept exported because it is the catalog-aware signature this page's tests
+// and callers use.
 export function connectorsToCheckForExpiry(
   systems: string[],
   catalog: WorkspaceCatalogResponse | null,
 ): string[] {
-  const engaged = new Set(catalog ? getCatalogSystemIds(catalog) : []);
-  return systems.filter(id => engaged.has(id));
+  return connectorsToCheck(systems, catalog ? getCatalogSystemIds(catalog) : []);
 }
 
 // Given each checked connector's live token status, the ones that need a reconnect
 // before a run can use them — the same condition the Integration Hub tile uses to
 // show "Token expired": needs_auth (token gone/expired, no self-refresh) or
 // refresh_failed (a live call was rejected 401 and the refresh could not recover).
-export function expiredConnectors(
-  statuses: Array<{ id: string; status: TokenStatus | null }>,
-): string[] {
-  return statuses
-    .filter(s => s.status === 'needs_auth' || s.status === 'refresh_failed')
-    .map(s => s.id);
-}
+export { expiredFromStatuses as expiredConnectors } from '../services/connectorExpiry';
 
 // ── Session Persistence Hook ─────────────────────────────────────────────────
 
@@ -645,33 +643,15 @@ export default function StackBuilderPage({
     // it would silently return no data. Name the offenders and send the user to
     // reconnect them in the Integration Hub. The check itself is non-fatal: if
     // token-status can't be read, we let the launch proceed rather than block it.
-    const toCheck = connectorsToCheckForExpiry(systems, catalog);
-    if (toCheck.length > 0) {
-      try {
-        const statuses = await Promise.all(
-          toCheck.map(async id => {
-            try {
-              return { id, status: (await fetchTokenStatus(id)).status };
-            } catch {
-              return { id, status: null as TokenStatus | null };
-            }
-          }),
-        );
-        const expired = expiredConnectors(statuses);
-        if (expired.length > 0) {
-          const names = expired.map(connectorDisplayName).join(', ');
-          const many = expired.length > 1;
-          push(
-            `Can't start discovery — ${many ? 'these connectors have' : 'this connector has'} ` +
-              `an expired token: ${names}. Reconnect ${many ? 'them' : 'it'} in the ` +
-              `Integration Hub, then try again.`,
-          );
-          setLaunchState('setup');
-          return;
-        }
-      } catch {
-        // Whole check failed (e.g. network) — do not block the launch on it.
-      }
+    const { message: expiryMessage } = await checkConnectorExpiry(
+      systems,
+      catalog ? getCatalogSystemIds(catalog) : [],
+      { displayName: connectorDisplayName },
+    );
+    if (expiryMessage) {
+      push(expiryMessage);
+      setLaunchState('setup');
+      return;
     }
 
     let runId: string;

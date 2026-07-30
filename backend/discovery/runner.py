@@ -165,6 +165,172 @@ def _record_pack_execution(
     return detector_ids
 
 
+def _resolve_pack_activation(
+    *,
+    org_id: str,
+    run_id: Optional[str],
+    pack_configs: List[Tuple[Optional[str], Dict[str, Any]]],
+) -> Dict[str, Any]:
+    """Apply the 2.0-C1 activation rules at the execution point.
+
+    Three things happen here, and this is the ONLY place they are guaranteed:
+
+    * **AT-827** — this org's DISABLED packs are dropped from the selection, so
+      their detectors never run.
+    * **AT-826** — the remainder is asserted compatible with the platform.
+    * **AT-828** — a ROLLED-BACK pack is substituted for its pinned version: that
+      version's detector list replaces the current one, its archived config artifact
+      is published to the per-run context so detectors read the pinned thresholds,
+      and its version is what gets stamped on every finding.
+
+    ``AllPacksDisabledError`` and ``PackIncompatibleError`` both propagate — a run
+    that cannot legitimately execute its packs must fail, not quietly do less than
+    it was asked to.
+
+    The activation resolution lives in ``app.pack_activation`` because it needs the
+    org-scoped pack-state store; the import is lazy and local, matching how this
+    module already reaches for ``app.db`` / ``app.telemetry``.
+    """
+    from app.pack_activation import resolve_activatable_packs
+
+    from .packs.pack_config import resolve_pack_at_version
+    from .packs.pack_version_context import set_pack_config_paths
+
+    selected_ids = [cfg["packId"] for _, cfg in pack_configs]
+    decision = resolve_activatable_packs(
+        org_id=org_id, pack_ids=selected_ids, run_id=run_id
+    )
+
+    if decision.excluded:
+        logger.info(
+            "Run %s: skipping disabled pack(s) %s", run_id, decision.excluded_pack_ids
+        )
+        # Also record it run-scoped, so an analyst opening this run sees why a pack
+        # they selected produced nothing. The launch edge writes the same key; a
+        # direct/CLI run reaches the runner without ever touching that edge, so this
+        # is the only record for those. Non-blocking: the exclusion is already
+        # logged and emitted as telemetry, and the run itself is perfectly valid.
+        if run_id:
+            try:
+                from app.db import run_kv_get, run_kv_set
+
+                existing = run_kv_get("excluded_packs", run_id, []) or []
+                seen = {
+                    str(row.get("packId"))
+                    for row in existing
+                    if isinstance(row, dict)
+                }
+                run_kv_set(
+                    "excluded_packs",
+                    run_id,
+                    list(existing)
+                    + [
+                        item.to_dict()
+                        for item in decision.excluded
+                        if item.pack_id not in seen
+                    ],
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Could not record excluded packs for run %s (non-blocking)",
+                    run_id,
+                    exc_info=True,
+                )
+
+    activated_ids = set(decision.activated_pack_ids)
+    narrowed: List[Tuple[Optional[str], Dict[str, Any]]] = []
+    for sel, cfg in pack_configs:
+        pack_id = cfg["packId"]
+        if pack_id not in activated_ids:
+            continue
+        pinned = decision.pinned_versions.get(pack_id)
+        if pinned:
+            # Substitute the pinned version's REAL behaviour — its detector list and
+            # its archived config path — so the run executes 1.1.0 rather than being
+            # stamped 1.1.0 while running the current version. resolve_pack_at_version
+            # returns a COPY; the registry is never mutated (AT-828: nothing is
+            # rewritten, retroactively or otherwise).
+            cfg = resolve_pack_at_version(pack_id, pinned)
+        narrowed.append((sel, cfg))
+
+    # Publish the pinned config artifacts for the REST of this run, so the detectors
+    # and scorers that call get_detector_thresholds()/get_calibration() with no path
+    # read the pinned version's values. Always set (empty when nothing is pinned) so
+    # a previous run's context can never leak into this one.
+    set_pack_config_paths(decision.pinned_config_paths)
+
+    return {
+        "pack_configs": narrowed,
+        "compatibility": decision.activated,
+        "excluded": [item.to_dict() for item in decision.excluded],
+        "pinned_versions": dict(decision.pinned_versions),
+    }
+
+
+class PinnedDetectorsUnavailable(RuntimeError):
+    """A pinned pack version declares detectors this build cannot provide.
+
+    Raised rather than silently running a different detector set: a run stamped
+    ``1.1.0`` that executed none of 1.1.0's detectors would be exactly the dishonest
+    stamp 2.0-C1 exists to prevent.
+    """
+
+
+def _detectors_for_pinned_version(
+    pack_config: Dict[str, Any], available: List[Any]
+) -> List[Any]:
+    """Narrow a pack's CURRENT detector modules to those its pinned version declared.
+
+    The runner imports detector modules per pack domain, so ``available`` is the
+    current version's set. A prior version declared a (typically smaller) list in
+    ``versionHistory``; this keeps only those, preserving the declared ORDER so
+    detector execution order matches that version too.
+
+    A declared module that this build does not provide is logged loudly and skipped
+    — a pinned version can only ever be served by modules that still exist. If that
+    leaves NOTHING, the pin cannot be honoured at all and we raise rather than run
+    an arbitrary set under that version's stamp.
+    """
+    declared = pack_config.get("detectors") or []
+    by_name = {
+        str(getattr(module, "__name__", "")).rsplit(".", 1)[-1]: module
+        for module in available
+    }
+    selected: List[Any] = []
+    missing: List[str] = []
+    for path in declared:
+        name = str(path).rsplit(".", 1)[-1]
+        module = by_name.get(name)
+        if module is None:
+            missing.append(str(path))
+            continue
+        selected.append(module)
+
+    if missing:
+        logger.warning(
+            "Pinned version %s of pack %s declares detector(s) this build does not "
+            "provide and they will not run: %s",
+            pack_config.get("pinnedVersion"),
+            pack_config.get("packId"),
+            missing,
+        )
+    if not selected:
+        raise PinnedDetectorsUnavailable(
+            f"Pinned version {pack_config.get('pinnedVersion')!r} of pack "
+            f"{pack_config.get('packId')!r} declares no detector this build provides "
+            f"(declared: {list(declared)}). Clear the version pin or restore the "
+            f"archived version's detectors."
+        )
+    logger.info(
+        "Pack %s pinned to %s — %d of %d current detectors active",
+        pack_config.get("packId"),
+        pack_config.get("pinnedVersion"),
+        len(selected),
+        len(available),
+    )
+    return selected
+
+
 def build_org_context(sf_data: Dict, sn_data: Dict, jira_data: Dict) -> Dict[str, Any]:
     cm = sf_data.get("case_metrics") or {}
     fi = sf_data.get("flow_inventory") or {}
@@ -1492,6 +1658,8 @@ def run(
         is_cloud_ops_pack,
         is_security_ops_pack,
     )
+    from .packs.platform_capabilities import get_platform_version
+
     _selected_pack_args = normalize_pack_ids(
         list(pack_ids or []) + ([pack] if pack else [])
     )
@@ -1514,11 +1682,63 @@ def run(
         _seen_pack_ids.add(_pid)
         _pack_configs.append((_sel, _cfg))
 
+    # 2.0-C1 (AT-826 T1 + AT-827 T2): the LAST activation edge — the EXECUTION
+    # point, and therefore the one that actually guarantees the two rules. The API
+    # edges already applied them, but a CLI/direct caller reaches the runner without
+    # passing through either, so both are re-asserted here:
+    #
+    #   T2 — a DISABLED pack is dropped from _pack_configs, so its detectors never
+    #        run. This is what makes "disabling stops future execution" (AC2) true
+    #        rather than merely enforced at the API. The exclusion is recorded on the
+    #        run payload and as telemetry, never silent.
+    #   T1 — an INCOMPATIBLE pack fails the run loudly. Deliberately NOT wrapped in
+    #        a try/except, exactly like the cloud_ops four-part-contract violation.
+    #   T3 — a ROLLED-BACK pack is replaced by its pinned version's config, so this
+    #        run executes AND is stamped with that version (AT-828 / AC3).
+    #
+    # Every shipped pack satisfies its declaration on the current platform version,
+    # so T1 never fires for a normal run; T2/T3 fire only where a customer disabled
+    # or rolled back something. `AllPacksDisabledError` propagates — a run with zero
+    # packs would otherwise report success having produced nothing.
+    _pack_activation = _resolve_pack_activation(
+        org_id=org_id,
+        run_id=run_id,
+        pack_configs=_pack_configs,
+    )
+    _pack_configs = _pack_activation["pack_configs"]
+    _pack_compatibility = _pack_activation["compatibility"]
+    _excluded_packs = _pack_activation["excluded"]
+    _pinned_pack_versions: Dict[str, str] = _pack_activation["pinned_versions"]
+
+    # Record the pins run-scoped so run health can report "this run deliberately
+    # used 1.1.0" from a HISTORICAL fact rather than from the org's current pin — a
+    # rollback made after this run must not change what this run reports (AC3).
+    if run_id and _pinned_pack_versions:
+        try:
+            from app.db import run_kv_set as _run_kv_set
+
+            _run_kv_set("pinned_pack_versions", run_id, dict(_pinned_pack_versions))
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Could not record pinned pack versions for run %s (non-blocking)",
+                run_id,
+                exc_info=True,
+            )
+
+    def _effective_pack_version(_pack_id: str, _pack_arg: Optional[str]) -> str:
+        """The version a pack ACTUALLY executes with, honouring a rollback pin.
+
+        R16-B1 §4 stamps the pack version onto every opportunity so governance can
+        tell a data change from a pack change. 2.0-C1 T3 means the registry's current
+        version is no longer automatically that version — a rolled-back pack runs its
+        pinned version's detectors and config, so the pin is what must be stamped, or
+        the stamp would misreport which logic produced the finding.
+        """
+        return _pinned_pack_versions.get(_pack_id) or get_pack_version(_pack_arg)
+
     primary_pack_arg, pack_config = _pack_configs[0]
     pack_id = pack_config["packId"]
-    # R16-B1 §4: stamp the pack VERSION (not just the id) onto every opportunity
-    # so governance/debugging can later tell a data change from a pack change.
-    pack_version = get_pack_version(primary_pack_arg)
+    pack_version = _effective_pack_version(pack_id, primary_pack_arg)
     primary_pack_id = pack_id
 
     # Union of pack DOMAINS across the whole selection drives the shared, run-once
@@ -2273,10 +2493,16 @@ def run(
     # never share detector lists, calibration, or by-detector corroboration maps.
     def _run_pack_pass(
         current_pack: Optional[str],
+        resolved_config: Optional[Dict[str, Any]] = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-        pack_config = get_pack(current_pack)
+        # 2.0-C1 T3: `resolved_config` is the ALREADY-RESOLVED pack config from
+        # _resolve_pack_activation — the pinned version's config when this org has
+        # rolled the pack back, otherwise the current registry config. Falling back
+        # to get_pack() keeps the function usable on its own (and unchanged for any
+        # caller that does not resolve first).
+        pack_config = resolved_config or get_pack(current_pack)
         pack_id = pack_config["packId"]
-        pack_version = get_pack_version(current_pack)
+        pack_version = _effective_pack_version(pack_id, current_pack)
 
         # pack-driven detector selection — pack_config.py (ENG-SHARED-1) defines
         # which detectors each pack activates.
@@ -2392,6 +2618,14 @@ def run(
             all_detectors = [repetition, handoff_friction, approval_delay, knowledge_gap,
                              integration_concentration, permission_bottleneck, cross_system_echo]
             logger.info("Pack: service_cloud — 7 SC detectors active")
+
+        # 2.0-C1 T3 (AT-828): a ROLLED-BACK pack must run its pinned version's
+        # detectors, not the current version's. The branches above import the
+        # CURRENT detector set per pack domain, so narrow it to the set the pinned
+        # version declared. Applied ONLY when a pin is active, so an un-pinned run
+        # is byte-identical to before rollback existed.
+        if pack_config.get("pinnedVersion"):
+            all_detectors = _detectors_for_pinned_version(pack_config, all_detectors)
 
         # Capture fired and non-firing detector evaluations before scoring.
         # DB and GitHub packs read their signal from the first positional arg.
@@ -2817,8 +3051,8 @@ def run(
     # execution metadata; the findings concatenate — no cross-pack merging (AC4).
     opportunities: List[Dict[str, Any]] = []
     pack_execution_meta: List[Dict[str, Any]] = []
-    for _pack_arg, _ in _pack_configs:
-        _pack_opps, _pack_meta = _run_pack_pass(_pack_arg)
+    for _pack_arg, _resolved_cfg in _pack_configs:
+        _pack_opps, _pack_meta = _run_pack_pass(_pack_arg, _resolved_cfg)
         opportunities.extend(_pack_opps)
         pack_execution_meta.append(_pack_meta)
 
@@ -2879,6 +3113,24 @@ def run(
         "packIds": [m["packId"] for m in pack_execution_meta],
         "packVersions": {m["packId"]: m["packVersion"] for m in pack_execution_meta},
         "packs": pack_execution_meta,
+        # 2.0-C1 T1 (AT-826): the platform version this run executed against and the
+        # compatibility verdict per pack (declared range + required concepts), so run
+        # health reports the pack's state and version from what ACTUALLY ran instead
+        # of re-deriving it from a registry that may have moved on.
+        "platformVersion": get_platform_version(),
+        "packCompatibility": {
+            report.pack_id: report.to_dict() for report in _pack_compatibility
+        },
+        # 2.0-C1 T2 (AT-827 / AC5): packs selected for this run that did NOT execute
+        # because the org has them disabled. Empty for the common case; present so
+        # run health can state the fact rather than leaving a gap unexplained.
+        "excludedPacks": _excluded_packs,
+        # 2.0-C1 T3 (AT-828 / AC5): packs this run executed at a ROLLED-BACK version.
+        # `packVersions` above already reports the version each pack actually ran
+        # (the pin, when pinned), so this names WHICH of them were pinned — the
+        # difference between "the pack is at 1.1.0" and "we deliberately held it at
+        # 1.1.0". Empty for the common case.
+        "pinnedPackVersions": _pinned_pack_versions,
         "startedAt": started_at, "completedAt": datetime.now(timezone.utc).isoformat(),
         "inputs": org_ctx, "opportunities": opportunities,
         "perSystem": _per_system,

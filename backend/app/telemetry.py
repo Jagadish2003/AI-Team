@@ -137,6 +137,83 @@ class PackExecutedPayload(TypedDict, total=False):
     duration_ms: NotRequired[int]
 
 
+class PackActivationRefusedPayload(TypedDict, total=False):
+    """2.0-C1 T1 (AT-826) — a pack activation refused on compatibility grounds.
+
+    Emitted at an activation edge when a pack declares a platform-capability range
+    or required normalised concept this platform does not satisfy. Carries the
+    NAMED unmet requirements so support can see exactly what was unmet without
+    reconstructing it from a registry that may have moved on. No credentials, no
+    PII — pack ids, concept ids, and version strings only.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_ids: NotRequired[list[str]]
+    platform_version: NotRequired[str]
+    unmet: NotRequired[list[dict]]
+    reason: NotRequired[str]
+
+
+class PackExecutionSkippedPayload(TypedDict, total=False):
+    """2.0-C1 T2 (AT-827) — a DISABLED pack was dropped from a run's selection.
+
+    Excluding a disabled pack is normal and expected, but it must never be silent
+    (the same discipline as MSP-B7's suppression/deferral reports): this event is
+    the record that a pack the caller selected did not execute, and why. Pack ids
+    and state strings only — no credentials, no PII.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_ids: NotRequired[list[str]]
+    reason: NotRequired[str]
+    excluded: NotRequired[list[dict]]
+
+
+class PackStateChangedPayload(TypedDict, total=False):
+    """2.0-C1 T2 (AT-827) — a pack was disabled or re-enabled for an org.
+
+    The ``pack_state_history`` table is the domain audit trail; this event places
+    the transition in the telemetry stream so run health and support tooling can
+    correlate "this run skipped cloud_ops" with "cloud_ops was disabled at T".
+    """
+    org_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    transition: NotRequired[str]
+    previous_state: NotRequired[str]
+    state: NotRequired[str]
+    revision: NotRequired[int]
+    actor_id: NotRequired[str]
+    changed_at: NotRequired[str]
+
+
+class PackVersionPinnedPayload(TypedDict, total=False):
+    """2.0-C1 T3 (AT-828) — a run executed a ROLLED-BACK pack version.
+
+    Emitted when activation resolves one or more version pins, so run health and
+    support can see that a run deliberately used a prior version rather than the
+    currently-shipped one. Pack ids and version strings only.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_ids: NotRequired[list[str]]
+    pinned_versions: NotRequired[dict]
+
+
+class PackVersionPinUnservablePayload(TypedDict, total=False):
+    """2.0-C1 T3 (AT-828) — a version pin could not be honoured.
+
+    The pinned version's archived artifact is no longer declared, so the pack ran its
+    CURRENT version instead (stamped consistently with what it executed). Emitted so
+    a stale pin is never silent — an operator must either re-archive the artifact or
+    clear the pin.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    version: NotRequired[str]
+    reason: NotRequired[str]
+
+
 class DetectorFiredPayload(TypedDict, total=False):
     """T1-S14-C — one record per detector that fires in a run."""
     detector_id: NotRequired[str]
@@ -906,6 +983,20 @@ register_event_type("run.signal_snapshot", RunSignalSnapshotPayload)
 # panel consumes this historical snapshot instead of reconstructing an old run
 # from the mutable pack registry.
 register_event_type("run.pack_executed", PackExecutedPayload)
+# 2.0-C1 T1 (AT-826): emitted at an activation edge when an incompatible pack is
+# refused, so a refusal is observable in run health and support tooling rather
+# than existing only as an HTTP 409 the caller saw once.
+register_event_type("pack.activation_refused", PackActivationRefusedPayload)
+# 2.0-C1 T2 (AT-827): the disabled-pack lifecycle. `execution_skipped` is emitted
+# at the activation edges/runner when a disabled pack is dropped from a selection;
+# `state_changed` when an owner disables or re-enables a pack.
+register_event_type("pack.execution_skipped", PackExecutionSkippedPayload)
+register_event_type("pack.state_changed", PackStateChangedPayload)
+# 2.0-C1 T3 (AT-828): version rollback. `version_pinned` records that a run used a
+# prior version deliberately; `version_pin_unservable` records a pin that could not
+# be honoured (its archived artifact is gone) so a stale pin is never silent.
+register_event_type("pack.version_pinned", PackVersionPinnedPayload)
+register_event_type("pack.version_pin_unservable", PackVersionPinUnservablePayload)
 # T3-S11-A Sprint 11
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
 # T3-S12-A T7 Sprint 12

@@ -35,6 +35,7 @@ import type {
   ConnectorHealthResponse,
   ContentHealthResponse,
   HealthPanelId,
+  PackHealthItem,
   PackHealthResponse,
   RunHealthItem,
   RunHealthResponse,
@@ -804,6 +805,42 @@ function ContentPanel({
   );
 }
 
+/**
+ * 2.0-C1 T5 (AT-830): the pack's lifecycle position, as one short phrase.
+ *
+ * Deliberately separates the two orthogonal facts a reader needs:
+ *  - `state`   — is the pack still running at all? (AT-827)
+ *  - `version` — which version produced this run, and was that a rollback? (AT-828)
+ *
+ * "Rolled back" is NOT a state — a pack can be rolled back AND disabled at once, so
+ * the two are shown as separate pills rather than collapsed into one word.
+ */
+export function packLifecycleLabel(pack: PackHealthItem): {
+  stateLabel: string;
+  stateTone: "good" | "warn" | "info" | "neutral";
+  versionLabel: string;
+  versionTone: "warn" | "info";
+  rolledBack: boolean;
+} {
+  const disabled = pack.pack_state === "disabled";
+  // `rolled_back` is authoritative; fall back to the presence of a pin so an older
+  // response that carries only `pinned_version` still reads correctly.
+  const rolledBack = pack.rolled_back === true || Boolean(pack.pinned_version);
+  return {
+    stateLabel: disabled ? "Disabled" : "Active",
+    // Disabled is a deliberate customer choice, not a fault — informational, never
+    // an error tone. It still needs to stand out from Active.
+    stateTone: disabled ? "warn" : "good",
+    versionLabel: pack.pack_version
+      ? rolledBack
+        ? `Rolled back to ${pack.pack_version}`
+        : `Version ${pack.pack_version}`
+      : "Version unavailable",
+    versionTone: pack.pack_version ? "info" : "warn",
+    rolledBack,
+  };
+}
+
 function PacksPanel({
   resource,
   retry,
@@ -813,6 +850,7 @@ function PacksPanel({
   retry: () => void;
   highlighted: boolean;
 }) {
+  const excluded = resource.status === "success" ? resource.data.excluded_packs ?? [] : [];
   const state = resource.status === "success"
     ? resource.data.packs.length === 0
       ? "empty"
@@ -830,7 +868,7 @@ function PacksPanel({
     <PanelFrame
       id="panel-packs"
       title="Packs"
-      description="Confirm which analysis packs and detectors executed, including the exact pack version used."
+      description="Confirm which analysis packs and detectors executed, the exact pack version used, and whether a pack is disabled or rolled back."
       icon={<Boxes className="h-5 w-5" aria-hidden="true" />}
       state={state}
       highlighted={highlighted}
@@ -838,26 +876,74 @@ function PacksPanel({
       {resource.status === "loading" ? <PanelLoading label="Pack health" /> : null}
       {resource.status === "error" ? <PanelError label="Pack health" message={resource.error} onRetry={retry} /> : null}
       {resource.status === "success" && resource.data.packs.length === 0 ? (
-        <EmptyState title="No pack executions yet" detail="Pack versions and detector execution will appear after a discovery run uses them." />
+        excluded.length > 0 ? (
+          // A disabled pack is the REASON there is nothing to show — say so instead
+          // of the generic "no runs yet" message, which would be misleading.
+          <EmptyState
+            title="No pack executed for this run"
+            detail={`Every selected pack is disabled for this organisation: ${excluded
+              .map((item) => item.packId)
+              .join(", ")}. Re-enable a pack to include it in future runs.`}
+          />
+        ) : (
+          <EmptyState title="No pack executions yet" detail="Pack versions and detector execution will appear after a discovery run uses them." />
+        )
       ) : null}
       {resource.status === "success" && resource.data.packs.length > 0 ? (
         <div className="space-y-3">
-          {resource.data.packs.map((pack) => (
-            <article key={`${resource.data.run_id}-${pack.pack_id}`} className="rounded-xl border border-border p-4">
+          {resource.data.packs.map((pack) => {
+            const lifecycle = packLifecycleLabel(pack);
+            return (
+            <article key={`${resource.data.run_id}-${pack.pack_id}`} data-testid={`pack-row-${pack.pack_id}`} className="rounded-xl border border-border p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div><h3 className="font-semibold text-text">{pack.pack_name ?? pack.pack_id}</h3><p className="text-sm text-muted">Run {resource.data.run_id?.slice(0, 8) ?? "Not available"} · Executed {formatDate(pack.executed_at)}</p></div>
-                <StatusPill label={pack.pack_version ? `Version ${pack.pack_version}` : "Version unavailable"} tone={pack.pack_version ? "info" : "warn"} />
+                <div className="flex flex-wrap items-center gap-2">
+                  <span data-testid={`pack-state-${pack.pack_id}`}><StatusPill label={lifecycle.stateLabel} tone={lifecycle.stateTone} /></span>
+                  <span data-testid={`pack-version-${pack.pack_id}`}><StatusPill label={lifecycle.versionLabel} tone={lifecycle.versionTone} /></span>
+                </div>
               </div>
+              {pack.pack_state === "disabled" ? (
+                <p data-testid={`pack-disabled-note-${pack.pack_id}`} className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-300">
+                  This pack is disabled and will not run again. Everything it produced
+                  below is kept exactly as it executed.
+                </p>
+              ) : null}
+              {lifecycle.rolledBack ? (
+                <p data-testid={`pack-rollback-note-${pack.pack_id}`} className="mt-3 rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs leading-relaxed text-blue-300">
+                  This run was pinned to version {pack.pinned_version ?? pack.pack_version} — a deliberate rollback,
+                  not the version currently shipped.
+                </p>
+              ) : null}
               <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
                 <div><dt className="text-muted">Detectors attempted</dt><dd className="text-xl font-semibold text-text">{pack.detector_count}</dd></div>
                 <div><dt className="text-muted">Pack identifier</dt><dd className="text-lg font-semibold text-text">{pack.pack_id}</dd></div>
+                <div><dt className="text-muted">Version executed</dt><dd className="text-lg font-semibold text-text">{pack.pack_version ?? "Not available"}</dd></div>
+                <div><dt className="text-muted">Pack state</dt><dd className="text-lg font-semibold text-text">{lifecycle.stateLabel}</dd></div>
                 {pack.evaluated_count !== null && pack.evaluated_count !== undefined ? <div><dt className="text-muted">Evaluated successfully</dt><dd className="text-xl font-semibold text-text">{pack.evaluated_count}</dd></div> : null}
                 {pack.not_evaluated_count !== null && pack.not_evaluated_count !== undefined ? <div><dt className="text-muted">Not evaluated</dt><dd className="text-xl font-semibold text-text">{pack.not_evaluated_count}</dd></div> : null}
               </dl>
               {pack.detectors && pack.detectors.length > 0 ? <details className="mt-3 text-sm"><summary className="cursor-pointer font-medium text-accent">Detector list</summary><div className="mt-2 flex flex-wrap gap-2">{pack.detectors.map((detector) => <StatusPill key={detector} label={detectorLabel(detector)} tone="neutral" />)}</div></details> : null}
             </article>
-          ))}
+            );
+          })}
         </div>
+      ) : null}
+      {resource.status === "success" && resource.data.packs.length > 0 && excluded.length > 0 ? (
+        <section data-testid="packs-excluded" className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
+          <h3 className="text-sm font-semibold text-amber-300">Selected but not run</h3>
+          <p className="mt-1 text-xs text-amber-300/90">
+            These packs were selected for this run but are disabled for this
+            organisation, so they did not execute. Findings they produced in earlier
+            runs are unaffected.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {excluded.map((item) => (
+              <span key={item.packId} data-testid={`pack-excluded-${item.packId}`}>
+                <StatusPill label={`${item.packId} · disabled`} tone="warn" />
+              </span>
+            ))}
+          </div>
+        </section>
       ) : null}
     </PanelFrame>
   );

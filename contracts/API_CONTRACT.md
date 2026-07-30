@@ -1,6 +1,58 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.15
-Date: 2026-07-27
+Version: v1.16
+Date: 2026-07-30
+
+> v1.16 — 2.0-C1 (Pack Compatibility, Safe Disable & Rollback): documents the pack
+> LIFECYCLE surface. All fields are additive and optional; every pre-v1.16 consumer
+> is unaffected, and each field is absent on responses served before it existed.
+>
+> **New routes** (`app/routes_pack_state.py`):
+> - `GET /api/packs/state` (viewer+) — `{ orgId, packs: PackStateItem[] }`, where
+>   `PackStateItem` is `{ packId, packName, packVersion (string | null),
+>   state ("active" | "disabled"), revision (number), reason (string | null),
+>   updatedBy (string | null), updatedAt (string | null),
+>   pinnedVersion (string | null), effectiveVersion (string | null),
+>   availableVersions (string[]), registered (boolean) }`. `packVersion` is what the
+>   registry currently ships; `effectiveVersion` is what a run started NOW would
+>   execute and stamp; `availableVersions` are the rollback targets (empty ⇒ the pack
+>   cannot be rolled back). `registered: false` marks an ORPHANED row — lifecycle
+>   state for a pack no longer in the registry, retained so its history stays
+>   reachable (AT-829); its version fields are `null`.
+> - `PUT /api/packs/{packId}/state` (**owner**) — body `{ state: "active" |
+>   "disabled", reason?: string }`. Idempotent (target state, not a verb). 404 for an
+>   unknown pack.
+> - `PUT /api/packs/{packId}/version` (**owner**) — body `{ version: string | null,
+>   reason?: string }`; `null` clears the pin. **409** when the version has no
+>   archived artifact, naming the versions that are available.
+> - `GET /api/packs/{packId}/state/history` (analyst+) — `{ orgId, packId,
+>   registered, transitions[] }`, newest-first, each transition
+>   `{ id, revision, transition ("disable" | "enable" | "rollback" | "restore"),
+>   previous_state, resulting_state, previous_version, resulting_version, reason,
+>   actor_id, changed_at }`. Append-only: re-enabling does not erase the disable and
+>   restoring does not erase the rollback. Serves a REMOVED pack's retained history
+>   rather than 404-ing (AT-829); a genuinely unknown id is still 404.
+>
+> **Extended responses:**
+> - `GET /api/runs/{runId}/opportunities` — `OpportunityCandidate` gains
+>   `packState` (`"active" | "disabled"`) and `packStateLabel` (`string`), stamped at
+>   serve time when the producing pack is disabled TODAY. The existing
+>   `packVersion` still reports the version that produced the finding, so provenance
+>   is intact; a finding is never removed or rewritten when its pack is disabled
+>   (AT-827). Applies to every opportunity serve site sharing the display funnel
+>   (list, decision, override, roadmap, executive report, blueprint).
+> - `GET /api/run-health/packs` — each pack row gains `pack_state`
+>   (`"active" | "disabled"`, read LIVE, unlike the immutable execution fields),
+>   `pinned_version` (`string | null`) and `rolled_back` (`boolean`) (AT-828). The
+>   response gains `excluded_packs` (`{ packId, state, reason }[]`) — packs selected
+>   for the run that did not execute because the org has them disabled — and
+>   `pinned_pack_versions` (`Record<string, string>`), the pins THIS run used.
+> - `POST /api/stack-builder/launch` — `LaunchResponse` gains `excludedPacks`
+>   (`{ packId, state, reason }[]`). `packIds` already excludes them, so a caller
+>   ignoring the field still sees the truthful pack set; this names what was dropped.
+> - Both `POST /api/stack-builder/launch` and `POST /api/runs/{runId}/compute` may
+>   now return **409** when a selected pack declares an unmet platform-capability
+>   range (AT-826, the detail names the unmet requirement) or when EVERY selected
+>   pack is disabled (AT-827).
 
 > v1.15 — MSP-B13 (Cloud Connector Onboarding): added the multi-scope cloud
 > connector routes for `aws_events` / `azure_events` (T3 / AT-745 — create with
