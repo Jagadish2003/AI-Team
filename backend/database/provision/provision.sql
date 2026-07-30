@@ -1,16 +1,16 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0031.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0032.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
 -- 03_lazy_runtime_tables.sql. Creates the agentiq role, all tables (incl.
 -- org_licenses, ingestion_checkpoints, opportunity_instances, opportunity_lifecycle
--- (+history), the R18-B1/B2
+-- (+history), opportunity_baselines, the R18-B1/B2
 -- pgvector-backed retrieval_chunks + retrieval_refresh_queue, the MSP-B8
 -- ops_event_staging + ops_event_load_batches, the MSP-B5 runbook_matches /
 -- runbook_match_decision_history / runbook_match_feedback, and the R-1.9.1-L3
 -- vendor-side license_registry + append-only issuance_audit),
 -- indexes/constraints/rules, seeds the connector catalog, grants the app login
--- role(s) privileges on the schema, and stamps alembic_version to head 0031.
+-- role(s) privileges on the schema, and stamps alembic_version to head 0032.
 --
 -- BEFORE RUNNING ON PRODUCTION — two values in this file are dev defaults and
 -- MUST be set for the target environment. Both are marked "TODO(deploy)" below:
@@ -484,6 +484,38 @@ CREATE TABLE "public"."opportunity_lifecycle_history" (
     "transitioned_at" timestamp with time zone NOT NULL,
     CONSTRAINT "opportunity_lifecycle_history_pkey" PRIMARY KEY ("id"),
     CONSTRAINT "opportunity_lifecycle_history_rev_key" UNIQUE ("org_id", "opportunity_identity", "revision")
+);
+
+
+--
+-- Name: opportunity_baselines; Type: TABLE; Schema: public; Owner: -
+--
+-- SOURCE OF TRUTH: database/models/opportunity_baselines.py
+-- (ALL_OPPORTUNITY_BASELINES_DDL), applied by migration 0032 and the runtime
+-- ensure_opportunity_baseline_table() helper. Keep in sync with it.
+--
+-- 2.0-A2 T2: the IMMUTABLE measurement basis a finding is born with. Write-once
+-- by primary key; the store issues no UPDATE or DELETE. In production also apply:
+--     REVOKE UPDATE, DELETE ON opportunity_baselines FROM app_user;
+--     GRANT INSERT, SELECT ON opportunity_baselines TO app_user;
+--
+
+CREATE TABLE "public"."opportunity_baselines" (
+    "org_id" character varying(64) NOT NULL,
+    "opportunity_identity" character varying(64) NOT NULL,
+    "run_id" character varying(64) NOT NULL,
+    "detector_id" character varying(128) NOT NULL,
+    "pack_id" character varying(64),
+    "pack_version" character varying(32),
+    "opportunity_ref" character varying(64),
+    "window_days" integer,
+    "window_started_at" timestamp with time zone,
+    "window_ended_at" timestamp with time zone,
+    "window_derivation" character varying(64) NOT NULL,
+    "schema_version" character varying(16) NOT NULL,
+    "artifact" "text" NOT NULL,
+    "captured_at" timestamp with time zone NOT NULL,
+    CONSTRAINT "opportunity_baselines_pkey" PRIMARY KEY ("org_id", "opportunity_identity")
 );
 
 
@@ -1493,7 +1525,11 @@ CREATE INDEX "idx_opp_lifecycle_org_state" ON "public"."opportunity_lifecycle" U
 
 CREATE INDEX "idx_opp_lifecycle_history_org_identity" ON "public"."opportunity_lifecycle_history" USING "btree" ("org_id", "opportunity_identity", "revision" DESC);
 
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0031') ON CONFLICT DO NOTHING;
+CREATE INDEX "idx_opp_baselines_org_run" ON "public"."opportunity_baselines" USING "btree" ("org_id", "run_id");
+
+CREATE INDEX "idx_opp_baselines_org_detector" ON "public"."opportunity_baselines" USING "btree" ("org_id", "detector_id");
+
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0032') ON CONFLICT DO NOTHING;
 
 
 --

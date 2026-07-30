@@ -788,6 +788,35 @@ def run_trackb_and_persist(
         except Exception as e:
             logger.warning("T7 temporal enrichment failed (non-blocking): %s", e)
 
+        # 2.0-A2 T2: freeze the measurement basis for every finding this run
+        # CREATED. Runs after temporal enrichment so the captured values include
+        # the baseline statistics as they stood at capture, and after identity
+        # stamping so the artifact can be keyed on the stable identity.
+        #
+        # Write-once: a finding that already has a baseline is left exactly as it
+        # was, so a re-run — or a replay of this run — never restates what the
+        # finding was born with. Non-blocking, like every other Stage-2 writer.
+        try:
+            from .opportunity_baseline import (
+                capture_baselines_for_run,
+                ensure_opportunity_baseline_table,
+            )
+
+            ensure_opportunity_baseline_table()
+            _baseline_counts = capture_baselines_for_run(
+                opps, org_id=run_org_id, run_id=run_id
+            )
+            logger.info(
+                "Baseline capture for run %s: %d created, %d already frozen, %d skipped",
+                run_id,
+                _baseline_counts["created"],
+                _baseline_counts["existing"],
+                _baseline_counts["skipped"],
+            )
+        except Exception as e:  # noqa: BLE001
+            errors["opportunity_baseline"] = str(e)
+            logger.warning("Baseline capture failed (non-blocking): %s", e)
+
         # 2.0-A1 — intervention projection (non-blocking). See the helper
         # docstring: runs after temporal enrichment, stamps provenance, and
         # stores the projection with the opportunity (AC6). The roadmap is then
