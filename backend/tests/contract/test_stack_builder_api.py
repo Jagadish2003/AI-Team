@@ -4,7 +4,7 @@ Contract tests for Stack Builder API endpoints
 
 Tests:
   Industry registry endpoints:
-    GET /api/stack-builder/industries                         — 8 industries returned
+    GET /api/stack-builder/industries                         — 9 industries returned
     GET /api/stack-builder/industries/{id}/system-defaults    — calibrated defaults
     GET /api/stack-builder/industries/{id}/recommendations    — filtered recs
     GET /api/stack-builder/industries/unknown/system-defaults — 404
@@ -21,7 +21,7 @@ Tests:
     get_system_defaults — unknown industry
     get_recommended_systems — excludes selected, max 3
     get_pack_hints — correct pack ordering
-    list_industries — 8 industries, correct labels
+    list_industries — 9 industries, correct labels
 """
 from __future__ import annotations
 
@@ -61,14 +61,15 @@ def _auth() -> Dict[str, str]:
 
 class TestIndustryRegistry:
 
-    def test_list_industries_returns_all_eight(self):
+    def test_list_industries_returns_all_nine(self):
+        # 2.0-D2 T4 added the "insurance" industry (nine total).
         industries = list_industries()
-        assert len(industries) == 8
+        assert len(industries) == 9
         ids = {i.industry_id for i in industries}
         assert ids == {
             "financial_services", "public_sector", "logistics_supply_chain",
             "retail_commerce", "healthcare", "energy_utilities",
-            "manufacturing", "technology",
+            "manufacturing", "technology", "insurance",
         }
 
     def test_get_industry_known(self):
@@ -252,10 +253,12 @@ class TestIndustriesEndpoint:
         resp = client.get("/api/stack-builder/industries", headers=_auth())
         assert resp.status_code == 200
 
-    def test_list_industries_returns_eight(self, client):
+    def test_list_industries_returns_nine(self, client):
+        # 2.0-D2 T4 added the "insurance" industry (nine total).
         resp = client.get("/api/stack-builder/industries", headers=_auth())
         data = resp.json()
-        assert len(data) == 8
+        assert len(data) == 9
+        assert "insurance" in {row["industry_id"] for row in data}
 
     def test_list_industries_shape(self, client):
         resp = client.get("/api/stack-builder/industries", headers=_auth())
