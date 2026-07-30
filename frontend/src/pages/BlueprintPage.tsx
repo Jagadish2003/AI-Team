@@ -34,6 +34,13 @@ import {
 } from '../utils/blueprintNaming';
 import { useResource } from '../lib/dataCache';
 import { cacheKeys } from '../lib/cacheKeys';
+import {
+  ProjectionAssumptionList,
+  projectionAssumptions,
+} from '../components/projection/ProjectionAssumptionLedger';
+import { ProjectionBandCompact } from '../components/projection/ProjectionBand';
+import { ProjectionRecommendationCompact } from '../components/projection/ProjectionRecommendation';
+import { ProjectionBasisCompact } from '../components/projection/ProjectionBasis';
 
 function TierBadge({ tier }: { tier?: string }) {
   const t = tier ?? 'Unknown';
@@ -340,6 +347,8 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
   const actions = blueprint.suggestedActions ?? [];
   const guardrails = blueprint.guardrails ?? [];
   const permissions = blueprint.agentforcePermissions ?? [];
+  const projection = blueprint.projection ?? null;
+  const assumptions = projectionAssumptions(projection);
   const complexity = blueprint.complexity ?? {
     label: 'Assessment unavailable',
     description: 'Implementation complexity will be assessed during design.',
@@ -364,7 +373,28 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
               ? blueprint.agentTopic
               : 'Agent purpose not available for this opportunity.'}
           </p>
+          {/* 2.0-A1 T5: the intervention statement — what the agent handles and
+              what still needs a person — sits with the purpose, so the purpose
+              is never read as a promised outcome. */}
+          <div className="mt-3">
+            <ProjectionRecommendationCompact projection={projection} />
+          </div>
         </SectionBlock>
+
+        {/* 2.0-A1 T4 — the projection band, its evidence label, and its
+            strength (with the capped caveat where one applies). Placed above
+            the assumptions so the band is never read without them nearby. */}
+        {projection?.magnitudeBand && (
+          <SectionBlock icon={<BarChart2 size={16} />} title="Projection Band">
+            <ProjectionBandCompact projection={projection} />
+          </SectionBlock>
+        )}
+
+        {assumptions.length > 0 && (
+          <SectionBlock icon={<ListChecks size={16} />} title="Projection Assumptions">
+            <ProjectionAssumptionList projection={projection} />
+          </SectionBlock>
+        )}
 
         <SectionBlock icon={<Zap size={16} />} title="Suggested Agent Actions">
           {actions.length > 0 ? (
@@ -426,6 +456,12 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
             <p className="text-sm text-muted">Permissions assessment is not yet available for this opportunity.</p>
           )}
         </SectionBlock>
+
+        {projection?.basis && (
+          <SectionBlock icon={<BarChart2 size={16} />} title="Projection Basis">
+            <ProjectionBasisCompact projection={projection} showTitle={false} />
+          </SectionBlock>
+        )}
 
         <SectionBlock icon={<BarChart2 size={16} />} title="Implementation Complexity">
           <div className="text-sm font-semibold text-text">{complexity.label}</div>

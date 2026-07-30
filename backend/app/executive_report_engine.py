@@ -7,10 +7,22 @@ T6 creates it so the import succeeds and the fallback block is never hit.
 
 The executive report shape matches what the frontend ExecutiveReportPage
 expects — confirmed from frontend/src/pages/ExecutiveReportPage.tsx.
+2.0-A1 T5: the report is a projection surface, so everything it emits passes the
+projection vocabulary guard. The executive summary and every quick-win narrative
+field are scrubbed of point-estimate savings claims and guarantee language before
+they leave this module — AC3 covers "API, UI, report, or export", and this is the
+report.
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+
+
+from .projection_copy_guard import (  # noqa: F401  (re-exported)
+    scrub_executive_summary,
+    scrub_opportunity_narrative as _scrub_opportunity_narrative,
+    scrub_opportunity_narratives,
+)
 
 
 def build_executive_report(
@@ -22,6 +34,8 @@ def build_executive_report(
     """
     Build executive report from run-scoped data.
     """
+
+    opps = [_scrub_opportunity_narrative(o) for o in opps]
 
     quick_wins  = [o for o in opps if o.get("tier") == "Quick Win"]
     strategic   = [o for o in opps if o.get("tier") == "Strategic"]

@@ -137,6 +137,39 @@ def uniq_permissions_merge(perms: List[Any]) -> List[PermissionItem]:
         out.append(p_obj)
     return out
 
+def _apply_projection_strength_rule(
+    stage_opps: List[OpportunityCandidate],
+) -> List[OpportunityCandidate]:
+    """2.0-A1 AC4 — projection strength, used carefully, inside one stage.
+
+    "Carefully" is the whole point of this function. Projection strength does
+    NOT re-rank the roadmap: stage membership stays tier-driven and approved
+    items stay ahead of unreviewed ones, because those orderings encode analyst
+    decisions that a projection has no business overturning.
+
+    The one rule applied here is AC4's: a finding whose confidence is capped for
+    want of corroboration never presents above a corroborated equivalent. Capped
+    findings sink below uncapped ones within their stage; everything else keeps
+    its incoming relative order (the sort is stable), so this narrows the
+    existing ranking rather than replacing it.
+
+    Deterministic and non-blocking: an opportunity with no projection is treated
+    as uncapped and keeps its place, and a malformed projection can never raise
+    here — the roadmap must build regardless.
+    """
+    try:
+        from discovery.projection import demote_capped_projections
+    except Exception:  # noqa: BLE001 - a roadmap must build without projections
+        return list(stage_opps)
+
+    try:
+        return demote_capped_projections(
+            stage_opps, lambda opp: (opp or {}).get("projection")
+        )
+    except Exception:  # noqa: BLE001 - ordering is advisory, never fatal
+        return list(stage_opps)
+
+
 def build_roadmap(opps: List[OpportunityCandidate]) -> PilotRoadmapModel:
     # Selection rules (match the TypeScript intent):
     # - Always include APPROVED items (they represent explicit analyst decisions)
@@ -158,9 +191,9 @@ def build_roadmap(opps: List[OpportunityCandidate]) -> PilotRoadmapModel:
     # No stage caps: every opportunity appears in its tier's stage
     # (Quick Win -> Phase 1, Strategic -> Phase 2, Complex -> Phase 3).
     # Approved items still take priority ordering ahead of unreviewed ones.
-    stage30_opps = approved_qw + unreviewed_qw
-    stage60_opps = approved_strat + unreviewed_strat
-    stage90_opps = approved_complex + unreviewed_complex
+    stage30_opps = _apply_projection_strength_rule(approved_qw + unreviewed_qw)
+    stage60_opps = _apply_projection_strength_rule(approved_strat + unreviewed_strat)
+    stage90_opps = _apply_projection_strength_rule(approved_complex + unreviewed_complex)
 
     # If any APPROVED items are missing a tier, do NOT drop them silently.
     # For now, place them in the earliest stage so they remain visible to users.

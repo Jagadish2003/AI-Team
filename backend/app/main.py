@@ -768,7 +768,17 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
     # with_display(), so a bubble keeps its coordinates when its decision changes.
     # R18-C1 T4: then adapt the finding WORDING to the run's active template
     # (lending language for Commercial Lending). No-op when no template is active.
-    return apply_run_terminology([with_display(opp) for opp in opps], run_id)
+    # 2.0-A1 T5 / AC3 — "no projection output — API, UI, report, or export".
+    # This IS the API output the Opportunity Review renders, so the projection
+    # vocabulary guard runs on the way out, uniformly with the executive report.
+    # Applied AFTER terminology (dev's per-pack apply_run_terminology) so a
+    # template's own wording is covered too, and on copies — the stored
+    # opportunity is never rewritten.
+    from .projection_copy_guard import scrub_opportunity_narratives
+
+    return scrub_opportunity_narratives(
+        apply_run_terminology([with_display(opp) for opp in opps], run_id)
+    )
 
 
 @app.post(
@@ -954,6 +964,14 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
         )
 
     opps = with_display_titles(opps)
+
+    # 2.0-A1 T5 / AC3 — this route composes the executive report from stored
+    # opps directly rather than through build_executive_report, so the
+    # projection vocabulary guard has to run here too. Scrubbing returns copies;
+    # the stored opportunity a run persisted is never rewritten.
+    from .projection_copy_guard import scrub_opportunity_narratives
+
+    opps = scrub_opportunity_narratives(opps)
     quick_wins = [o for o in opps if o.get("tier") == "Quick Win"]
 
     return apply_run_terminology(
