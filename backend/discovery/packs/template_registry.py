@@ -484,14 +484,26 @@ TEMPLATE_REGISTRY: Dict[str, TemplateDefinition] = {
                 "underwriting_review",
                 "policy_servicing",
             ],
-            # D2 AC4: recorded, not implemented.
+            # D2 AC4: recorded, not implemented. 2.0-D2 T5 turned this note into
+            # a full future-story record — see future_scope_ref below.
             "future_scope": (
                 "Insurance-specific detectors (claim leakage, subrogation recovery "
                 "delay, reserve adjustment churn, fraud-triage effort) are NOT "
                 "covered by the Service Cloud pack and are deliberately out of "
                 "scope for 2.0-D2. They require a separate future insurance pack "
-                "story on the FSC pattern; D2 ships configuration only."
+                "story on the FSC pattern; D2 ships configuration only. The full "
+                "gap assessment (which patterns the shipped detectors DO cover) and "
+                "the per-gap future-pack record — coverage-determination loops, "
+                "reserve-change approvals, subrogation recovery handoffs, "
+                "underwriting-referral semantics, claims leakage indicators and "
+                "policy-renewal exceptions — live in the T5 record referenced by "
+                "future_scope_ref (future story D2-FS1)."
             ),
+            # 2.0-D2 T5: the future-story record for the domain-specific detector
+            # gaps. A config-only link — no detector, pack, scorer or ingest is
+            # added by D2; the doc records them as future scope (story D2-FS1).
+            "future_scope_ref": "docs/2.0-D2_INSURANCE_FUTURE_SCOPE.md",
+            "future_story": "D2-FS1",
             # 2.0-D2 T3: "any inability to represent Insurance priorities using
             # existing focuses must be reported separately" — this is that report.
             "focus_limitation": (
