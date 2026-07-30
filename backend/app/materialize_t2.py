@@ -817,6 +817,30 @@ def run_trackb_and_persist(
             errors["opportunity_baseline"] = str(e)
             logger.warning("Baseline capture failed (non-blocking): %s", e)
 
+        # 2.0-A2 T3: post-action monitoring. For every opportunity a human marked
+        # actioned, re-measure the same signals this baseline froze and store the
+        # comparison. Runs AFTER baseline capture so a finding created by this run
+        # has its basis before anything tries to compare against it.
+        #
+        # No outcome without action: an opportunity that is not actioned, has no
+        # frozen baseline, or has no run after its action date produces NO record
+        # — never a zero-delta one. Non-blocking.
+        try:
+            from .opportunity_movement import measure_movements_for_run
+
+            _movement = measure_movements_for_run(run_org_id, run_id)
+            logger.info(
+                "Movement measurement for run %s: %d measured, %d skipped (%s), %d failed",
+                run_id,
+                _movement["measured"],
+                _movement["skipped"],
+                _movement["skipReasons"] or "no skips",
+                _movement["failed"],
+            )
+        except Exception as e:  # noqa: BLE001
+            errors["opportunity_movement"] = str(e)
+            logger.warning("Movement measurement failed (non-blocking): %s", e)
+
         # 2.0-A1 — intervention projection (non-blocking). See the helper
         # docstring: runs after temporal enrichment, stamps provenance, and
         # stores the projection with the opportunity (AC6). The roadmap is then

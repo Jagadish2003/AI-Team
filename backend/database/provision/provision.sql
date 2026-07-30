@@ -1,16 +1,17 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0032.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0033.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
 -- 03_lazy_runtime_tables.sql. Creates the agentiq role, all tables (incl.
 -- org_licenses, ingestion_checkpoints, opportunity_instances, opportunity_lifecycle
--- (+history), opportunity_baselines, the R18-B1/B2
+-- (+history), opportunity_baselines, opportunity_movements,
+-- the R18-B1/B2
 -- pgvector-backed retrieval_chunks + retrieval_refresh_queue, the MSP-B8
 -- ops_event_staging + ops_event_load_batches, the MSP-B5 runbook_matches /
 -- runbook_match_decision_history / runbook_match_feedback, and the R-1.9.1-L3
 -- vendor-side license_registry + append-only issuance_audit),
 -- indexes/constraints/rules, seeds the connector catalog, grants the app login
--- role(s) privileges on the schema, and stamps alembic_version to head 0032.
+-- role(s) privileges on the schema, and stamps alembic_version to head 0033.
 --
 -- BEFORE RUNNING ON PRODUCTION — two values in this file are dev defaults and
 -- MUST be set for the target environment. Both are marked "TODO(deploy)" below:
@@ -516,6 +517,42 @@ CREATE TABLE "public"."opportunity_baselines" (
     "artifact" "text" NOT NULL,
     "captured_at" timestamp with time zone NOT NULL,
     CONSTRAINT "opportunity_baselines_pkey" PRIMARY KEY ("org_id", "opportunity_identity")
+);
+
+
+--
+-- Name: opportunity_movements; Type: TABLE; Schema: public; Owner: -
+--
+-- SOURCE OF TRUTH: database/models/opportunity_movements.py
+-- (ALL_OPPORTUNITY_MOVEMENTS_DDL), applied by migration 0033 and the runtime
+-- ensure_opportunity_movement_table() helper. Keep in sync with it.
+--
+-- 2.0-A2 T3: one stored movement record per (identity, comparison run) - a
+-- STORED artifact, not a computed-at-read view, so a later pack change cannot
+-- retroactively alter a measurement that was already reported. Both run ids are
+-- real columns (AC7); comparability_verdict is NOT NULL by contract.
+--
+
+CREATE TABLE "public"."opportunity_movements" (
+    "org_id" character varying(64) NOT NULL,
+    "opportunity_identity" character varying(64) NOT NULL,
+    "current_run_id" character varying(64) NOT NULL,
+    "baseline_run_id" character varying(64) NOT NULL,
+    "detector_id" character varying(128) NOT NULL,
+    "action_date" "date" NOT NULL,
+    "comparability_verdict" character varying(24) NOT NULL,
+    "baseline_pack_version" character varying(32),
+    "current_pack_version" character varying(32),
+    "primary_signal" character varying(128),
+    "primary_baseline_value" double precision,
+    "primary_current_value" double precision,
+    "primary_delta" double precision,
+    "primary_direction" character varying(16),
+    "record" "text" NOT NULL,
+    "measured_at" timestamp with time zone NOT NULL,
+    "created_at" timestamp with time zone NOT NULL,
+    "updated_at" timestamp with time zone NOT NULL,
+    CONSTRAINT "opportunity_movements_pkey" PRIMARY KEY ("org_id", "opportunity_identity", "current_run_id")
 );
 
 
@@ -1529,7 +1566,13 @@ CREATE INDEX "idx_opp_baselines_org_run" ON "public"."opportunity_baselines" USI
 
 CREATE INDEX "idx_opp_baselines_org_detector" ON "public"."opportunity_baselines" USING "btree" ("org_id", "detector_id");
 
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0032') ON CONFLICT DO NOTHING;
+CREATE INDEX "idx_opp_movements_org_identity" ON "public"."opportunity_movements" USING "btree" ("org_id", "opportunity_identity", "measured_at" DESC);
+
+CREATE INDEX "idx_opp_movements_org_run" ON "public"."opportunity_movements" USING "btree" ("org_id", "current_run_id");
+
+CREATE INDEX "idx_opp_movements_org_verdict" ON "public"."opportunity_movements" USING "btree" ("org_id", "comparability_verdict");
+
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0033') ON CONFLICT DO NOTHING;
 
 
 --
