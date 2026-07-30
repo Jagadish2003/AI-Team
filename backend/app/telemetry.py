@@ -820,6 +820,35 @@ class BillingRunCompletedPayload(TypedDict, total=False):
     completed_at: NotRequired[Optional[str]]
 
 
+class OpportunityLifecycleTransitionPayload(TypedDict, total=False):
+    """opportunity.lifecycle_transitioned — 2.0-A2 / T1.
+
+    One event per lifecycle transition of an opportunity IDENTITY (not a run):
+    ``open -> actioned -> monitoring -> measured``, plus ``dismissed`` and
+    ``stalled``. Registered here BEFORE any emission call site exists, because
+    ``record_event()`` raises ``ValueError`` for an unregistered ``event_type`` —
+    so registering after the first emitter would fail at the first transition.
+
+    ``actor`` distinguishes ``human`` from ``system``: the platform never infers
+    that a change was deployed, so a ``to_state`` of ``actioned`` always carries
+    ``actor='human'`` and a non-null ``action_date``.
+
+    Carries no free-form narrative and no evidence values — an identity, a state
+    pair, and the actor kind. No PII beyond the actor id the audit log already
+    records.
+    """
+
+    org_id: str
+    opportunity_identity: str
+    from_state: str
+    to_state: str
+    actor: NotRequired[str]
+    #: ISO date. Present only on a transition that records an action.
+    action_date: NotRequired[Optional[str]]
+    revision: NotRequired[int]
+    run_id: NotRequired[Optional[str]]
+
+
 class BillingSystemLedgerPayload(TypedDict, total=False):
     """billing.system_connected / billing.system_disconnected — R-1.9.1-L2 / T2 (AC2).
 
@@ -1005,6 +1034,11 @@ register_event_type("billing.run_completed", BillingRunCompletedPayload)
 # unregistered type, so registration must precede the first emission.
 register_event_type("billing.system_connected", BillingSystemLedgerPayload)
 register_event_type("billing.system_disconnected", BillingSystemLedgerPayload)
+# 2.0-A2 T1 — opportunity lifecycle transitions. Registered before the first
+# emission site exists: record_event() raises for an unregistered event_type.
+register_event_type(
+    "opportunity.lifecycle_transitioned", OpportunityLifecycleTransitionPayload
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1189,6 +1223,7 @@ __all__ = [
     "REGISTERED_EVENT_TYPES",       # AT-211 alias: set-like view of registered names
     "RunCompletedEvent",
     "RunSignalSnapshotEvent",
+    "OpportunityLifecycleTransitionPayload",  # 2.0-A2 / T1
     "RunSignalSnapshotPayload",
     "RunStartedEvent",
     "TELEMETRY_EVENT_REGISTRY",
