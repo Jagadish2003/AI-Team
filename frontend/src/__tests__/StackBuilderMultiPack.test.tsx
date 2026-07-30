@@ -63,13 +63,41 @@ describe('resolvePackIds — Salesforce packs ∪ analysis packs', () => {
   });
 
   it('de-duplicates when several declared products map to the same pack', () => {
+    // salesforce_rc has no domain pack and deliberately runs generic Service Cloud
+    // detection, so declaring it alongside salesforce_sc must collapse to one pack.
+    // (This previously used salesforce_fsc; 2.0-D1 gave FSC its own pack, so it is
+    // no longer a duplicate of service_cloud — see the test below.)
     const ids = resolvePackIds(
       stateWith(),
-      catalogWithSalesforceProducts(['salesforce_sc', 'salesforce_fsc', 'salesforce_ncino']),
+      catalogWithSalesforceProducts(['salesforce_sc', 'salesforce_rc', 'salesforce_ncino']),
       INDUSTRIES,
       [],
     );
     expect(ids).toEqual(['service_cloud', 'ncino']);
+  });
+
+  it('activates the FSC pack when Financial Services Cloud is declared', () => {
+    // 2.0-D1 T5: FSC ships its own ingest, detectors and scorer, so declaring it
+    // must activate financial_services_cloud rather than falling back to generic
+    // Service Cloud detection. Must agree with the backend declaration in
+    // app/salesforce_product_packs.py.
+    const ids = resolvePackIds(
+      stateWith(),
+      catalogWithSalesforceProducts(['salesforce_fsc']),
+      INDUSTRIES,
+      [],
+    );
+    expect(ids).toEqual(['financial_services_cloud']);
+  });
+
+  it('keeps FSC and Service Cloud separate when both are declared', () => {
+    const ids = resolvePackIds(
+      stateWith(),
+      catalogWithSalesforceProducts(['salesforce_sc', 'salesforce_fsc']),
+      INDUSTRIES,
+      [],
+    );
+    expect(ids).toEqual(['service_cloud', 'financial_services_cloud']);
   });
 
   it('includes the chosen analysis packs (state.packIds)', () => {

@@ -83,6 +83,92 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         ),
     },
 
+    # 2.0-D1 T1 — Financial Services Cloud pack registration.
+    #
+    # Registered on the EXISTING pack framework: identity, versioning, and
+    # terminology, following the shape every shipped pack already uses. The
+    # closest analogue is the "ncino" entry directly above — same underlying
+    # Salesforce connector, same BFSI domain family, same compliance posture —
+    # so this entry is a copy of that shape, not of "service_cloud".
+    #
+    # 2.0-D1 T2 populated `detectors` with the five FSC detectors — 80% reuse, as
+    # the story intended: four are existing detector shapes recomposed for FSC
+    # (repetition -> servicing recurrence, handoff_friction -> referral friction,
+    # approval_delay+approval_bottleneck -> approval/review cycle,
+    # cross_system_echo -> cross-object rework) and only service-queue ageing is
+    # new, itself modelled on cloud_ops_queue_ageing's per-queue-own-baseline rule.
+    # Each module documents which detector it was composed from and what did not
+    # transfer.
+    #
+    # This pack is deliberately NOT yet listed in any industry's `pack_hints`
+    # (industry_registry.py) nor bound to a Stack Builder template — that is the
+    # story's registry-honesty rule (the FSC entry appears on a selectable
+    # surface only when the pack actually ships) and is T4's scope.
+    "financial_services_cloud": {
+        "packId":        "financial_services_cloud",
+        # R16-B1 §4: stamped onto every opportunity this pack produces. Bumping
+        # this is a LIVE obligation, not a one-time field — bump it in the same PR
+        # as ANY change to this pack's detectors, scorer, or corroboration rules.
+        # 2.0-A2 outcome tracking reads this version to flag a measurement taken
+        # across a pack-version boundary as a confounder, so a version that never
+        # moves silently breaks that story. A pinned fingerprint in
+        # test_financial_services_cloud_pack_registration.py fails the build if the
+        # pack surface changes without an intentional bump.
+        #
+        # 1.0.0 -> 1.1.0 by T2: the five detectors + their externalised thresholds
+        # are a behaviour change, and this is the intentional bump that guard
+        # exists to force. 1.1.0 -> 1.2.0 by T3: the FSC scorer calibration
+        # (financial_services_cloud_scorer.py's _FSC_SCORES + the three config
+        # dimension weights) changes how findings are scored and ranked, which is
+        # a pack-logic change by the same rule. Keep this in lockstep with
+        # packVersion in financial_services_cloud_pack_config.json (a test pins
+        # the two together).
+        "packVersion":   "1.2.0",
+        "packName":      "Financial Services Cloud",
+        "domain":        "financial_services_cloud",
+        "pack_domain":   "financial_services_cloud",
+        "detectors": [
+            "discovery.detectors.fsc_servicing_request_recurrence",
+            "discovery.detectors.fsc_referral_handoff_friction",
+            "discovery.detectors.fsc_approval_review_cycle",
+            "discovery.detectors.fsc_service_queue_ageing",
+            "discovery.detectors.fsc_cross_object_rework",
+        ],
+        # T2: firing thresholds, the AC5 aggregation floor, and terminology load
+        # from this external file (via financial_services_cloud_config.py) rather
+        # than from inline detector constants, so replacing a PROVISIONAL number
+        # is a config edit. T3 filled `calibration` with the three dimension
+        # weights the FSC scorer ranks by (the per-detector base scores live in
+        # financial_services_cloud_scorer.py's _FSC_SCORES, with inline provenance).
+        "config_path":   str(_PACKS_DIR / "financial_services_cloud_pack_config.json"),
+        # Terminology is DATA, not code: every user-visible FSC string
+        # (households, relationship groups, financial accounts, service
+        # processes, referrals) resolves through this label file, so the pack
+        # code stays terminology-neutral.
+        "ui_labels_path": str(_PACKS_DIR / "financial_services_cloud_ui_labels.json"),
+        "llm_context": (
+            "Salesforce Financial Services Cloud (FSC) client-servicing analysis "
+            "for retail banking and wealth management. "
+            "Speak FSC language: households, relationship groups, financial "
+            "accounts, service processes, referrals, action plans, and client "
+            "interactions. "
+            "Focus on servicing-request recurrence, referral and handoff friction "
+            "between teams, approval and review cycle time, ageing in service "
+            "queues, and cross-object rework across household, financial account, "
+            "and service process records. "
+            "Use banking and wealth-servicing operations language — not "
+            "Salesforce admin language. "
+            "Reference households, relationship groups, teams, queues, and "
+            "service processes only — never an individual client, adviser, or "
+            "banker. "
+            "Regulatory compliance (FCA, SEC, OCC) is the highest-weight signal "
+            "category; approval audit trails and review documentation are "
+            "priority friction patterns. "
+            "IMPORTANT: never suggest automated credit or compliance decisions. "
+            "All credit, suitability, and compliance decisions require human "
+            "approval."
+        ),
+    },
 
     "strs_benefits": {
         "packId":        "strs_benefits",
@@ -432,6 +518,15 @@ def is_ncino_pack(pack_id: Optional[str] = None) -> bool:
     Returns True when the active pack is nCino domain.
     """
     return get_pack(pack_id)["domain"] == "ncino"
+
+
+def is_financial_services_cloud_pack(pack_id: Optional[str] = None) -> bool:
+    """Return True when the active pack is the Financial Services Cloud pack (2.0-D1).
+
+    Used in runner.py and scorer for pack routing.  Follows the identical
+    pattern as is_ncino_pack() and is_security_ops_pack().
+    """
+    return get_pack(pack_id)["domain"] == "financial_services_cloud"
 
 
 def is_sqlserver_opsignal_pack(pack_id: Optional[str] = None) -> bool:

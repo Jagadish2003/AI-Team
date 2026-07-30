@@ -1,0 +1,59 @@
+{
+  "_meta": {
+    "story": "2.0-D1 T1",
+    "description": "Financial Services Cloud opportunity labels — household, relationship-group, financial-account, service-process and referral language for the FSC pack.",
+    "status": "DRAFT - PENDING SME REVIEW",
+    "blocks": "2.0-D1 T2 (detector set), 2.0-D1 T4 (template instance)",
+    "note": "Values below are ENGINEERING-DRAFTED PLACEHOLDERS. They have NOT been reviewed by a Financial Services Cloud SME. Replace each value with SME-approved copy and flip status to 'SME APPROVED' before this pack's findings reach a customer-facing executive report — the alternative is unapproved wording arriving in front of an executive with no signal that it was never signed off. Keyed by planned DETECTOR_ID; the modules land in T2.",
+    "aggregation_floor": "Every string in this file speaks about households, relationship groups, teams, queues and service processes. No label may name an individual client, adviser, or banker."
+  },
+  "_terminology": {
+    "household": "The FSC Account record grouping a client family and its members — the unit FSC servicing work is aggregated to. Never an individual client.",
+    "relationship_group": "An FSC Relationship Group linking related households, members, and their roles — the breadth dimension for servicing friction.",
+    "financial_account": "An FSC Financial Account (deposit, card, loan, investment) held by a household, with its Financial Account Roles.",
+    "service_process": "The FSC Service Process / Action Plan record type that carries a servicing request through intake, review, approval, and fulfilment stages.",
+    "referral": "An FSC Referral routed between banking, lending, and wealth teams — the cross-team handoff surface.",
+    "service_queue": "The team-owned queue a service process or referral waits in between stages.",
+    "review_cycle": "A compliance, suitability, or supervisory review step on a service process — always a human decision."
+  },
+  "FSC_SERVICING_REQUEST_RECURRENCE": {
+    "s6_title":    "Cut repeat servicing requests across household service processes",
+    "s6_desc":     "The same servicing request recurs on a household's financial accounts, so service teams re-handle work an unresolved root cause keeps regenerating.",
+    "s7_category": "Client Servicing",
+    "s9_roadmap":  "30-day pilot: monitor recurring service processes for the highest-volume household and financial-account combinations. Measure: reduction in repeat servicing requests per household and in service-team re-handling effort.",
+    "s10_exec":    "Servicing requests that keep coming back are paid for twice — once per recurrence. Concentrating them by household and financial account shows where fixing the cause removes the repeat work.",
+    "compliance_guardrail": null
+  },
+  "FSC_REFERRAL_HANDOFF_FRICTION": {
+    "s6_title":    "Remove referral handoff friction between banking, lending and wealth teams",
+    "s6_desc":     "Referrals bounce between teams or stall between owners, extending time-to-first-contact and leaving relationship-group opportunities unworked.",
+    "s7_category": "Referral Management",
+    "s9_roadmap":  "30-day pilot: track referral handoffs across banking, lending and wealth queues. Measure: reduction in reassignments per referral and in time-to-first-contact. Qualification stays with the receiving team.",
+    "s10_exec":    "Referrals crossing team boundaries lose days at each handoff. Reducing reassignment cycles converts existing relationship-group demand without new lead volume.",
+    "compliance_guardrail": "Agent surfaces referral friction to the receiving team only. No automated referral qualification, product recommendation, or suitability assessment. Human review required."
+  },
+  "FSC_APPROVAL_REVIEW_CYCLE": {
+    "s6_title":    "Compress approval and review cycles on household service processes",
+    "s6_desc":     "Service processes wait in approval and compliance-review stages far longer than they are worked, extending fulfilment for the household.",
+    "s7_category": "Approvals and Reviews",
+    "s9_roadmap":  "30-day pilot: monitor approval and review stage dwell time on service processes, escalating stalled items to the owning review queue. Escalation only — no automated approvals.",
+    "s10_exec":    "Approval and review waiting time, not work time, drives servicing turnaround. Proactive escalation to the owning review queue shortens cycles while every decision stays with a human reviewer.",
+    "compliance_guardrail": "Agent monitors dwell time and escalates to the owning approval or review queue only. No automated credit, suitability, or compliance decisions. Human approval required for every decision, and the approval audit trail is never modified."
+  },
+  "FSC_SERVICE_QUEUE_AGEING": {
+    "s6_title":    "Clear ageing service processes in team-owned queues",
+    "s6_desc":     "Service processes and referrals age past their expected turnaround in specific team queues, concentrating overdue servicing work in a few queues.",
+    "s7_category": "Service Operations",
+    "s9_roadmap":  "30-day pilot: baseline queue age by service-process type and alert the owning team when a queue ages past baseline. Measure: reduction in overdue service processes per queue.",
+    "s10_exec":    "Ageing concentrates in a small number of service queues rather than sitting evenly across the estate. Naming those queues turns a general backlog complaint into a targeted capacity decision.",
+    "compliance_guardrail": null
+  },
+  "FSC_CROSS_OBJECT_REWORK": {
+    "s6_title":    "Eliminate cross-object rework across household, financial account and service process records",
+    "s6_desc":     "The same client information is re-entered or corrected across household, relationship-group, financial-account and service-process records, so servicing teams maintain the same fact several times.",
+    "s7_category": "Data and Rework",
+    "s9_roadmap":  "30-day pilot: track repeated corrections spanning household, financial account and service process records for the highest-rework service-process types. Measure: reduction in duplicate maintenance touches per service process.",
+    "s10_exec":    "Client information maintained in several places is maintained several times, and each correction is a chance for the record set to disagree. Removing the duplication reduces both effort and audit exposure.",
+    "compliance_guardrail": "Agent surfaces rework patterns to the owning service team only. No automated record correction, merge, or review sign-off — record and review changes require human approval and remain auditable."
+  }
+}
