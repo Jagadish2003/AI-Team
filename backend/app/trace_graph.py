@@ -402,10 +402,18 @@ def _within_window_joins(
     claim this trace displays. The producing pack already filters before
     persistence; this module filters again on the way out so the guarantee
     holds independent of what a caller hands in.
+
+    Fail CLOSED on the flag: only a literal ``True`` keeps an entry, not merely a
+    truthy one. Truthiness would admit ``"false"`` / ``"no"`` — a real hazard for
+    a value that survives a JSON round trip or a hand-written fixture — and the
+    point of this layer is that an out-of-window join cannot appear even when the
+    caller is wrong. Every real producer (``WindowJoin.within``,
+    ``cloud_ops_finding._filter_correlation_windows``) already emits a bool
+    (2.0-B1 T7 QA finding).
     """
     kept: List[Mapping[str, Any]] = []
     for window in correlation_windows or ():
-        if isinstance(window, Mapping) and bool(window.get("within_window")):
+        if isinstance(window, Mapping) and window.get("within_window") is True:
             kept.append(window)
     return kept
 

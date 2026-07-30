@@ -139,12 +139,19 @@ def _filter_correlation_windows(
     This is the defence-in-depth boundary where an out-of-window entry is
     dropped before it can ever reach a finding's corroboration/trace — so the
     guarantee holds even if a future caller passes the raw, unfiltered list.
+
+    Fail CLOSED on the flag: only a literal ``True`` keeps an entry. Truthiness
+    would admit the string ``"false"``, which is exactly what a JSON round trip
+    or a hand-written fixture can produce — and this layer exists for the case
+    where the caller is wrong. ``WindowJoin.within`` is always a bool, so no real
+    producer is affected. Mirrors ``app.trace_graph._within_window_joins``
+    (2.0-B1 T7 QA finding).
     """
     kept: List[Dict[str, Any]] = []
     for window in correlation_windows or ():
         if not isinstance(window, dict):
             continue
-        if not bool(window.get("within_window")):
+        if window.get("within_window") is not True:
             continue
         kept.append({
             "join_type": window.get("join_type"),

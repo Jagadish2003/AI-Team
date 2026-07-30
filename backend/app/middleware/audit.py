@@ -18,6 +18,12 @@ Event type payload schemas (locked — do not change field names):
     schema_discovered:     org_id, connector_id, schema_count, table_count, timestamp
     runbook_match_decided: org_id, user_id, recurrence_id, action,
                            previous_state, resulting_state, revision
+    evidence_export_generated: org_id, user_id, export_kind, scope, timestamp,
+                           run_id, opportunity_id, finding_count, record_count,
+                           content_root, signature_prefix, generated_at
+    usage_report_exported: org_id, user_id, export_kind, scope, timestamp,
+                           period_from, period_to, event_count, run_count,
+                           signature_prefix, generated_at
 
 Behaviour difference — schema_discovered vs connector_queried:
     schema_discovered  — connector read system catalogues only (no customer data touched).
@@ -69,7 +75,16 @@ RUNBOOK_MATCH_DECIDED = "runbook_match_decided"
 # GET is not auto-audited — so routes_evidence_export.py calls log_event()
 # explicitly. The payload carries the bundle FINGERPRINT only (scope, ids, record
 # count, content root, signature prefix), never bundle content.
+# 2.0-B1 T6 (AC6) routes this — and every other export surface — through the
+# shared app/export_audit.py write point, which guarantees the payload names the
+# acting user, the export scope, and an ISO-8601 UTC timestamp.
 EVIDENCE_EXPORT_GENERATED = "evidence_export_generated"
+# 2.0-B1 T6 (AC6): the R-1.9.1-L2 signed usage report is an export generation on
+# the same trust model (same license report_key, same distributable posture), and
+# it previously emitted no audit record at all. Same payload discipline as
+# EVIDENCE_EXPORT_GENERATED: period + counts + signature prefix, never report
+# content and never the whole MAC.
+USAGE_REPORT_EXPORTED = "usage_report_exported"
 
 # ---------------------------------------------------------------------------
 # Registry — every accepted event type listed here.
@@ -93,6 +108,7 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     INGESTION_CHECKPOINT_RESET,
     RUNBOOK_MATCH_DECIDED,
     EVIDENCE_EXPORT_GENERATED,
+    USAGE_REPORT_EXPORTED,
 })
 
 # ---------------------------------------------------------------------------

@@ -24,8 +24,14 @@ empty bundle, because a signed "nothing here" is a misleading attestation.
 Every generated bundle is recorded twice — an organisation-wide audit event
 (``middleware.audit.log_event``) and a telemetry event — carrying the bundle
 FINGERPRINT only, never its content. This app has no request-logging middleware,
-so a GET is not auto-audited; the calls here are explicit and deliberate
-(supports sibling AC6).
+so a GET is not auto-audited; the calls here are explicit and deliberate.
+
+2.0-B1 T6 (AC6) — "every export generation is an audit event naming user, scope,
+and time": the recording goes through the shared ``app.export_audit`` write point,
+which stamps the ACTING USER (resolved from the caller's bearer token, hence the
+explicit ``token`` parameter on both routes) alongside the export scope and an
+ISO-8601 UTC timestamp. Both routes record on the JSON and the ``?download=1``
+form, since both hand a signed bundle to the caller.
 """
 from __future__ import annotations
 
@@ -42,6 +48,12 @@ from .evidence_export import (
     bundle_fingerprint,
     envelope_bytes,
     generate_signed_export,
+)
+from .export_audit import (
+    EXPORT_KIND_EVIDENCE_FINDING,
+    EXPORT_KIND_EVIDENCE_REPORT,
+    record_export_generated,
+    resolve_export_actor,
 )
 from .middleware.tenancy import get_current_org_id
 from .rbac import require_role
@@ -72,26 +84,34 @@ def _require_run_in_org(run_id: str, org_id: str) -> Dict[str, Any]:
     return run
 
 
-def _record_export(org_id: str, envelope: Dict[str, Any]) -> None:
+def _record_export(org_id: str, envelope: Dict[str, Any], actor: Optional[str]) -> None:
     """Audit + telemetry for one issued bundle (fingerprint only, never content).
 
-    Both writes are best-effort: the bundle has already been produced and
-    verified, so a failure to record must not deny the caller their artifact —
-    but it is logged loudly rather than swallowed silently.
+    2.0-B1 T6 / AC6: delegates to the shared ``export_audit`` write point so the
+    event names the acting user, the export scope, and the time — the same shape
+    every other export surface records.
+
+    Best-effort: the bundle has already been produced and verified, so a failure
+    to record must not deny the caller their artifact — but it is logged loudly
+    rather than swallowed silently.
     """
     fingerprint = bundle_fingerprint(envelope)
+    scope = fingerprint.get("scope")
+    kind = (
+        EXPORT_KIND_EVIDENCE_REPORT
+        if scope == SCOPE_REPORT
+        else EXPORT_KIND_EVIDENCE_FINDING
+    )
     try:
-        from .middleware.audit import EVIDENCE_EXPORT_GENERATED, log_event
-
-        log_event(EVIDENCE_EXPORT_GENERATED, org_id=org_id, **fingerprint)
-    except Exception as exc:  # noqa: BLE001 — log_event is itself non-raising.
-        logger.warning("evidence export audit write failed: %s", exc)
-    try:
-        from .telemetry import record_event
-
-        record_event("export.evidence_generated", {"org_id": org_id, **fingerprint})
-    except Exception as exc:  # noqa: BLE001 — telemetry is fire-and-forget.
-        logger.debug("evidence export telemetry failed: %s", exc)
+        record_export_generated(
+            kind,
+            org_id=org_id,
+            actor=actor,
+            scope=scope,
+            details=fingerprint,
+        )
+    except Exception as exc:  # noqa: BLE001 — recording never denies the artifact.
+        logger.warning("evidence export audit/telemetry recording failed: %s", exc)
 
 
 def _filename(envelope: Dict[str, Any]) -> str:
@@ -147,17 +167,22 @@ def get_finding_evidence_export(
     download: bool = Query(
         False, description="Return the canonical bundle bytes as a file attachment."
     ),
+    token: str = Depends(require_auth),
 ) -> Any:
     """2.0-B1 (T4 / AC4) — the signed evidence bundle for one finding.
 
     Returns ``{bundle, signature, algorithm}``. The signature is an HMAC-SHA256
     over the canonical bytes of ``bundle``, keyed by the installation's license
     ``report_key``; altering any byte of the bundle fails verification.
+
+    ``token`` is declared so the generation can be audited against the ACTING
+    USER (T6 / AC6); FastAPI caches ``require_auth`` per request, so declaring it
+    both here and in ``dependencies`` costs one evaluation.
     """
     org_id = get_current_org_id()
     _require_run_in_org(run_id, org_id)
     envelope = _generate(org_id, run_id, scope=SCOPE_FINDING, opp_id=opp_id)
-    _record_export(org_id, envelope)
+    _record_export(org_id, envelope, resolve_export_actor(token))
     return _serve(envelope, download)
 
 
@@ -170,16 +195,18 @@ def get_report_evidence_export(
     download: bool = Query(
         False, description="Return the canonical bundle bytes as a file attachment."
     ),
+    token: str = Depends(require_auth),
 ) -> Any:
     """2.0-B1 (T4 / AC4) — the signed evidence bundle for a whole run's report.
 
     Covers every finding in the run plus the executive report, roadmap, and
-    decision audit. Same signature contract as the per-finding export.
+    decision audit. Same signature contract as the per-finding export, and the
+    same acting-user audit record (T6 / AC6).
     """
     org_id = get_current_org_id()
     _require_run_in_org(run_id, org_id)
     envelope = _generate(org_id, run_id, scope=SCOPE_REPORT)
-    _record_export(org_id, envelope)
+    _record_export(org_id, envelope, resolve_export_actor(token))
     return _serve(envelope, download)
 
 
