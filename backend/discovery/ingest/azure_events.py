@@ -131,6 +131,14 @@ _STREAM_SOURCE_SYSTEM = {
     STREAM_SERVICE_HEALTH: "azure_service_health",
 }
 
+#: Stream key → the human-readable Azure surface name, used in LOG TEXT ONLY.
+#: Observability vocabulary: nothing branches on it and no record carries it.
+_STREAM_LABEL = {
+    STREAM_ALERTS: "Azure Monitor Alerts",
+    STREAM_ACTIVITY_LOG: "Azure Activity Log",
+    STREAM_SERVICE_HEALTH: "Azure Service Health",
+}
+
 
 def _filter_new(records: List[Dict[str, Any]], since_iso: Optional[str], ts_of) -> List[Dict[str, Any]]:
     """Keep only records whose timestamp is strictly newer than ``since_iso``.
@@ -856,6 +864,15 @@ class AzureEventIngestor(ChangeBasedIngestor):
                     fetch, stream=stream, token=token, subscription_id=sub,
                     environment=env, since_iso=since_iso,
                 )
+                if not fetched:
+                    # An empty provider page is a FACT worth stating: without it, a
+                    # zero-record poll is indistinguishable from one whose records were
+                    # all filtered, folded, or suppressed further down. Informational —
+                    # an empty page is a normal steady-state outcome, not a fault.
+                    logger.info(
+                        "azure_events: %s returned 0 records for subscription %s",
+                        _STREAM_LABEL.get(stream, stream), sub,
+                    )
                 in_scope = [r for r in fetched if prefilter(r)] if prefilter else list(fetched)
                 new_records = _filter_new(in_scope, since_iso, ts_of)
                 emitted = 0
@@ -923,6 +940,21 @@ class AzureEventIngestor(ChangeBasedIngestor):
                         else {}
                     ),
                 }
+                # The per-subscription ingestion funnel, emitted on EVERY successful
+                # poll including an all-zero one. Each stage the records could have
+                # been lost at is a separate number, so "the endpoint succeeded but no
+                # events appeared" is answerable from one log line instead of a
+                # debugger. Reports the same counts already recorded in status[sub];
+                # nothing here is computed for logging alone.
+                logger.info(
+                    "azure_events: stream=%s subscription=%s polled=%d in_scope=%d "
+                    "new=%d mapped=%d mapper_skipped=%d deduped=%d deferred=%d "
+                    "since=%s checkpoint=%s",
+                    stream, sub, len(fetched), len(in_scope), len(new_records),
+                    emitted, skipped, deduped, deferred,
+                    since_iso or "(first_run)",
+                    next_checkpoints.get(sub) or "(unchanged)",
+                )
             except AzureSubscriptionError as se:
                 # Loud, structured, isolated. Checkpoint is NOT advanced for this
                 # subscription (no silent thinning — it is retried next run).
