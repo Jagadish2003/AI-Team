@@ -1,0 +1,136 @@
+{
+  "_meta": {
+    "story": "2.0-D2 T1",
+    "description": "Insurance-shaped seeded estate for validating the Insurance template. Claims handling, underwriting review and policy servicing on Service Cloud.",
+    "shape": "STRUCTURALLY IDENTICAL to discovery/ingest/fixtures/salesforce_sample.json — the same keys discovery.ingest.salesforce.ingest() returns, so this seed drives the REAL Service Cloud detector inputs rather than a parallel test-only shape. Only the values are insurance-flavoured.",
+    "why_a_test_fixture": "Nothing in production loads this. It exists to prove AC1 — that an untouched Insurance-template run produces findings from EXISTING detectors on an insurance-shaped estate — so it lives with the test that asserts it rather than pretending to be a shipped offline source.",
+    "workflow_areas": {
+      "claims_handling": "Claim FNOL, status enquiry and settlement records; owner changes across claims teams supply the handoff signal.",
+      "underwriting_review": "Underwriting Referral Review approvals with real dwell; the referral queue is the review bottleneck.",
+      "policy_servicing": "Endorsement, cancellation, certificate and billing requests — the repeat servicing workload."
+    },
+    "detectors_expected_to_fire": [
+      "REPETITIVE_AUTOMATION — repeat policy-service requests over a high-volume flow surface",
+      "HANDOFF_FRICTION — claims handoffs between teams (handoff_score 1.81 >= 1.5)",
+      "APPROVAL_BOTTLENECK — underwriting-review delay (6.5d >= 3.0d)",
+      "KNOWLEDGE_GAP — few claims/policy cases linked to knowledge",
+      "INTEGRATION_CONCENTRATION — Policy Admin System referenced by 4 flows (>= 3)",
+      "PERMISSION_BOTTLENECK — underwriting referral concentrated on 2 approvers (bottleneck_score 37.0 >= 10.0)",
+      "CROSS_SYSTEM_ECHO — claims duplicated into the workflow system (0.2286 >= 0.15)"
+    ],
+    "negative_controls": [
+      "Policy Endorsement Approval: bottleneck_score 3.6 and avg_delay_days 2.1 — below both approval thresholds, so it must not drive the finding.",
+      "Rating Engine: flow_reference_count 1 — below the integration-concentration threshold of 3."
+    ],
+    "not_evidence_of_correctness": "Authored, not captured from a real insurance org. It proves the template and the existing detectors work together on an insurance-shaped estate; it does not prove any threshold is calibrated for insurance.",
+    "window_days": 90,
+    "org_type": "Enterprise Service Cloud — general insurance (claims + policy servicing + underwriting referral)"
+  },
+
+  "user_names": {
+    "005xx000002INS1": "Claims Team Lead",
+    "005xx000002INS2": "Underwriting Referral Desk",
+    "005xx000002INS3": "Policy Servicing Supervisor"
+  },
+
+  "case_metrics": {
+    "total_cases_90d": 420,
+    "closed_cases_90d": 96,
+    "owner_changes_90d": 760,
+    "handoff_score": 1.81,
+    "cases_with_kb_link": 38,
+    "knowledge_gap_score": 0.55,
+    "category_breakdown": [
+      {"reason": "Claim_FNOL", "volume": 104},
+      {"reason": "Claim_Status_Enquiry", "volume": 88},
+      {"reason": "Policy_Endorsement", "volume": 71},
+      {"reason": "Certificate_Request", "volume": 58},
+      {"reason": "Policy_Cancellation", "volume": 44},
+      {"reason": "Billing_Enquiry", "volume": 33},
+      {"reason": "Underwriting_Referral", "volume": 22}
+    ],
+    "sample_case_ids": [
+      "CLM-4101", "CLM-4102", "CLM-4103", "POL-7201", "POL-7202",
+      "POL-7203", "UWR-3301", "UWR-3302"
+    ]
+  },
+
+  "flow_inventory": {
+    "active_flow_count_on_object": 5,
+    "avg_element_count": 7.4,
+    "flow_activity_score": 2.35,
+    "trigger_object": "Case",
+    "records_90d": 420,
+    "flows": [
+      {"flow_id": "301xx000000INS1", "flow_label": "Claim-FNOL-Intake-Routing", "process_type": "AutoLaunchedFlow", "element_count": 9, "trigger_object": "Case"},
+      {"flow_id": "301xx000000INS2", "flow_label": "Policy-Endorsement-Validation", "process_type": "AutoLaunchedFlow", "element_count": 8, "trigger_object": "Case"},
+      {"flow_id": "301xx000000INS3", "flow_label": "Certificate-Auto-Issue", "process_type": "AutoLaunchedFlow", "element_count": 7, "trigger_object": "Case"},
+      {"flow_id": "301xx000000INS4", "flow_label": "Underwriting-Referral-Assignment", "process_type": "AutoLaunchedFlow", "element_count": 7, "trigger_object": "Case"},
+      {"flow_id": "301xx000000INS5", "flow_label": "Claim-Status-Notification", "process_type": "ScreenFlow", "element_count": 18, "trigger_object": "Case"}
+    ]
+  },
+
+  "approval_processes": [
+    {
+      "process_name": "Underwriting Referral Review",
+      "pending_count": 74,
+      "avg_delay_days": 6.5,
+      "approver_count": 2,
+      "bottleneck_score": 37.0,
+      "approver_ids": ["005xx000002INS2", "005xx000002INS4"]
+    },
+    {
+      "process_name": "Claim Settlement Authority",
+      "pending_count": 41,
+      "avg_delay_days": 4.2,
+      "approver_count": 3,
+      "bottleneck_score": 13.7,
+      "approver_ids": ["005xx000002INS1", "005xx000002INS5", "005xx000002INS6"]
+    },
+    {
+      "process_name": "Policy Endorsement Approval",
+      "pending_count": 18,
+      "avg_delay_days": 2.1,
+      "approver_count": 5,
+      "bottleneck_score": 3.6,
+      "approver_ids": ["005xx000002INS3", "005xx000002INS7", "005xx000002INS8", "005xx000002INS9", "005xx000002INSA"]
+    }
+  ],
+
+  "named_credentials": [
+    {
+      "credential_name": "Policy Admin System",
+      "credential_developer_name": "Policy_Admin_System",
+      "flow_reference_count": 4,
+      "referencing_flow_ids": ["301xx000000INS1", "301xx000000INS2", "301xx000000INS3", "301xx000000INS4"],
+      "match_type": "name"
+    },
+    {
+      "credential_name": "Claims Payment Gateway",
+      "credential_developer_name": "Claims_Payment_Gateway",
+      "flow_reference_count": 3,
+      "referencing_flow_ids": ["301xx000000INS1", "301xx000000INS5", "301xx000000INS2"],
+      "match_type": "name"
+    },
+    {
+      "credential_name": "Rating Engine",
+      "credential_developer_name": "Rating_Engine",
+      "flow_reference_count": 1,
+      "referencing_flow_ids": ["301xx000000INS4"],
+      "match_type": "name"
+    }
+  ],
+
+  "cross_system_references": {
+    "sf_echo_count": 96,
+    "sf_total_cases": 420,
+    "sf_echo_score": 0.2286,
+    "matched_patterns": ["CLM-", "POL-", "UWR-"],
+    "sample_matches": [
+      {"case_id": "CLM-4101", "external_ref": "INC0094101", "system": "servicenow"},
+      {"case_id": "CLM-4102", "external_ref": "INC0094102", "system": "servicenow"},
+      {"case_id": "POL-7201", "external_ref": "POLSVC-2201", "system": "jira"},
+      {"case_id": "UWR-3301", "external_ref": "UW-1301", "system": "jira"}
+    ]
+  }
+}

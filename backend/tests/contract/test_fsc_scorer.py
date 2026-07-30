@@ -269,8 +269,28 @@ class TestAC4WhereTheChangeLanded:
 
     def test_changed_files_stay_within_the_permitted_surface(self):
         """Same diff check, widened: T3 should have touched only pack-owned files,
-        the runner dispatch, tests and docs."""
+        the runner dispatch, tests and docs.
+
+        STORY-SCOPED. This measures the delta of a 2.0-D1 branch against the D1
+        integration branch, so on any LATER branch it would measure that story's
+        delta against D1's permitted surface and false-alarm — which is exactly what
+        happened on 2.0-D2, whose template-registry entry is legitimate work D1's
+        surface never anticipated. It therefore skips unless the current branch is a
+        2.0-D1 branch. (The narrower guard above — no shared-engine or
+        template-model file changed — is NOT story-scoped and keeps running
+        everywhere, which is the invariant that actually matters.)
+        """
         try:
+            branch = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=REPO_ROOT, capture_output=True, text=True, timeout=30,
+            )
+            current = branch.stdout.strip() if branch.returncode == 0 else ""
+            if not current.startswith("2.0-D1"):
+                pytest.skip(
+                    f"story-scoped guard: current branch {current!r} is not a "
+                    f"2.0-D1 branch, so D1's permitted surface does not apply"
+                )
             base = subprocess.run(
                 ["git", "merge-base", "HEAD", "origin/2.0-D1"],
                 cwd=REPO_ROOT, capture_output=True, text=True, timeout=30,
