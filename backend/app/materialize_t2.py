@@ -524,6 +524,31 @@ def run_trackb_and_persist(
                 "Opportunity instance recording failed (non-blocking): %s", e
             )
 
+        # 2.0-A2 T1: begin lifecycle tracking for every opportunity this run
+        # surfaced. INSERT-ONLY — an opportunity that re-appears in a later run
+        # keeps whatever state an analyst put it in; only its last-seen run
+        # pointer moves. Non-blocking: lifecycle tracking never fails a run.
+        try:
+            from .opportunity_lifecycle import (
+                ensure_opportunity_lifecycle_tables,
+                ensure_tracked_many,
+            )
+
+            ensure_opportunity_lifecycle_tables()
+            n_tracked = ensure_tracked_many(
+                run_org_id,
+                [o.get("opportunity_identity") for o in opps if isinstance(o, dict)],
+                run_id=run_id,
+            )
+            logger.info(
+                "Lifecycle-tracked %d opportunities for run %s", n_tracked, run_id
+            )
+        except Exception as e:  # noqa: BLE001
+            errors["opportunity_lifecycle"] = str(e)
+            logger.warning(
+                "Opportunity lifecycle tracking failed (non-blocking): %s", e
+            )
+
         # R16-B1 (T6): persist the queryable evidence-pointer trail so a finding
         # can later be walked back to the source artifacts that produced it
         # (source_system + source_artifact + source_timestamp). Additive and

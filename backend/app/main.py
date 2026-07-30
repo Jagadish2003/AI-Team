@@ -79,6 +79,7 @@ from .routes_usage_summary import register_usage_summary_routes
 from .routes_ingestion import register_ingestion_routes
 from .routes_runbook_matches import register_runbook_match_routes
 from .routes_secops_evidence import register_secops_evidence_routes
+from .routes_opportunity_lifecycle import register_opportunity_lifecycle_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
@@ -359,6 +360,9 @@ register_ingestion_routes(app)
 register_runbook_match_routes(app)
 # MSP-B12 T3: analyst-only, audited resolution of one SecOps evidence pointer.
 register_secops_evidence_routes(app)
+# 2.0-A2 T1: analyst-driven opportunity lifecycle (open -> actioned -> monitoring
+# -> measured, plus dismissed/stalled), keyed on the stable opportunity_identity.
+register_opportunity_lifecycle_routes(app)
 
 origins = [
     o.strip()
