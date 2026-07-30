@@ -1,0 +1,62 @@
+{
+  "_meta": {
+    "purpose": "2.0-A2 T4 — thresholds and window definitions for outcome-measurement confounder detection.",
+    "why_external": "These are tuning parameters that will be wrong on first guess. Held in config, following the cloud_ops pack pattern, so a value change alters behaviour with no code deploy.",
+    "evidence_convention": "Every threshold declares `basis` as one of: 'measured' (derived from a reproducible measurement, cite it), 'operationally_justified' (a defensible default from domain reasoning, not yet measured), or 'provisional' (a first guess, expected to be wrong). Mirrors discovery/signals/ops_calibration.py, which distinguishes quantitatively-derived defaults from operationally-justified ones.",
+    "honesty_note": "No value here scales, weights or corrects a delta. Thresholds decide only whether a CAVEAT is attached. A confounder never adjusts and never blocks a measurement.",
+    "configVersion": "1.0.0"
+  },
+
+  "volume_shift": {
+    "_note": "Total volume shift beyond this fraction between the two measurements attaches a caveat. A signal computed over a materially different total volume is not measuring the same thing, even when the rate looks similar.",
+    "_basis": "provisional",
+    "_basis_detail": "No outcome data exists yet to calibrate against — 2.0-A2 in production is what will produce it. 0.25 is a first guess chosen to catch a step change without firing on ordinary drift. Expect to revise.",
+    "material_shift_fraction": 0.25,
+    "advisory_shift_fraction": 0.10,
+    "_advisory_note": "Between advisory and material the caveat is attached at 'advisory' severity: worth showing, not enough to call the comparison weak."
+  },
+
+  "ci_population": {
+    "_note": "The resolved entity set behind the signal. A set that quietly grew or shrank between measurements means the two numbers describe different populations.",
+    "_basis": "provisional",
+    "_basis_detail": "Chosen to tolerate a single service appearing or disappearing in a small estate while catching a wholesale change. Unmeasured.",
+    "material_change_fraction": 0.20,
+    "advisory_change_fraction": 0.05,
+    "min_population_for_fraction": 5,
+    "_min_population_note": "Below this count a fraction is meaningless (one service out of three is a 33% swing), so an absolute-count rule applies instead.",
+    "material_change_absolute": 2
+  },
+
+  "pack_version": {
+    "_note": "A pack's version bumps whenever its detector, scorer or corroboration-rule logic changes (repo convention). Movement measured across a version boundary may reflect a threshold edit rather than a real-world change.",
+    "_basis": "operationally_justified",
+    "_basis_detail": "Not a threshold — any difference is material. Pack versioning exists specifically so governance can separate a data change from a pack-logic change, so a boundary crossing is always worth surfacing.",
+    "any_change_is_material": true,
+    "treat_missing_version_as_change": false,
+    "_missing_note": "A pack that never stamped a version yields null on one or both sides. That is an absence of information, not evidence of a change, so by default it raises an 'unknown' advisory rather than a material caveat."
+  },
+
+  "seasonality": {
+    "_note": "Whether the two windows sit in comparable parts of the year. The window definition is configurable because a hardcoded calendar assumption is wrong for a large share of customers — retail, education, public-sector fiscal years and northern/southern hemisphere operations all differ.",
+    "_basis": "provisional",
+    "_basis_detail": "calendar_month_overlap is the least-assuming default. It makes no claim about fiscal years or peak periods; it only asks whether the windows cover the same months of the year.",
+    "mode": "calendar_month_overlap",
+    "_mode_options": [
+      "calendar_month_overlap — compare the sets of calendar months each window touches",
+      "fiscal_quarter — compare fiscal quarters derived from fiscal_year_start_month",
+      "declared_periods — compare against explicitly declared seasonal periods",
+      "disabled — do not check seasonality (for an operation with no seasonal pattern)"
+    ],
+    "min_month_overlap": 0.5,
+    "fiscal_year_start_month": 1,
+    "_fiscal_note": "1 = January. Set to 4 for an April fiscal year, 7 for July, and so on. Only read when mode is fiscal_quarter.",
+    "declared_periods": [],
+    "_declared_periods_note": "Optional list of {\"label\": str, \"startMonth\": int, \"endMonth\": int} for an operation with known peak periods. Only read when mode is declared_periods."
+  },
+
+  "severity": {
+    "_note": "Severity labels a caveat's weight for display and counting. It never gates whether the measurement reports.",
+    "material": "material",
+    "advisory": "advisory"
+  }
+}

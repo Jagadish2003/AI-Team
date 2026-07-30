@@ -1,5 +1,5 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0033.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0034.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
 -- 03_lazy_runtime_tables.sql. Creates the agentiq role, all tables (incl.
@@ -11,7 +11,7 @@
 -- runbook_match_decision_history / runbook_match_feedback, and the R-1.9.1-L3
 -- vendor-side license_registry + append-only issuance_audit),
 -- indexes/constraints/rules, seeds the connector catalog, grants the app login
--- role(s) privileges on the schema, and stamps alembic_version to head 0033.
+-- role(s) privileges on the schema, and stamps alembic_version to head 0034.
 --
 -- BEFORE RUNNING ON PRODUCTION — two values in this file are dev defaults and
 -- MUST be set for the target environment. Both are marked "TODO(deploy)" below:
@@ -552,6 +552,9 @@ CREATE TABLE "public"."opportunity_movements" (
     "measured_at" timestamp with time zone NOT NULL,
     "created_at" timestamp with time zone NOT NULL,
     "updated_at" timestamp with time zone NOT NULL,
+    "confounder_count" integer DEFAULT 0 NOT NULL,
+    "confounder_material_count" integer DEFAULT 0 NOT NULL,
+    "confounder_types" "text",
     CONSTRAINT "opportunity_movements_pkey" PRIMARY KEY ("org_id", "opportunity_identity", "current_run_id")
 );
 
@@ -1572,7 +1575,9 @@ CREATE INDEX "idx_opp_movements_org_run" ON "public"."opportunity_movements" USI
 
 CREATE INDEX "idx_opp_movements_org_verdict" ON "public"."opportunity_movements" USING "btree" ("org_id", "comparability_verdict");
 
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0033') ON CONFLICT DO NOTHING;
+CREATE INDEX "idx_opp_movements_org_confounders" ON "public"."opportunity_movements" USING "btree" ("org_id", "confounder_count");
+
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0034') ON CONFLICT DO NOTHING;
 
 
 --
