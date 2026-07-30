@@ -109,8 +109,11 @@ class TestAC3Normalization:
         client = FakeAlertsClient({SUB_A: [_alert(SUB_A, "a1", "2026-06-01T12:00:00Z")]})
         [rec] = _ingestor([SUB_A], client).ingest_alerts(token="T").records
         event = rec["event"]
-        # Shape produced by map_azure_monitor (B0 OperationalEvent).
-        assert event["source_system"] == "azure_monitor"
+        # Shape produced by map_azure_monitor (B0 OperationalEvent). The event's
+        # source_system is the PROVIDER FAMILY (shared cloud-event skeleton AC4); the
+        # mapper's per-stream source system rides the wrapper as `surface`.
+        assert event["source_system"] == "azure"
+        assert rec["surface"] == "azure_monitor"
         assert event["event_class"] == "state_change"
         assert event["org_id"] == "org1"
         assert event["event_signature"]              # deterministic fingerprint present

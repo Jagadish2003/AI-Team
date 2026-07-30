@@ -810,8 +810,33 @@ is the thin MSP-B1 binding: `AWSEventConnector` is the skeleton with
 `provider='aws'` and the three AWS surfaces (CloudWatch / EventBridge / CloudTrail)
 wired to their B0 mappers. `build_offline_aws_source()` reads the deterministic
 [`aws_native_events_sample.json`](../backend/discovery/ingest/fixtures/aws_native_events_sample.json)
-fixture so a run works with no AWS account (offline-first). MSP-B2's Azure
-connector is the SAME skeleton with `provider='azure'`.
+fixture so a run works with no AWS account (offline-first).
+
+### Azure instantiation
+
+[`backend/discovery/ingest/azure_events.py`](../backend/discovery/ingest/azure_events.py)
+is MSP-B2's connector. It predates this skeleton class and therefore rides the same
+shared `ChangeBasedIngestor` base the bridge uses rather than subclassing
+`CloudEventConnector` (that migration is mechanical and deliberately deferred) — but
+it implements the skeleton's two BEHAVIOURAL contracts natively, so the AWS and
+Azure paths do not diverge:
+
+* **Transport re-stamp (AC4)** — `_stamp_transport` sets each mapped event's
+  `source_system` to `'azure'` and re-points its OBSERVED pointer at the native
+  cloud artifact, leaving the mapper's `event_signature` untouched. An
+  `OperationalEvent` derives its signature only when the field is empty, so the
+  re-stamp provably cannot overwrite it — which is what keeps a native event equal
+  to its bridged twin in every field but that one. The mapper's per-stream B0 source
+  system (`azure_monitor` / `azure_activity` / `azure_service_health`) stays on the
+  record wrapper as `surface`, so re-stamping loses nothing.
+* **B7 admission** — the connector owns its own `OpsEventStream` and admits every
+  event inside `_ingest_stream`, exposing `active_signals()` / `budget_report()`.
+  Admission is part of ingesting a cloud event, not a step a downstream caller has
+  to remember. The budget is checked BETWEEN subscriptions (stop fetching, not just
+  admitting) and a mid-page deferral leaves that subscription's checkpoint
+  UNADVANCED, so the deferred remainder is re-polled next run instead of being lost;
+  the deferral is reported as `status='deferred'` with a named reason and surfaces in
+  the run's `azureEvents.budget` health block.
 
 ### AWS auth & cross-account access (MSP-B1 / AT-642, T2)
 
