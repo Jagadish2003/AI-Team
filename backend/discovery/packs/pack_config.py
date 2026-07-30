@@ -189,7 +189,11 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         # MSP-B6 T1 AC1: version stamped on every run (R16-B1). Bumped to 1.1.0 by
         # MSP-B6 T4 (AT-739) — adds the config-driven ops-impact scorer (behaviour
         # change). MSP-B5 production wiring adds its documentation-gap detector.
-        "packVersion":   "1.2.0",
+        # 1.2.1 — 2.0-B1 T7: cloud_ops_finding._filter_correlation_windows now
+        # fails CLOSED on a non-boolean within_window flag (patch: the pack's
+        # corroboration-part logic changed, but no real producer's output does —
+        # every producer already emits a bool).
+        "packVersion":   "1.2.1",
         "packName":      "Cloud Operations",
         "domain":        "cloud_ops",
         "pack_domain":   "cloud_ops",

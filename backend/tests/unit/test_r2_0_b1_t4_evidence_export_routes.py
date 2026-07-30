@@ -130,7 +130,7 @@ def test_export_is_audited_and_metered_with_fingerprint_only(monkeypatch):
     monkeypatch.setattr("app.telemetry.record_event", lambda et, payload=None: telemetry_calls.append((et, payload)))
 
     envelope = _envelope()
-    routes._record_export("org_a", envelope)
+    routes._record_export("org_a", envelope, "user-1")
 
     assert len(audit_calls) == 1
     event_type, payload = audit_calls[0]
@@ -153,7 +153,7 @@ def test_a_recording_failure_never_denies_the_signed_artifact(monkeypatch):
 
     monkeypatch.setattr("app.middleware.audit.log_event", _boom)
     monkeypatch.setattr("app.telemetry.record_event", _boom)
-    routes._record_export("org_a", _envelope())   # must not raise
+    routes._record_export("org_a", _envelope(), "user-1")   # must not raise
 
 
 def test_export_telemetry_event_type_is_registered():
