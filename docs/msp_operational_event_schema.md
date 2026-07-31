@@ -353,7 +353,13 @@ member's evidence pointer back to its stored raw payload, so *"this alarm fired
 - **Org-scoped** — the fold key includes `org_id`; `admit` refuses an event under
   a different org, and `resolve_raw_instances` refuses to cross an org boundary.
 - **Idempotent** — an at-least-once redelivery of an already-counted firing
-  (same provider event id) is a no-op (`disposition == "duplicate"`).
+  (same provider event id) is a no-op *in the fold* (`disposition == "duplicate"`):
+  no count, no span change, no second record. It is still **charged to the run
+  budget** (§11), because the budget bounds the work a run does rather than the
+  facts it ends up with — the redelivery cost a fetch and a mapping, and the poll
+  loop's budget check is what stops a provider redelivery storm paging for ever.
+  `BudgetReport.duplicates` reports how much of a budget went on that churn, so a
+  depleted budget is explainable instead of mysterious.
 
 ### Usage
 
@@ -782,9 +788,12 @@ the same scope, and each reported rather than silent:
    `OpsEventStream.has_capacity()`, not just the admission. Enforcing it at
    admission alone bounded the data but never the work: once exhausted the
    connector kept paying for provider pages whose every event it then deferred.
-2. **Per-scope continuation cap** — `max_polls_per_scope`
+2. **Per-scope poll cap** — `max_polls_per_scope`
    (`CLOUD_EVENT_MAX_POLLS_PER_SCOPE`, default 4): one scope's backlog can never
-   monopolise a run.
+   monopolise a run. It counts **total** polls of a scope in one run, the first
+   included — `4` is four polls, `1` is "poll once and never continue", `0` is
+   unbounded. Counting continuations instead would make the poll-once case
+   inexpressible, since `0` already means unbounded.
 3. **Wall-clock deadline** — `poll_deadline_seconds`
    (`CLOUD_EVENT_POLL_DEADLINE_SECONDS`, default 180): volume is not time. A
    throttled provider can spend minutes on a single page, so a volume bound alone

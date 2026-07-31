@@ -308,7 +308,9 @@ def advance_descending(
     to the oldest instant just read, so the next poll continues into the older
     backlog instead of skipping it. When the read completes, the newest instant
     seen across the whole backfill (held in ``pending_high``) becomes the watermark
-    and the window clears.
+    and the window clears. A truncated read that returns nothing readable does NOT
+    count as a drained window — the position is pinned and the backlog retried,
+    because promoting ``pending_high`` there would strand the unread remainder.
 
     ``max_backfill_seconds`` bounds how far back an initial load walks, measured
     from the backfill's own newest instant (``pending_high``) — NOT from wall-clock
@@ -349,19 +351,60 @@ def advance_descending(
         )
         truncated = False  # fall through to the drain path: promote pending_high
 
+    if truncated and not page_low:
+        # A page we KNOW was truncated yielded nothing readable. The window is not
+        # drained — it is unreadable THIS poll, which is routine: CloudTrail's
+        # delivery is eventually consistent and its management-event filter drops
+        # records, so a page can consist entirely of events already ingested.
+        # Falling through to the drain path here would promote ``pending_high`` and
+        # clear the ceiling — declaring a backfill complete that never read its
+        # older remainder and permanently stranding every event below the ceiling,
+        # because the next run resumes incrementally above the promoted watermark.
+        # Pin the position instead: the backlog is retried next run, not skipped.
+        if previous.backfilling:
+            logger.warning(
+                "aws_watermark: a truncated descending page yielded no readable "
+                "events below the %s ceiling — pausing the backfill; the remaining "
+                "backlog is retried next run, not skipped",
+                previous.ceiling,
+            )
+        return previous
+
     if truncated and page_low:
         new_ceiling = page_low
-        if previous.ceiling and parse_timestamp(new_ceiling) is not None:
+        new_ceiling_dt = parse_timestamp(new_ceiling)
+        if previous.ceiling and new_ceiling_dt is not None:
             previous_ceiling = parse_timestamp(previous.ceiling)
-            if previous_ceiling is not None and parse_timestamp(new_ceiling) >= previous_ceiling:
-                # No backwards progress — stop the walk rather than spin, and keep
-                # the watermark pinned so nothing is skipped. The next run retries.
-                logger.warning(
-                    "aws_watermark: descending backfill made no progress at %s — "
-                    "pausing the walk; the backlog is retried next run, not skipped",
-                    previous.ceiling,
+            if previous_ceiling is not None and new_ceiling_dt >= previous_ceiling:
+                # The walk did not get BELOW the ceiling. At the same instant that
+                # can still be progress: CloudTrail timestamps have second
+                # granularity, so one dense second can span several polls and each
+                # poll reads ids the previous one had not recorded. Carry those ids
+                # forward — the mirror of the same-instant merge advance_ascending
+                # does at the watermark — so the next poll excludes them and the
+                # walk continues. Only pin when the instant yielded nothing new;
+                # then the walk genuinely cannot advance, so stop rather than spin
+                # and keep the watermark pinned so nothing is skipped.
+                merged = tuple(
+                    dict.fromkeys(
+                        list(previous.ceiling_ids) + list(_ids_at(new_ceiling, events))
+                    )
+                )[:MAX_BOUNDARY_IDS]
+                if new_ceiling_dt > previous_ceiling or merged == previous.ceiling_ids:
+                    logger.warning(
+                        "aws_watermark: descending backfill made no progress at %s — "
+                        "pausing the walk; the backlog is retried next run, not skipped",
+                        previous.ceiling,
+                    )
+                    return previous
+                return TimePosition(
+                    watermark=previous.watermark,
+                    boundary_ids=previous.boundary_ids,
+                    ceiling=new_ceiling,
+                    ceiling_ids=merged,
+                    pending_high=pending_high,
+                    pending_high_ids=pending_high_ids,
                 )
-                return previous
         return TimePosition(
             watermark=previous.watermark,
             boundary_ids=previous.boundary_ids,

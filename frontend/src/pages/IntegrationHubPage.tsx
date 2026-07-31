@@ -86,6 +86,12 @@ const CATEGORY_SYSTEMS: Record<string, string[]> = {
 
 const START_BAR_SOURCE_IDS = ['salesforce', 'servicenow', 'jira'];
 
+// How long a Connect button stays busy after the auth URL is handed to the
+// browser. A real OAuth redirect leaves the page well inside this, so the timer
+// only ever fires when the navigation was blocked — the case where the button
+// would otherwise be stuck for the rest of the session.
+const CONNECT_RELEASE_MS = 5_000;
+
 // MSP-B13 (AT-748): the Cloud Operations group is NOT a hardcoded id list.
 // Membership is derived from the catalog itself — any connector the catalog marks
 // `multiScope` (AWS/Azure Events today, future cloud connectors automatically)
@@ -354,13 +360,26 @@ export default function IntegrationHubPage() {
   const [connectingId, setConnectingId] = useState<string | null>(null);
 
   async function startConnect(id: string) {
-    if (connectingId) return;
+    // Guard THIS connector only. A global guard meant one in-flight connect froze
+    // every other tile's button too, which is not what "one-shot" has to mean.
+    if (connectingId === id) return;
     setConnectingId(id);
     const started = await connectConnector(id);
     // On success the browser is already navigating to the provider — keep the
     // button busy until it leaves the page. Only a failed auth-url call releases
     // it, so the user can retry.
-    if (!started) setConnectingId(null);
+    if (!started) {
+      setConnectingId(current => (current === id ? null : current));
+      return;
+    }
+    // The navigation can still be prevented (popup/redirect blocker, CSP, or a
+    // connector whose flow does not navigate at all). The page then stays mounted
+    // with the button busy for ever and the only recovery is a reload, so release
+    // it after a grace period. If the redirect does happen this timer dies with
+    // the page; if a newer connect has started, leave that one alone.
+    window.setTimeout(() => {
+      setConnectingId(current => (current === id ? null : current));
+    }, CONNECT_RELEASE_MS);
   }
 
   // Connect / configure handler (same logic as pre-Sprint-9)

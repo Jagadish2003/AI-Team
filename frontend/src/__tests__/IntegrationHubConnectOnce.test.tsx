@@ -11,7 +11,7 @@
  *   npx vitest run src/__tests__/IntegrationHubConnectOnce.test.tsx
  */
 import React from "react";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -147,6 +147,65 @@ describe("Integration Hub Connect — one click only", () => {
     // screen once the tiles render again.
     expect(await screen.findByText("Something went wrong")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /connecting/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("Integration Hub Connect — the busy state always has a way out", () => {
+  // "One-shot" must not mean "one shot per session". The button stays busy on
+  // success because the browser is leaving the page — but that navigation can be
+  // prevented (popup/redirect blocker, CSP, or a connector whose flow does not
+  // navigate). The page then stays mounted and, with no release, the tile is stuck
+  // until a manual reload.
+  it("releases the button after the grace period when the redirect never happens", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockConnectApi.mockResolvedValue(undefined as never); // started, but no navigation
+
+      renderHub();
+      let tile = await salesforceTile();
+      fireEvent.click(within(tile).getByRole("button", { name: "Connect" }));
+      expect(await within(tile).findByRole("button", { name: /connecting/i })).toBeDisabled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(5_000);
+      });
+
+      tile = await salesforceTile();
+      await waitFor(() =>
+        expect(within(tile).getByRole("button", { name: "Connect" })).toBeEnabled(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a different connector clickable while one connect is in flight", async () => {
+    // The guard is per-connector: an in-flight Salesforce connect is no reason to
+    // freeze ServiceNow's button too.
+    fetchSpy.mockImplementation((input: unknown) => {
+      const url = typeof input === "string" ? input : (input as { url?: string })?.url ?? "";
+      if (url.includes("/api/connectors")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => [salesforce(), { ...salesforce(), id: "servicenow", name: "ServiceNow" }],
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+    });
+    mockConnectApi.mockImplementation(() => new Promise<void>(() => {}));
+
+    renderHub();
+    const sf = await salesforceTile();
+    fireEvent.click(within(sf).getByRole("button", { name: "Connect" }));
+    await within(sf).findByRole("button", { name: /connecting/i });
+
+    const snName = (await screen.findAllByText("ServiceNow"))
+      .map((n) => n.closest(".connector-card"))
+      .find(Boolean) as HTMLElement;
+    fireEvent.click(within(snName).getByRole("button", { name: "Connect" }));
+
+    await waitFor(() => expect(mockConnectApi).toHaveBeenCalledWith("servicenow"));
   });
 });
 
