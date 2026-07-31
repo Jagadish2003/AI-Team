@@ -214,6 +214,11 @@ def _raw_row(org: str, identity: str, run_id: str):
             return cur.fetchone()
 
 
+def _raw_record(org: str, identity: str, run_id: str):
+    row = _raw_row(org, identity, run_id)
+    return json.loads(row[2]) if row else None
+
+
 def _projection_payload(
     *,
     low: int = 25,
@@ -487,6 +492,145 @@ class TestNoOutcomeWithoutAction:
         result = measure_movements_for_run(org, "run_post_1")
         assert result["measured"] == 0
         assert result["skipReasons"].get(SKIP_NOT_ACTIONED) == 1
+
+
+class TestNoOutcomeWithoutActionInvariant:
+    def test_large_ambient_movement_produces_no_record_verdict_or_surface(self, client):
+        """T7's tempting case: signal movement is obvious, but no action exists."""
+        from app.opportunity_lifecycle import ensure_tracked
+        from app.opportunity_movement import (
+            SKIP_NOT_ACTIONED,
+            MovementMeasurementSkipped,
+            get_movement_history,
+            measure_movements_for_run,
+        )
+        from app.outcome_surfaces import build_executive_outcome_section
+
+        org, identity = _org(), _identity()
+        _freeze_baseline(org, identity, "run_baseline")
+        ensure_tracked(org, identity, run_id="run_baseline")
+        _instance(org, identity, "run_baseline", days_ago=200)
+        _attach_projection(org, identity, low=10, high=20)
+        _instance(org, identity, "run_post_1", days_ago=20)
+        _signal(org, "run_post_1", 1.0, days_ago=20)
+
+        with pytest.raises(MovementMeasurementSkipped) as excinfo:
+            _measure(org, identity, "run_post_1")
+        assert excinfo.value.reason == SKIP_NOT_ACTIONED
+
+        monitoring = measure_movements_for_run(org, "run_post_1")
+        assert monitoring["measured"] == 0
+        assert monitoring["skipReasons"].get(SKIP_NOT_ACTIONED) == 1
+
+        assert get_movement_history(org, identity) == []
+        assert _raw_row(org, identity, "run_post_1") is None
+
+        movement_list = client.get(
+            f"{BASE}?projectionVerdict=within_band",
+            headers=_auth(org),
+        )
+        assert movement_list.status_code == 200, movement_list.text
+        assert movement_list.json()["count"] == 0
+        assert movement_list.json()["projectionValidationCounts"] == {}
+
+        assert client.get(f"{BASE}/{identity}", headers=_auth(org)).status_code == 404
+        assert (
+            client.get(f"/api/outcomes/{identity}", headers=_auth(org)).status_code
+            == 404
+        )
+
+        portfolio = client.get("/api/outcomes", headers=_auth(org))
+        assert portfolio.status_code == 200, portfolio.text
+        assert portfolio.json()["count"] == 0
+        assert portfolio.json()["aggregates"]["measurementCount"] == 0
+
+        report_section = build_executive_outcome_section(org, "run_post_1")
+        assert report_section["aggregates"]["measurementCount"] == 0
+        assert report_section["highlights"] == []
+
+    def test_direct_writer_refuses_a_backfill_style_record_after_action_reversal(self):
+        """The private write path is the seam a future backfill must use."""
+        from app.opportunity_lifecycle import reopen
+        from app.opportunity_movement import (
+            SKIP_NOT_ACTIONED,
+            MovementMeasurementSkipped,
+            _store_movement,
+            measure_movement,
+        )
+
+        org, identity = _org(), _identity()
+        run = _full_setup(org, identity, current_value=150.0)
+        record = measure_movement(org, identity, run, persist=False)
+
+        reopen(org, identity, "analyst@example.com")
+
+        with pytest.raises(MovementMeasurementSkipped) as excinfo:
+            _store_movement(record)
+        assert excinfo.value.reason == SKIP_NOT_ACTIONED
+        assert _raw_row(org, identity, run) is None
+
+    def test_reversing_an_action_invalidates_measurements_and_hides_outcome_reads(
+        self,
+        client,
+    ):
+        from app.opportunity_lifecycle import reopen
+        from app.opportunity_movement import get_movement, get_movement_history
+        from app.outcome_surfaces import build_executive_outcome_section
+
+        org, identity = _org(), _identity()
+        run = _full_setup(org, identity, current_value=150.0)
+        _measure(org, identity, run)
+
+        before = _raw_record(org, identity, run)
+        assert before["actionValidity"]["state"] == "valid"
+        assert len(get_movement_history(org, identity)) == 1
+
+        reopen(org, identity, "analyst@example.com")
+
+        raw = _raw_record(org, identity, run)
+        assert raw["actionValidity"]["state"] == "invalidated"
+        assert raw["actionValidity"]["reason"] == "action_reversed"
+        assert get_movement(org, identity, run) is None
+        assert get_movement_history(org, identity) == []
+        assert client.get(f"{BASE}/{identity}", headers=_auth(org)).status_code == 404
+        assert (
+            client.get(f"/api/outcomes/{identity}", headers=_auth(org)).status_code
+            == 404
+        )
+        assert client.get("/api/outcomes", headers=_auth(org)).json()["count"] == 0
+
+        report_section = build_executive_outcome_section(org, run)
+        assert report_section["aggregates"]["measurementCount"] == 0
+
+    def test_replay_and_route_surface_have_no_outcome_write_seam(self):
+        from app.opportunity_lifecycle import ensure_tracked
+        from app.opportunity_movement import get_movement_history
+        from app.replay import replay_run
+
+        org, identity = _org(), _identity()
+        _freeze_baseline(org, identity, "run_baseline")
+        ensure_tracked(org, identity, run_id="run_baseline")
+        _instance(org, identity, "run_post_1", days_ago=20)
+        _signal(org, "run_post_1", 1.0, days_ago=20)
+
+        db.init_tables()
+        db.upsert_run(
+            "run_post_1",
+            {"id": "run_post_1", "org_id": org, "status": "complete"},
+        )
+        replay_run("run_post_1")
+        assert get_movement_history(org, identity) == []
+
+        write_methods = {"POST", "PUT", "PATCH", "DELETE"}
+        outcome_write_routes = []
+        for route in app.routes:
+            path = str(getattr(route, "path", ""))
+            if not path.startswith(("/api/opportunity-movement", "/api/outcomes")):
+                continue
+            methods = set(getattr(route, "methods", set()) or set()) & write_methods
+            if methods:
+                outcome_write_routes.append((path, sorted(methods)))
+        assert outcome_write_routes == []
 
 
 # ---------------------------------------------------------------------------

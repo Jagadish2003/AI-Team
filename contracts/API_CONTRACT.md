@@ -1,6 +1,13 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.16
+Version: v1.17
 Date: 2026-07-31
+
+> v1.17 - 2.0-A2 T7 (No outcome without action): outcome measurement writes
+> now require a current customer-recorded action on the opportunity lifecycle.
+> Reopened opportunities clear that action and invalidate dependent stored
+> movement rows; outcome read surfaces suppress invalidated/stale movements
+> rather than exposing them as customer-visible outcomes. No frontend type shape
+> changed.
 
 > v1.16 - 2.0-A2 T6 (Outcome surfaces): added org-scoped, cross-run outcome
 > surfaces `GET /api/outcomes` and `GET /api/outcomes/{opportunityIdentity}`
@@ -645,6 +652,10 @@ Outcome data is cross-run because each movement compares a frozen baseline run
 with a current run. These routes are org-scoped and keyed by
 `opportunity_identity`; they do not use a latest-run fallback and do not
 recompute measurements on read. Requires authentication and Analyst role.
+Unactioned and reopened opportunities are not outcome resources: the per-
+opportunity outcome route returns 404 when the lifecycle has no current recorded
+action, and portfolio/report aggregates exclude any movement rows invalidated by
+action reversal.
 
 #### GET /api/outcomes
 
