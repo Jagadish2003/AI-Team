@@ -74,6 +74,11 @@ SKIP_NO_ACTION_DATE = "no_action_date"
 SKIP_NO_BASELINE = "no_baseline"
 SKIP_NO_POST_ACTION_RUN = "no_post_action_run"
 SKIP_NO_CURRENT_SIGNALS = "no_current_signal_values"
+SKIP_ACTION_DATE_MISMATCH = "action_date_mismatch"
+
+ACTION_VALIDITY_VALID = "valid"
+ACTION_VALIDITY_INVALIDATED = "invalidated"
+ACTION_INVALIDATED_REASON_REVERSED = "action_reversed"
 
 
 def ensure_opportunity_movement_table() -> None:
@@ -121,6 +126,107 @@ def _parse_date(value: Any) -> Optional[date]:
         return value
     parsed = _parse_dt(value)
     return parsed.date() if parsed else None
+
+
+def _require_current_recorded_action(record: Mapping[str, Any]) -> Dict[str, Any]:
+    """Return a storeable copy only when today's lifecycle still has an action.
+
+    T7 makes this the durable invariant for measurement generation, backfills,
+    replay helpers, and any future admin/debug write path: a movement row cannot
+    be persisted unless the current lifecycle row carries the same
+    customer-recorded action date the measurement says it followed.
+    """
+    from .opportunity_lifecycle import get_lifecycle
+    from .opportunity_lifecycle_states import is_measurable
+
+    org_id = str(record.get("orgId") or "").strip()
+    opportunity_identity = str(record.get("opportunityIdentity") or "").strip()
+    if not org_id or not opportunity_identity:
+        raise MovementMeasurementSkipped(
+            SKIP_NOT_ACTIONED,
+            "movement record is missing orgId or opportunityIdentity, so a "
+            "recorded action cannot be verified",
+        )
+
+    lifecycle = get_lifecycle(org_id, opportunity_identity)
+    state = str((lifecycle or {}).get("state") or "untracked")
+    if lifecycle is None or not is_measurable(state):
+        raise MovementMeasurementSkipped(
+            SKIP_NOT_ACTIONED,
+            f"opportunity {opportunity_identity!r} cannot receive an outcome "
+            f"measurement without a current recorded action (state={state!r})",
+        )
+
+    lifecycle_action_date = _parse_date(lifecycle.get("actionDate"))
+    record_action_date = _parse_date(record.get("actionDate"))
+    if lifecycle_action_date is None or record_action_date is None:
+        raise MovementMeasurementSkipped(
+            SKIP_NO_ACTION_DATE,
+            f"opportunity {opportunity_identity!r} has no action date to anchor "
+            "the movement write on",
+        )
+    if lifecycle_action_date != record_action_date:
+        raise MovementMeasurementSkipped(
+            SKIP_ACTION_DATE_MISMATCH,
+            f"movement for opportunity {opportunity_identity!r} was measured "
+            f"against action date {record_action_date.isoformat()}, but the "
+            f"current recorded action date is {lifecycle_action_date.isoformat()}",
+        )
+
+    checked_at = _now()
+    out = dict(record)
+    out["actionValidity"] = {
+        "state": ACTION_VALIDITY_VALID,
+        "actionDate": lifecycle_action_date.isoformat(),
+        "lifecycleState": state,
+        "lifecycleRevision": int(lifecycle.get("revision") or 0),
+        "checkedAt": checked_at.isoformat(),
+    }
+    return out
+
+
+def _record_depends_on_current_action(org_id: str, record: Mapping[str, Any]) -> bool:
+    """Read-side guard: stale or invalidated rows are not outcome artifacts."""
+    validity = record.get("actionValidity")
+    if (
+        isinstance(validity, Mapping)
+        and validity.get("state") == ACTION_VALIDITY_INVALIDATED
+    ):
+        return False
+
+    opportunity_identity = str(record.get("opportunityIdentity") or "").strip()
+    if not opportunity_identity:
+        return False
+
+    try:
+        from .opportunity_lifecycle import get_lifecycle
+
+        lifecycle = get_lifecycle(org_id, opportunity_identity)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Could not verify action for stored movement %s: %s",
+            opportunity_identity,
+            exc,
+        )
+        return False
+
+    lifecycle_action_date = _parse_date((lifecycle or {}).get("actionDate"))
+    record_action_date = _parse_date(record.get("actionDate"))
+    return bool(
+        lifecycle
+        and lifecycle_action_date is not None
+        and record_action_date is not None
+        and lifecycle_action_date == record_action_date
+    )
+
+
+def _visible_records(org_id: str, rows: Sequence[Sequence[Any]]) -> List[Dict[str, Any]]:
+    records = [_row_to_record(row) for row in rows]
+    return [
+        record
+        for record in records
+        if record and _record_depends_on_current_action(org_id, record)
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -551,6 +657,7 @@ def _store_movement(record: Mapping[str, Any]) -> None:
     derived measurement of one specific run pair, and re-deriving it for that same
     pair is idempotent by definition.
     """
+    record = _require_current_recorded_action(record)
     primary = next(
         (m for m in record.get("movements") or [] if m.get("role") == "movement"),
         None,
@@ -623,6 +730,65 @@ def _store_movement(record: Mapping[str, Any]) -> None:
                 ),
             )
         con.commit()
+
+
+def invalidate_movements_for_action_reversal(
+    org_id: str,
+    opportunity_identity: str,
+    *,
+    reason: str = ACTION_INVALIDATED_REASON_REVERSED,
+    invalidated_by: Optional[str] = None,
+) -> int:
+    """Mark stored movement rows as invalid when their recorded action is unwound.
+
+    Rows are retained for audit/debug traceability, but read paths hide them once
+    marked. That keeps T7's invariant visible in the data without letting an old
+    movement continue to appear as an outcome after its action date was cleared.
+    """
+    ensure_opportunity_movement_table()
+    invalidated_at = _now()
+    updated = 0
+    with closing(db.connect()) as con:
+        with con.cursor() as cur:
+            cur.execute(
+                "SELECT current_run_id, record FROM opportunity_movements "
+                "WHERE org_id = %s AND opportunity_identity = %s",
+                (org_id, opportunity_identity),
+            )
+            rows = cur.fetchall()
+            for current_run_id, raw_record in rows:
+                try:
+                    record = json.loads(raw_record) if raw_record else {}
+                except (TypeError, ValueError):
+                    record = {}
+                if not isinstance(record, dict):
+                    record = {}
+                previous = record.get("actionValidity")
+                marker: Dict[str, Any] = {
+                    "state": ACTION_VALIDITY_INVALIDATED,
+                    "reason": reason,
+                    "invalidatedAt": invalidated_at.isoformat(),
+                    "invalidatedBy": invalidated_by,
+                    "actionDate": record.get("actionDate"),
+                }
+                if isinstance(previous, Mapping):
+                    marker["previous"] = dict(previous)
+                record["actionValidity"] = marker
+                cur.execute(
+                    "UPDATE opportunity_movements SET record = %s, updated_at = %s "
+                    "WHERE org_id = %s AND opportunity_identity = %s "
+                    "AND current_run_id = %s",
+                    (
+                        json.dumps(record),
+                        invalidated_at,
+                        org_id,
+                        opportunity_identity,
+                        current_run_id,
+                    ),
+                )
+                updated += cur.rowcount
+        con.commit()
+    return updated
 
 
 def measure_movements_for_run(
@@ -702,7 +868,10 @@ def get_movement(
                 (org_id, opportunity_identity, current_run_id),
             )
             row = cur.fetchone()
-    return _row_to_record(row) if row else None
+    if not row:
+        return None
+    record = _row_to_record(row)
+    return record if _record_depends_on_current_action(org_id, record) else None
 
 
 def get_movement_history(
@@ -717,7 +886,7 @@ def get_movement_history(
                 (org_id, opportunity_identity, max(1, min(int(limit), 1000))),
             )
             rows = cur.fetchall()
-    return [_row_to_record(row) for row in rows]
+    return _visible_records(org_id, rows)
 
 
 def get_movements_for_run(org_id: str, run_id: str) -> List[Dict[str, Any]]:
@@ -729,7 +898,7 @@ def get_movements_for_run(org_id: str, run_id: str) -> List[Dict[str, Any]]:
                 (org_id, run_id),
             )
             rows = cur.fetchall()
-    return [_row_to_record(row) for row in rows]
+    return _visible_records(org_id, rows)
 
 
 def list_movements(
@@ -779,7 +948,7 @@ def list_movements(
         with con.cursor() as cur:
             cur.execute(sql, tuple(params))
             rows = cur.fetchall()
-    return [_row_to_record(row) for row in rows]
+    return _visible_records(org_id, rows)
 
 
 __all__ = [
@@ -789,11 +958,14 @@ __all__ = [
     "SKIP_NO_BASELINE",
     "SKIP_NO_CURRENT_SIGNALS",
     "SKIP_NO_POST_ACTION_RUN",
+    "SKIP_ACTION_DATE_MISMATCH",
+    "ACTION_INVALIDATED_REASON_REVERSED",
     "MovementMeasurementSkipped",
     "ensure_opportunity_movement_table",
     "get_movement",
     "get_movement_history",
     "get_movements_for_run",
+    "invalidate_movements_for_action_reversal",
     "list_movements",
     "measure_movement",
     "measure_movements_for_run",

@@ -317,6 +317,12 @@ def build_opportunity_outcome_view(
     history = get_movement_history(org_id, opportunity_identity, limit=limit)
     if lifecycle is None and not history:
         return None
+    if (
+        lifecycle is not None
+        and not history
+        and lifecycle.get("state") not in MEASURABLE_STATES
+    ):
+        return None
 
     summaries = [_measurement_summary(record) for record in history]
     latest = summaries[-1] if summaries else None
