@@ -879,3 +879,155 @@ class TestRbacAndTenancy:
         with pytest.raises(MovementMeasurementSkipped) as excinfo:
             _measure(org_b, identity, run)
         assert excinfo.value.reason == SKIP_NOT_ACTIONED
+
+
+# ---------------------------------------------------------------------------
+# 2.0-A2 T6 - outcome surfaces
+# ---------------------------------------------------------------------------
+
+
+class TestOutcomeSurfaces:
+    def test_per_opportunity_numbers_resolve_to_evidence_and_both_runs(self, client):
+        org, identity = _org(), _identity()
+        run = _full_setup(org, identity, current_value=150.0)
+        _attach_projection(org, identity)
+        _measure(org, identity, run)
+
+        response = client.get(f"/api/outcomes/{identity}", headers=_auth(org))
+        assert response.status_code == 200, response.text
+        body = response.json()
+
+        assert body["measurementCount"] == 1
+        measurement = body["latestMeasurement"]
+        assert measurement["baselineRunId"] == "run_baseline"
+        assert measurement["currentRunId"] == run
+        assert measurement["confounderSummary"] is not None
+
+        delta_ref = next(
+            ref for ref in measurement["numberRefs"] if ref["field"] == "delta"
+        )
+        assert delta_ref["value"] == -90
+        evidence = delta_ref["evidence"]
+        assert evidence["baselineRunId"] == "run_baseline"
+        assert evidence["currentRunId"] == run
+        assert evidence["baseline"]["runId"] == "run_baseline"
+        assert evidence["current"]["runId"] == run
+        assert "confounderSummary" in evidence
+
+    def test_portfolio_includes_actioned_unmeasured_rows_and_caveat_aggregate(self, client):
+        org = _org()
+        measured = _identity()
+        pending = _identity()
+        run = _full_setup(org, measured, current_value=150.0)
+        _measure(org, measured, run)
+        _action(org, pending)
+
+        response = client.get("/api/outcomes", headers=_auth(org))
+        assert response.status_code == 200, response.text
+        body = response.json()
+
+        assert body["count"] == 2
+        aggregates = body["aggregates"]
+        assert aggregates["actionedOpportunityCount"] == 2
+        assert aggregates["measurementCount"] == 1
+        assert "caveatedMeasurementCount" in aggregates
+        assert aggregates["caveatedMeasurementCount"] >= 1
+        caveat_ref = next(
+            ref
+            for ref in aggregates["numberRefs"]
+            if ref["id"] == "aggregate:caveatedMeasurementCount"
+        )
+        assert "runPairs" in caveat_ref["evidence"]
+        actioned_ref = next(
+            ref
+            for ref in aggregates["numberRefs"]
+            if ref["id"] == "aggregate:actionedOpportunityCount"
+        )
+        assert len(actioned_ref["evidence"]["lifecycles"]) == 2
+
+        pending_row = next(
+            item for item in body["items"] if item["opportunityIdentity"] == pending
+        )
+        assert pending_row["measurementCount"] == 0
+        assert pending_row["emptyState"]["reason"] == "no_stored_movement"
+
+    def test_outcome_filters_are_aggregate_query_surface(self, client):
+        org, identity = _org(), _identity()
+        run = _full_setup(org, identity, current_value=150.0)
+        _attach_projection(org, identity, pack_id="service_cloud", confidence="HIGH")
+        _measure(org, identity, run)
+
+        response = client.get(
+            "/api/outcomes?projectionVerdict=within_band"
+            "&pack=service_cloud&detector=HANDOFF_FRICTION&confidence=HIGH",
+            headers=_auth(org),
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["aggregates"]["measurementCount"] == 1
+        assert body["filters"]["confidence"] == ["HIGH"]
+
+    def test_outcome_views_are_rbac_gated_and_org_isolated(self, client):
+        org_a, org_b = _org(), _org()
+        identity = _identity()
+        run = _full_setup(org_a, identity)
+        _measure(org_a, identity, run)
+        _seed_member(org_a, VIEWER_TOKEN, role="viewer")
+
+        viewer = client.get("/api/outcomes", headers=_auth(org_a, VIEWER_TOKEN))
+        assert viewer.status_code == 403
+
+        assert client.get(f"/api/outcomes/{identity}", headers=_auth(org_b)).status_code == 404
+        assert client.get("/api/outcomes", headers=_auth(org_b)).json()["count"] == 0
+
+    def test_executive_report_includes_stored_outcome_section(self, client):
+        org, identity = _org(), _identity()
+        run = _full_setup(org, identity, current_value=150.0)
+        _attach_projection(org, identity)
+        _measure(org, identity, run)
+
+        db.upsert_run(
+            run,
+            {
+                "id": run,
+                "org_id": org,
+                "status": "complete",
+                "inputs": {"connectedSources": [], "uploadedFiles": []},
+            },
+        )
+        db.run_kv_set(
+            "executive_report",
+            run,
+            {
+                "confidence": "Moderate",
+                "sourcesAnalyzed": {
+                    "recommendedConnected": 0,
+                    "totalConnected": 0,
+                    "uploadedFiles": 0,
+                    "sampleWorkspaceEnabled": False,
+                },
+                "topQuickWins": [],
+                "snapshotBubbles": [],
+                "roadmapHighlights": {
+                    "next30Count": 0,
+                    "next60Count": 0,
+                    "next90Count": 0,
+                    "blockerCount": 0,
+                },
+            },
+        )
+
+        response = client.get(
+            f"/api/runs/{run}/executive-report",
+            headers=_auth(org),
+        )
+
+        assert response.status_code == 200, response.text
+        section = response.json()["outcomeSection"]
+        assert section["generatedFrom"] == "stored_movement_records"
+        assert section["aggregates"]["measurementCount"] == 1
+        assert section["aggregates"]["caveatedMeasurementCount"] >= 0
+        assert section["numberRefs"]
+        assert section["highlights"][0]["baselineRunId"] == "run_baseline"
+        assert section["highlights"][0]["currentRunId"] == run

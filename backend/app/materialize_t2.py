@@ -652,6 +652,8 @@ def run_trackb_and_persist(
             raise
         except Exception as e:
             errors["exec_report"] = str(e)
+            from .outcome_surfaces import build_empty_outcome_report_section
+
             db.run_kv_set(
                 "executive_report",
                 run_id,
@@ -672,6 +674,7 @@ def run_trackb_and_persist(
                     "topQuickWins": [],
                     "snapshotBubbles": [],
                     "roadmapHighlights": [],
+                    "outcomeSection": build_empty_outcome_report_section(run_id),
                 },
             )
 
@@ -840,6 +843,20 @@ def run_trackb_and_persist(
         except Exception as e:  # noqa: BLE001
             errors["opportunity_movement"] = str(e)
             logger.warning("Movement measurement failed (non-blocking): %s", e)
+
+        # 2.0-A2 T6: store the report outcome section from movement artifacts.
+        try:
+            from .outcome_surfaces import build_executive_outcome_section
+
+            _exec_report = db.run_kv_get("executive_report", run_id, {}) or {}
+            _exec_report["outcomeSection"] = build_executive_outcome_section(
+                run_org_id,
+                run_id,
+            )
+            db.run_kv_set("executive_report", run_id, _exec_report)
+        except Exception as e:  # noqa: BLE001
+            errors["outcome_section"] = str(e)
+            logger.warning("Outcome report section failed (non-blocking): %s", e)
 
         # 2.0-A1 — intervention projection (non-blocking). See the helper
         # docstring: runs after temporal enrichment, stamps provenance, and

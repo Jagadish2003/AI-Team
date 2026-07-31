@@ -12,6 +12,8 @@ import TopQuickWins from "../components/opportunity_map/TopQuickWins";
 import OpportunityRankedList from "../components/opportunity_map/OpportunityRankedList";
 import OpportunityDetail from "../components/analyst_review/OpportunityDetail";
 import ReasoningOverride from "../components/analyst_review/ReasoningOverride";
+import OutcomePortfolioPanel from "../components/outcomes/OutcomePortfolioPanel";
+import OpportunityOutcomePanel from "../components/outcomes/OpportunityOutcomePanel";
 import { Skeleton } from "../components/common/Skeleton";
 import ErrorPanel from "../components/common/ErrorPanel";
 import { RunRequiredEmptyState } from "../components/common/RunRequiredEmptyState";
@@ -110,6 +112,8 @@ export default function OpportunityReviewPage() {
     () => filtered.find((o) => o.id === selectedId) || null,
     [filtered, selectedId],
   );
+  const selectedOutcomeIdentity =
+    selected?.opportunity_identity ?? selected?.identifier ?? selected?.id ?? null;
 
   const blueprintAction = selected ? (
     <div
@@ -262,6 +266,14 @@ export default function OpportunityReviewPage() {
             )}
           </section>
         )}
+
+        {selected && (
+          <OpportunityOutcomePanel opportunityIdentity={selectedOutcomeIdentity} />
+        )}
+
+        <div className="mt-4">
+          <OutcomePortfolioPanel />
+        </div>
 
         <div className="mt-4 grid grid-cols-1 gap-4 lg:h-[460px] lg:grid-cols-3 lg:items-stretch">
           <TopQuickWins

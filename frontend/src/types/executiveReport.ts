@@ -1,4 +1,5 @@
 import type { OpportunityCandidate } from './analystReview';
+import type { OutcomeReportSection } from './outcome';
 
 export type ExecutiveReportConfidence = 'High' | 'Moderate' | 'Low';
 
@@ -32,4 +33,5 @@ export interface ExecutiveReport {
   snapshotBubbles: ExecutiveSnapshotBubble[];
   roadmapHighlights: ExecutiveRoadmapHighlights;
   aiExecutiveSummary?: string;
+  outcomeSection?: OutcomeReportSection;
 }

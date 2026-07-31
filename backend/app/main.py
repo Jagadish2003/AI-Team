@@ -82,6 +82,7 @@ from .routes_secops_evidence import register_secops_evidence_routes
 from .routes_opportunity_lifecycle import register_opportunity_lifecycle_routes
 from .routes_opportunity_baseline import register_opportunity_baseline_routes
 from .routes_opportunity_movement import register_opportunity_movement_routes
+from .routes_outcomes import register_outcome_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
@@ -371,6 +372,9 @@ register_opportunity_baseline_routes(app)
 # 2.0-A2 T3: read-only post-action movement records (baseline vs current, with a
 # comparability verdict and both run ids). Measured by the pipeline, never on read.
 register_opportunity_movement_routes(app)
+# 2.0-A2 T6: customer-facing outcome surfaces, assembled from stored lifecycle and
+# movement artifacts with caveat counts and run-id evidence.
+register_outcome_routes(app)
 
 origins = [
     o.strip()
@@ -948,6 +952,16 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
     er = run_kv_get("executive_report", run_id, None)
 
     if er:
+        if isinstance(er, dict) and "outcomeSection" not in er:
+            from .outcome_surfaces import build_executive_outcome_section
+
+            er = {
+                **er,
+                "outcomeSection": build_executive_outcome_section(
+                    get_current_org_id(),
+                    run_id,
+                ),
+            }
         return apply_run_terminology(with_exec_report_display_titles(er), run_id)
 
     inputs = run.get("inputs") or {}
@@ -985,6 +999,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
 
     opps = scrub_opportunity_narratives(opps)
     quick_wins = [o for o in opps if o.get("tier") == "Quick Win"]
+    from .outcome_surfaces import build_executive_outcome_section
 
     return apply_run_terminology(
         {
@@ -998,6 +1013,10 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
                 "next90Count": sum(1 for o in opps if o.get("tier") == "Complex"),
                 "blockerCount": 0,
             },
+            "outcomeSection": build_executive_outcome_section(
+                get_current_org_id(),
+                run_id,
+            ),
         },
         run_id,
     )
