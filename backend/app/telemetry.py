@@ -591,6 +591,63 @@ class IngestionArtifactSkippedPayload(TypedDict, total=False):
     observed_at: NotRequired[str]
 
 
+class IngestionCompletedPayload(TypedDict, total=False):
+    """ingestion.completed — the CONNECTOR-AGNOSTIC ingestion-completion fact.
+
+    Emitted once per successful pass of the SHARED change-based ingestion runner
+    (``discovery/ingest/change_runner.py::ingest_with_checkpoint``) — the single
+    completion path every ``ChangeBasedIngestor`` already travels.
+
+    Why a new event type was needed. The Run-Health connectors panel
+    (``app/health_aggregation.py``) reads "last successful ingestion" from exactly
+    two places, and NEITHER covers a change-based connector:
+
+      * ``db.ingestor_completed`` — emitted only by the native DB ingestors. Its
+        payload is DB-shaped (query_count / signal_count / degraded_count) and the
+        panel derives ``last_error`` from its ``degraded_count``, so a non-DB
+        connector borrowing it would inject false meaning into the error column.
+      * the ``lastSynced`` display string — written by ``app/connector_metrics.py``
+        for the three hardcoded ids salesforce / servicenow / jira_confluence.
+
+    The other candidates were checked and rejected: ``ingestion.artifact_changed``
+    is per-RECORD and suppressed entirely for a transport-only connector
+    (``produces_retrieval_content = False``) and for any empty delta, so it cannot
+    witness a completed pass; and the ingestion checkpoint's ``captured_at`` is
+    already surfaced separately as ``checkpoint_captured_at`` /
+    ``checkpoint_age_seconds`` (rendered as its own two facts) and only advances
+    when the position MOVES, so an idle-but-healthy connector would report a stale
+    ingestion time and trip the stalled-checkpoint rule.
+
+    Success is the runner's OWN definition — no captured error on the pass
+    (``IngestionResult.error is None``). A pass that polled cleanly and found
+    nothing new IS a successful ingestion and is reported as one: gating on
+    ``count > 0`` would leave an idle connector indistinguishable from one that
+    never ran.
+
+    Fire-and-forget by contract: a telemetry failure must never break ingestion.
+    Secret-free — identifiers and counts only, never a credential, a checkpoint
+    value, or record content.
+
+    org_id:              The org the ingestion belongs to (required for attribution).
+    connector_id:        The ingestor's declared id (e.g. 'azure_events') — the same
+                         key the runner checkpoints by and the panel joins on.
+    count:               Records reported across the pass (0 is meaningful).
+    batches:             Delta batches processed.
+    complete:            Whether the source reported a terminal batch.
+    checkpoint_advanced: Whether a checkpoint was written this pass.
+    first_run:           Whether this was a first (full-load) pass.
+    observed_at:         When the pass completed (UTC ISO), when available.
+    """
+    org_id: str
+    connector_id: str
+    count: NotRequired[int]
+    batches: NotRequired[int]
+    complete: NotRequired[bool]
+    checkpoint_advanced: NotRequired[bool]
+    first_run: NotRequired[bool]
+    observed_at: NotRequired[str]
+
+
 # R16-D1 / AT-366 (T5) — model provider gateway telemetry.
 # Emitted once per gateway generate()/embed() call so model usage is observable
 # across hosted, in-boundary, and future customer-tenant modes. The provider
@@ -994,6 +1051,14 @@ register_event_type("ingestion.subscription_health", IngestionSubscriptionHealth
 # raises ValueError for an unregistered type, so registration must precede the
 # first emission.
 register_event_type("ingestion.artifact_skipped", IngestionArtifactSkippedPayload)
+# The connector-agnostic ingestion-completion fact, emitted by the SHARED
+# change-based runner so every ChangeBasedIngestor (and every future one) reports
+# "Last ingestion" to Run Health without per-connector code. Deliberately NOT
+# db.ingestor_completed — see the payload docstring for why that event and the
+# other existing candidates are unsuitable. Registered here because record_event()
+# raises ValueError for an unregistered type, so registration must precede the
+# first emission.
+register_event_type("ingestion.completed", IngestionCompletedPayload)
 # R16-D1 / AT-366 (T5) — model provider gateway telemetry. Registered here so
 # the gateway's generate()/embed() paths can emit them; record_event() raises
 # ValueError for an unregistered type, so registration must land before any
