@@ -54,6 +54,31 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
             "requiredConcepts":   ["case_workflow"],
             "optionalConcepts":   ["cross_system_link"],
         },
+        # 2.0-C2 T1 (AT-831): certification metadata. Signed by CloudFulcrum — see
+        # CERTIFICATION_KEY above and pack_certification.py.
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "Service Cloud detectors, evidence discipline, Salesforce "
+                    "service terminology, and scorer calibration."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "Qfv6UmzZjcHillO69QwDAd/ii6IMzEug53F00N/fSQ+fAMwulKsSRSOBcSBTEYaiVohWe7otgQY9uZxpPI0pBg==",
+            },
+        },
         "detectors": [
             "discovery.detectors.repetition",
             "discovery.detectors.handoff_friction",
@@ -81,6 +106,31 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
             "maxPlatformVersion": None,
             "requiredConcepts":   ["loan_origination_workflow"],
             "optionalConcepts":   ["case_workflow", "cross_system_link"],
+        },
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "nCino lending detectors, evidence discipline, banking "
+                    "terminology, scorer calibration, and the no-automated-credit"
+                    "-decision compliance guardrail."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                    "compliance_guardrails",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "ov5cfGllurB91X864BzTM0URZeSKzgUdZsmCDI1qrxtCAUKTcuPtP0gxzud0E+y5TgiNAhLmUaL/1zqIInfSDA==",
+            },
         },
         "detectors": [
             "discovery.detectors.loan_origination_routing_friction",
@@ -115,6 +165,31 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
             # STRS corroborates against Jira/ServiceNow when connected.
             "optionalConcepts":   ["cross_system_link"],
         },
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "STRS benefit-administration detectors, evidence discipline, "
+                    "member-services terminology, scorer calibration, and the "
+                    "no-automated-benefit-decision compliance guardrail."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                    "compliance_guardrails",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "msWGygHbpWAhbsLU7z6Wt6QiGIHxxAxSkmf5Gs2+OAah5/UZn5oGsNLPpQxzybLgZ7iKigsnlsL7QqkhtAVpAg==",
+            },
+        },
         "detectors": [
             "discovery.detectors.application_stall",
             "discovery.detectors.benefit_election_deadline",
@@ -145,6 +220,29 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
             "maxPlatformVersion": None,
             "requiredConcepts":   ["db_operational_signal"],
             "optionalConcepts":   ["cross_system_link"],
+        },
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "SQL Server operational-signal detectors, evidence discipline, "
+                    "IT-operations terminology, and scorer calibration."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "EMx21tys0xShGqHjCnHKNTGpALIna5HprJnHRwCdp2GgjbiDfowWaxTovvm7lDHeHvNv0qa1mZoD/y/3fuM7BQ==",
+            },
         },
         "detectors": [
             "discovery.detectors.db_ticket_volume_surge",
@@ -180,6 +278,31 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
             # Jira corroboration elevates PR-bottleneck confidence when present.
             "optionalConcepts":   ["cross_system_link"],
         },
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "GitHub engineering-signal detectors, evidence discipline, "
+                    "engineering-operations terminology, scorer calibration, and "
+                    "the no-automated-merge compliance guardrail."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                    "compliance_guardrails",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "dZhxwl9WMMFeUJLIt38ZNs8TgeaYLPJs7FFm2T7gRgNmwoamd2PQkG18NVu0fLXmNdu/KegpAAzqB75rplVODQ==",
+            },
+        },
         "detectors": [
             "discovery.detectors.github_pr_bottleneck",
             "discovery.detectors.github_commit_concentration",
@@ -212,6 +335,30 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
             "maxPlatformVersion": None,
             "requiredConcepts":   ["incident_workflow", "cross_system_link"],
             "optionalConcepts":   [],
+        },
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "Cross-system enterprise-operations detectors, evidence "
+                    "discipline, operations-leadership terminology, and scorer "
+                    "calibration."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "tBhUu0oy7tJeCMBDn8Ummb5Bmb7gDiJoTCimslXZ1xnfovNbGQb96aFjXVx7zOOW7EIvAPzs+Q/O/7UT0McSAQ==",
+            },
         },
         "detectors": [
             "discovery.detectors.ent_incident_resolution_lag",
@@ -259,6 +406,31 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
                 "operational_event",
             ],
             "optionalConcepts": ["cmdb_dependency", "runbook_match"],
+        },
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "Cloud-operations detectors, the MSP-B6 four-part finding "
+                    "contract and causal gate, NOC terminology, and the "
+                    "config-driven ops-impact scorer calibration."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                    "aggregation_floor",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "v8EJRihCPB8BuJOj+sRGl0zVPifpVUwIJgUpprWg0UEyzzRJ8pN0wkMkZi6S7yLdrUN8UTt/4Z6jhE4K8zKAAQ==",
+            },
         },
         # MSP-B6 T2 (AT-737) record/stream detectors + T3 (AT-738) shared-CI hotspot.
         "detectors": [
@@ -343,6 +515,31 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         # MSP-B12 T2 (Section 1) detectors — consume only MSP-B11's SecOps workflow
         # signal (sn_data['secops'] / ['vulnerability_response']) + B3's
         # sn_data['cmdb']. Invoked via the runner's uniform pack-dispatch branch.
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "Security-operations detectors, evidence discipline, SecOps "
+                    "terminology, scorer calibration, and the MSP-B11 aggregation "
+                    "floor that forbids host x vulnerability enumeration."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                    "aggregation_floor",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "PyXpslUI87jVdYfJ7MaQ6Fr+U0vWAse5X7bCwbKWeVdEUFxRQH5MSYNwzqMvm0BaEMX/5/f4x2RfkaAlbV4hAg==",
+            },
+        },
         "detectors": [
             "discovery.detectors.security_ops_remediation_recurrence",
             "discovery.detectors.security_ops_security_it_pingpong",
@@ -454,6 +651,46 @@ COMPATIBILITY_KEY = "compatibility"
 # longer has. Only config-driven packs (cloud_ops, security_ops) can currently
 # declare history; a code-only pack would have to externalise its calibration first.
 VERSION_HISTORY_KEY = "versionHistory"
+
+# 2.0-C2 T1 (AT-831): the registry key each pack declares its certification under.
+# Shape (see pack_certification.py for the vocabulary and the verification rules):
+#
+#   "certification": {
+#       "level":                          "certified" | "partner" | "community",
+#       "certifyingEntity":               "CloudFulcrum",
+#       "reviewDate":                     "2026-07-31",       # ISO date of the review
+#       "reviewedAgainstPlatformVersion": "2.0.0",            # platform capability version
+#       "scope": {
+#           "summary":  "what the review covered",
+#           "criteria": ["evidence_discipline", ...],         # AT-832's checklist ids
+#       },
+#       "signature": {                    # required for certified/partner ONLY
+#           "keyId":     "cloudfulcrum-pack-signing-2026",
+#           "algorithm": "ed25519",
+#           "value":     "<base64 signature over the canonical payload>",
+#       },
+#   }
+#
+# The signature is what stops the label being self-applied: everything above except
+# the signature block itself is inside the signed payload, so no field can be edited
+# after issuance without invalidating it. A certified/partner claim that does not
+# verify is reported as community, with the reason named.
+#
+# As with COMPATIBILITY_KEY, the gate lives elsewhere (pack_certification.py) and this
+# module stays the declaration surface.
+CERTIFICATION_KEY = "certification"
+
+# Fallback for a pack that declares no certification block. Community is the honest
+# default: an undeclared pack has not been reviewed by anybody, and community is
+# precisely the label for that — so the absence of a declaration is never an error.
+DEFAULT_PACK_CERTIFICATION: Dict[str, Any] = {
+    "level": "community",
+    "certifyingEntity": "",
+    "reviewDate": "",
+    "reviewedAgainstPlatformVersion": "",
+    "scope": {"summary": "", "criteria": []},
+    "signature": {"keyId": "", "algorithm": "", "value": ""},
+}
 
 # Fallback for a pack that has not declared a "compatibility" block. Deliberately
 # PERMISSIVE (no bounds, no required concepts) so an undeclared pack behaves
@@ -589,6 +826,78 @@ def get_pack_compatibility_declaration(
         "maxPlatformVersion": _bound("maxPlatformVersion"),
         "requiredConcepts": _concepts("requiredConcepts"),
         "optionalConcepts": _concepts("optionalConcepts"),
+    }
+
+
+def get_pack_certification_declaration(
+    pack_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return a pack's declared certification block (2.0-C2 T1 / AT-831).
+
+    Always returns a complete, normalised block: a pack that declares nothing (or a
+    partial block) is filled from ``DEFAULT_PACK_CERTIFICATION``, so callers never
+    handle a missing key — an undeclared pack reads as ``community``, which is the
+    honest label for "nobody has vouched for this".
+
+    Normalisation is deliberately conservative and lossless-in-shape, because the
+    result is the input to the SIGNED payload: strings are stripped, the level is
+    lower-cased, and ``scope.criteria`` is de-duplicated order-preservingly. Nothing
+    is invented or defaulted into a signed field — an absent value stays empty, so a
+    signature can never cover something the pack did not actually declare.
+
+    Resolution follows ``get_pack()``, so an unknown pack id reads the DEFAULT pack's
+    certification, exactly as it reads its detectors.
+    """
+    declared = get_pack(pack_id).get(CERTIFICATION_KEY) or {}
+    if not isinstance(declared, dict):
+        declared = {}
+
+    def _string(source: Dict[str, Any], key: str) -> str:
+        raw = source.get(key)
+        return raw.strip() if isinstance(raw, str) else ""
+
+    scope_raw = declared.get("scope")
+    if not isinstance(scope_raw, dict):
+        scope_raw = {}
+    criteria_raw = scope_raw.get("criteria")
+    if isinstance(criteria_raw, str):
+        criteria_raw = [criteria_raw]
+    if not isinstance(criteria_raw, (list, tuple)):
+        criteria_raw = []
+    seen: set[str] = set()
+    criteria: List[str] = []
+    for entry in criteria_raw:
+        if not isinstance(entry, str):
+            continue
+        item = entry.strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        criteria.append(item)
+
+    signature_raw = declared.get("signature")
+    if not isinstance(signature_raw, dict):
+        signature_raw = {}
+
+    return {
+        "level": (
+            _string(declared, "level").lower()
+            or DEFAULT_PACK_CERTIFICATION["level"]
+        ),
+        "certifyingEntity": _string(declared, "certifyingEntity"),
+        "reviewDate": _string(declared, "reviewDate"),
+        "reviewedAgainstPlatformVersion": _string(
+            declared, "reviewedAgainstPlatformVersion"
+        ),
+        "scope": {
+            "summary": _string(scope_raw, "summary"),
+            "criteria": criteria,
+        },
+        "signature": {
+            "keyId": _string(signature_raw, "keyId"),
+            "algorithm": _string(signature_raw, "algorithm").lower(),
+            "value": _string(signature_raw, "value"),
+        },
     }
 
 

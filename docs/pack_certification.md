@@ -1,0 +1,204 @@
+# Pack Certification Levels — 2.0-C2
+
+Read this before adding a pack, changing certification metadata, rotating the signing
+key, or writing any code that reads a pack's certification level.
+
+This document currently covers **T1 (AT-831) — certification metadata**. The internal
+review workflow (AT-832), surfacing (AT-833), org policy control (AT-834), and
+date-based expiry (AT-835) are separate tasks that build on what is described here;
+sections will be added as they land.
+
+---
+
+## 1. What a certification is
+
+Three levels, ordered:
+
+| Level | Label | Meaning |
+|---|---|---|
+| `certified` | **CloudFulcrum Certified** | Authored and reviewed by CloudFulcrum. |
+| `partner` | **Partner** | Authored by a partner, reviewed and signed by CloudFulcrum. |
+| `community` | **Community** | Self-declared. Nobody has vouched for it. |
+
+`community` is deliberately the **un-signed** level. It is the honest label for "nobody
+has reviewed this", so requiring proof to claim it would be backwards — a community
+pack self-declares, and that *is* the badge.
+
+## 2. Why a signature
+
+Certification is a claim about *who reviewed this pack*. With partner-authored packs
+coming (2.0-C3), the manifest is supplied by the party being vouched for — so an
+unsigned `"level": "certified"` string is worth exactly nothing, because the author
+would be certifying themselves.
+
+The metadata is therefore signed with an Ed25519 key whose **private half never
+ships**, and the platform verifies against the **public half** that does. That is the
+whole mechanism behind 2.0-C2 AC1:
+
+> Certification metadata is signature-verified; a pack claiming Certified without a
+> valid signature is treated as Community.
+
+Note what a failed verification does *not* do: it does not erase the claim. The
+declared level is preserved and reported alongside the effective one, because
+"claims Certified, could not be verified" is far more useful to a reviewer — and to a
+security team reading an export — than a silently rewritten field.
+
+## 3. What is declared
+
+Each pack declares a `certification` block in `PACK_REGISTRY`
+(`discovery/packs/pack_config.py`), read through
+`get_pack_certification_declaration()`, which always returns a complete normalised
+block:
+
+```python
+"certification": {
+    "level":                          "certified",
+    "certifyingEntity":               "CloudFulcrum",
+    "reviewDate":                     "2026-07-31",
+    "reviewedAgainstPlatformVersion": "2.0.0",
+    "scope": {
+        "summary":  "Cloud-operations detectors, the MSP-B6 four-part finding "
+                    "contract and causal gate, NOC terminology, and the "
+                    "config-driven ops-impact scorer calibration.",
+        "criteria": ["declarative_manifest_review", "evidence_discipline",
+                     "terminology", "calibration_sanity", "aggregation_floor"],
+    },
+    "signature": {
+        "keyId":     "cloudfulcrum-pack-signing-2026",
+        "algorithm": "ed25519",
+        "value":     "<base64 signature over the canonical payload>",
+    },
+}
+```
+
+A pack that declares **nothing** reads as `community` with empty metadata — the
+absence of a declaration is never an error, it is an accurate statement.
+
+Normalisation is conservative on purpose, because its output is the input to the
+signed payload: strings are stripped, the level is lower-cased, `scope.criteria` is
+de-duplicated order-preservingly, and **nothing is invented or defaulted into a signed
+field**. A signature can never cover something the pack did not actually declare.
+
+## 4. What is signed — and what deliberately is not
+
+The signature covers the canonical JSON (sorted keys, no insignificant whitespace,
+UTF-8) of `certification_payload()`:
+
+```
+payloadVersion, packId, level, certifyingEntity, reviewDate,
+reviewedAgainstPlatformVersion, scope{summary, criteria}
+```
+
+Every reader-facing field is inside it, so none can be edited after issuance without
+invalidating the badge — including `packId`, so a valid signature cannot be copied
+from one pack onto another.
+
+**`packVersion` is deliberately NOT signed.** A certification is a statement about a
+reviewed pack and its criteria; binding it to a version string would invalidate every
+signature on a patch bump, turning routine maintenance into a re-issuance ceremony —
+which in practice trains people to disable the check. Version-scoped review lands
+where it belongs, on the review date and the reviewed-against platform version
+(§6).
+
+`payloadVersion` (`agentiq-pack-certification-v1`) is inside the signature so a future
+payload shape cannot be replayed against this one. Bump it alongside any payload-shape
+change, and re-issue.
+
+## 5. Verification — fail closed, every time
+
+`get_pack_certification(pack_id)` returns a `PackCertification` and **never raises**;
+the verdict is the return value. Every failure path downgrades to `community` with a
+distinct, named reason:
+
+| Reason | When |
+|---|---|
+| `invalid_level` | Declared level is not one of the three. |
+| `missing_certification_metadata` | A signature-required level omitted entity / review date / reviewed-against version — or claimed `certified` without naming CloudFulcrum as the certifying entity. |
+| `signature_missing` | Certified/Partner claimed with no signature at all — the self-applied case. |
+| `signature_malformed` | Signature or key material is not valid base64 / not a usable key. |
+| `signature_unknown_key` | Signed by a key this platform does not trust. |
+| `signature_unsupported_algorithm` | Anything other than `ed25519`. |
+| `signature_invalid` | Trusted key, right algorithm, and the signature does not match the metadata. |
+| `signature_backend_unavailable` | No crypto backend importable. |
+
+That last one matters: an environment that *cannot* verify has not verified. There is
+no path where an unverifiable claim keeps its badge.
+
+## 6. Review due
+
+A certification records the platform capability version it was reviewed against.
+`PackCertification.review_due` reports when the running platform has moved past it at
+**MAJOR.MINOR** granularity.
+
+The badge is **flagged, not revoked** — the signature is still valid and the level is
+still reported; the pack is additionally marked as due for review, rather than
+silently retaining a badge earned against a platform that no longer exists (2.0-C2's
+fifth deliverable). Patch-level platform movement does not trigger it: a patch does
+not change the capability surface a pack was reviewed against, and flagging it would
+make the signal noise, which trains reviewers to ignore it.
+
+A `community` pack is never "review due" — it was never reviewed, and saying otherwise
+would imply a badge it does not have. A pack whose claim was *downgraded* is community
+for the same reason.
+
+Date-based expiry is 2.0-C2 T5's concern; this layer supplies the `reviewDate` it will
+read.
+
+## 7. Trust anchors and rotation
+
+`CLOUDFULCRUM_SIGNING_KEYS` in `discovery/packs/pack_certification.py` holds the
+trusted **public** keys, `{keyId: base64 raw ed25519 public key}`. A deployment may
+add anchors via `PACK_CERTIFICATION_TRUSTED_KEYS` (a JSON object of the same shape) —
+public keys only, never a credential. A built-in key id present in that map is
+**ignored with a warning**: an operator may add trust, never silently substitute
+CloudFulcrum's, because that would make the badge meaningless.
+
+Rotation is additive:
+
+1. `python scripts/sign_pack_certifications.py --generate-key` → store the private
+   seed in secrets management; add the public key under a **new** key id.
+2. Re-issue every signature with the new key
+   (`PACK_CERTIFICATION_SIGNING_KEY=<seed> ... --sign`) and paste the values into the
+   registry.
+3. Retire the old key id in a later release, once nothing references it.
+
+**The private key is never in this repository, in a `.env`, or in a deployment.**
+Signing lives in `backend/scripts/sign_pack_certifications.py` — release tooling, not
+part of the running application. The application imports only the verification path.
+
+## 8. Changing certification metadata
+
+Editing any signed field invalidates the signature, and the pack immediately reads as
+Community — loudly, with a `WARNING` and a named reason, and the structural test in
+§9 fails the build. That is the intended behaviour, not an obstacle: metadata that
+changed after review has, by definition, not been reviewed.
+
+So the workflow for a metadata change is: change it, have it reviewed, re-issue the
+signature with the release key, and commit both in one diff.
+
+```bash
+cd backend
+python scripts/sign_pack_certifications.py --show cloud_ops   # what would be signed
+PACK_CERTIFICATION_SIGNING_KEY=<base64 seed> \
+    python scripts/sign_pack_certifications.py --sign         # packId -> signature
+python scripts/sign_pack_certifications.py --check            # verify the result
+```
+
+`--sign` prints signatures rather than rewriting source: a signature landing in the
+tree should be a reviewed diff, not a side effect of running a script.
+
+## 9. Tests
+
+[`backend/discovery/tests/test_pack_certification.py`](../backend/discovery/tests/test_pack_certification.py)
+(43 tests), pure-Python and offline. Two halves:
+
+* **Structural** — every registered pack declares a complete certification block,
+  every shipped signature verifies against the shipped anchor, every certified pack
+  names CloudFulcrum, and no shipped pack is review-due on the current
+  `PLATFORM_VERSION`. These fail the build if a future pack ships an unsigned or
+  edited claim, instead of letting the downgrade surface in front of a customer.
+* **Behavioural** — AC1 walked from both ends: a genuine badge survives, and each of
+  the failure modes in §5 downgrades to Community with its named reason. Editing any
+  signed field (including the scope, and including copying a valid signature onto
+  another pack) invalidates it. The signing tests mint an **ephemeral** key pair, so
+  CI never needs the release private key.

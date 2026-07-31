@@ -316,6 +316,37 @@ posture per provider.
 
 ---
 
+## Pack Certification Signing Keys (2.0-C2 / AT-831)
+
+Every discovery pack carries certification metadata — level (`CloudFulcrum Certified`
+/ `Partner` / `Community`), certifying entity, review date, reviewed-against platform
+version, and the certification's scope — **cryptographically signed by CloudFulcrum**
+for the Certified and Partner levels, so the label cannot be self-applied. A pack that
+claims a level it cannot prove is served as `Community`, with the reason named.
+
+**Nothing secret is deployed.** The platform only ever *verifies*: the trusted
+**public** keys ship in `discovery/packs/pack_certification.py`
+(`CLOUDFULCRUM_SIGNING_KEYS`). The private half is release signing key material held
+in CloudFulcrum's secrets management and must never reach a deployment, this
+repository, or a `.env` file.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `PACK_CERTIFICATION_TRUSTED_KEYS` | No | JSON object of **additional** trust anchors, `{"keyId": "<base64 raw ed25519 public key>"}`. Public keys only. Used for a signing-key rotation that must land without a code deploy, and by pack authors trusting their own development key locally. A built-in CloudFulcrum key id can never be overridden from the environment — the entry is ignored with a warning. |
+
+Verify a deployment's packs at any time (exit code is non-zero if any badge fails):
+
+```bash
+cd backend
+python scripts/sign_pack_certifications.py --check
+```
+
+Re-issuing signatures (after editing certification metadata, or on key rotation) is a
+release activity performed by the key holder — see
+[`docs/pack_certification.md`](../docs/pack_certification.md).
+
+---
+
 ## Login Rate Limiting (AUTH-1)
 
 AUTH-1 adds a `login_attempts` table (created by Alembic migration `0004`) that backs
