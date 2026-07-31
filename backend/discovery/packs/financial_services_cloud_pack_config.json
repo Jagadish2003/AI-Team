@@ -1,0 +1,137 @@
+{
+  "_meta": {
+    "story": "2.0-D1 T2",
+    "description": "Financial Services Cloud pack configuration — detector firing thresholds, aggregation floor, terminology, and scorer calibration. Loaded by financial_services_cloud_config.py; no detector logic lives here.",
+    "calibration_status": "PROVISIONAL - NOT DERIVED FROM MEASURED FSC DATA",
+    "note": "Every number under 'thresholds' is an ENGINEERING PLACEHOLDER. There is no measured FSC dataset in this deployment and these values were not derived from one. They are externalised precisely so that replacing them is a config edit rather than a hunt through detector bodies. Passing AC1 (four detectors firing on a seeded estate) does NOT validate these numbers — the seed and the thresholds were authored together, so the test proves the wiring, not the calibration.",
+    "replace_when": "SME-supplied firing boundaries land, or a real FSC org is measured. Bump packVersion in BOTH this file and pack_config.py when any threshold changes.",
+    "sme_dependencies": [
+      "How many repeats on a household/service-process type constitutes a recurrence",
+      "How many team hops is friction vs. normal referral routing",
+      "Normal vs. abnormal approval/review dwell time in FSC servicing",
+      "Expected turnaround per service-process type (queue ageing baseline)",
+      "What duplicate-maintenance rate across FSC objects is abnormal",
+      "Whether a household is a safe aggregation unit and its minimum size"
+    ]
+  },
+
+  "packVersion": "1.2.0",
+
+  "terminology": {
+    "_note": "Machine-readable FSC vocabulary. The glossary keys MUST match the _terminology keys in financial_services_cloud_ui_labels.json — a contract test pins this so the two cannot drift. User-visible strings live in the label file, not here.",
+    "glossary": {
+      "household": "The FSC Account record grouping a client family and its members — the unit FSC servicing work is aggregated to. Never an individual client.",
+      "relationship_group": "An FSC Relationship Group linking related households, members, and their roles — the breadth dimension for servicing friction.",
+      "financial_account": "An FSC Financial Account (deposit, card, loan, investment) held by a household, with its Financial Account Roles.",
+      "service_process": "The FSC Service Process / Action Plan record type that carries a servicing request through intake, review, approval, and fulfilment stages.",
+      "referral": "An FSC Referral routed between banking, lending, and wealth teams — the cross-team handoff surface.",
+      "service_queue": "The team-owned queue a service process or referral waits in between stages.",
+      "review_cycle": "A compliance, suitability, or supervisory review step on a service process — always a human decision."
+    },
+    "_language_map_note": "Generic -> FSC word substitutions applied to narrative fields at serve time. EVERY entry must be IDEMPOTENT: app/terminology.py substitutes whole words, so a mapping whose replacement CONTAINS its source double-expands text that already uses the domain phrase. 'account' -> 'financial account' and 'handoff' -> 'referral handoff' were removed for that reason — this pack's own labels already say 'financial account' and 'referral handoffs', and the rewrite was producing 'financial financial account' and 'referral referral handoffs' on every served finding, roadmap entry and executive report. A contract test pins idempotency and pins this map against the template's terminology.",
+    "language_map": {
+      "customer": "household",
+      "ticket": "service process",
+      "backlog": "service queue"
+    }
+  },
+
+  "aggregation": {
+    "_note": "The AC5 aggregation floor, as config rather than detector-body convention. FSC data is dense with person-level fields (relationship managers, household members, case owners), so the floor is declared here and enforced by fsc_finding.py.",
+    "permitted_units": ["service_process_type", "referral_type", "review_type", "queue", "team", "object_pair"],
+    "forbidden_units": ["individual", "household_member", "case_owner", "relationship_manager", "advisor"],
+    "emit_household_names": false,
+    "min_household_size": 2,
+    "household_reference_form": "record_id_only",
+    "household_rationale": "A household NAME ('the Smith Household') identifies a family and, for a single-member household, an individual. Detectors therefore emit household COUNTS in evidence and opaque record-id POINTERS in source_trace — never a household name. min_household_size is carried for the SME/compliance ruling that is still outstanding."
+  },
+
+  "scope": {
+    "_note": "The RECORD TYPES and PICKLIST VALUES the ingest branches on. These are ORG-CONFIGURABLE in Salesforce: a customer's FSC org may name its service-process record type anything, and its Case status picklist is theirs to define. Confirming the real values requires records from a live FSC org (an outstanding SME dependency), so they are declared here rather than hardcoded — a customer whose org differs is a config edit, not a code change. An unmatched record type is COUNTED as unresolved and excluded from scope, never assumed in-scope.",
+    "service_process_record_types": ["Service_Process", "Service_Request", "ActionPlan"],
+    "household_record_types": ["IndustriesHousehold", "Household"],
+    "closed_statuses": ["closed", "closed_resolved", "resolved", "cancelled", "canceled"],
+    "closed_status_rationale": "The CLOSED set is matched rather than the open set, so an unrecognised org-specific status reads as OPEN — the conservative direction for an ageing detector, which would otherwise silently under-report."
+  },
+
+  "thresholds": {
+    "_note": "PROVISIONAL detector firing boundaries — see _meta.note. Read by the five FSC detectors via financial_services_cloud_config.get_detector_thresholds(); no detector logic lives here.",
+    "servicing_request_recurrence": {
+      "min_recurrence_count": 4,
+      "min_distinct_financial_accounts": 2,
+      "window_days": 90,
+      "_basis": "PROVISIONAL. Composed from repetition.py's reuse shape (MIN_VOLUME/ELEMENT_THRESHOLD), rescaled from org-wide flow volume to per-service-process-type recurrence. Not measured."
+    },
+    "referral_handoff_friction": {
+      "min_hops": 3,
+      "min_referrals": 3,
+      "min_avg_hops": 1.5,
+      "_basis": "PROVISIONAL. min_avg_hops carries handoff_friction.py's THRESHOLD=1.5 forward unchanged. min_referrals is 3 rather than that detector's MIN_CASES=50 because the unit here is a referral TYPE (a team-pair route), of which an org has a handful, not an org-wide case population — 50 would mean the detector never fires. This rescaling is engineering judgement, NOT measurement, and is exactly the kind of number the SME calibration ask must replace."
+    },
+    "approval_review_cycle": {
+      "dwell_days_threshold": 5.0,
+      "severe_dwell_days": 10.0,
+      "min_pending": 3,
+      "_basis": "PROVISIONAL. Sits between approval_delay.py (DELAY 3.0d / SEVERE 7.0d) and approval_bottleneck.py (CYCLE 7d), widened because FSC servicing reviews include compliance and suitability steps that are legitimately slower than a Service Cloud approval."
+    },
+    "service_queue_ageing": {
+      "baseline_departure_pct": 0.25,
+      "min_baseline_runs": 3,
+      "min_open_count": 5,
+      "_basis": "PROVISIONAL. Carries the cloud_ops queue_ageing values forward (baseline_departure_pct 0.25, min_baseline_runs 3) — the per-queue-own-baseline shape transfers even though the domain does not. min_open_count added so a two-item queue cannot fire."
+    },
+    "cross_object_rework": {
+      "duplicate_rate_threshold": 0.15,
+      "min_records": 20,
+      "min_rework_touches": 3,
+      "_basis": "PROVISIONAL. duplicate_rate_threshold carries cross_system_echo.py's THRESHOLD=0.15 forward; min_records is that detector's MIN_VOLUME=30 lowered for a per-object-pair population rather than an org-wide one."
+    }
+  },
+
+  "calibration": {
+    "_note": "Scorer calibration (2.0-D1 T3). Read by financial_services_cloud_scorer.py; NO scorer logic lives here. The three dimensions D1 names — effort concentration, breadth, automation shape — are weighted here, so changing a weight alters the ranked order of FSC findings with no code deploy. The per-detector BASE scores (tier/impact/effort/roadmap_stage) are deliberately NOT here: they live in _FSC_SCORES in the scorer module, following the _LENDING_SCORES convention every pack scorer on this branch uses, each value carrying an inline provenance comment.",
+    "calibration_status": "PROVISIONAL - NOT DERIVED FROM MEASURED FSC DATA",
+
+    "confidence": {
+      "_note": "The honest-confidence posture the T2 detectors already apply. The scorer NEVER recomputes confidence — it carries the level the detector set on its four-part contract, so a single-source finding stays capped. These values document what the pack boundary enforces; they are not a knob the scorer reads to raise confidence.",
+      "single_source_cap": "MEDIUM",
+      "corroborated_level": "HIGH"
+    },
+
+    "impact_weights": {
+      "_note": "Relative ranking weights across the three dimensions D1 names. They must sum to 1.0 (a contract test asserts it) so the composite ops-impact score stays in 0..1 and weights are readable as percentages. PROVISIONAL: the ordering they express is a reasoned judgement, not a measurement — see _basis on each dimension block below.",
+      "effort_concentration": 0.45,
+      "breadth": 0.30,
+      "automation_shape": 0.25
+    },
+
+    "effort_concentration": {
+      "_note": "How the raw effort magnitude is read per detector: volume x duration where the finding has a time dimension, volume alone where it does not. Normalised across the ranked SET by the scorer, so this block carries no scale.",
+      "_basis": "PROVISIONAL. Weighted highest of the three because effort concentration is the only dimension expressed in work actually consumed — the others describe the shape of that work. Mirrors the cloud_ops ops-impact scorer, which also ranks effort concentration first. Not measured.",
+      "volume_only_detectors": [
+        "FSC_SERVICING_REQUEST_RECURRENCE",
+        "FSC_REFERRAL_HANDOFF_FRICTION",
+        "FSC_CROSS_OBJECT_REWORK"
+      ]
+    },
+
+    "breadth": {
+      "_note": "How many distinct PERMITTED units a finding touches — households (as counts), financial accounts, teams, queues, service-process types. Never an individual: breadth counts units, and the AC5 aggregation floor governs what a unit may be.",
+      "_basis": "PROVISIONAL. Weighted second: a pattern spanning several households or teams is a broader case for automation than the same effort concentrated in one place. Not measured.",
+      "minimum": 1.0
+    },
+
+    "automation_shape": {
+      "_note": "Trivially-automatable vs judgment-heavy, 0..1, per detector. Unlike cloud_ops (which derives this from median MTTR), FSC findings carry DWELL time rather than resolution time — dwell measures waiting, not work, so deriving automation shape from it would be wrong. It is therefore a per-detector judgement about the SHAPE OF THE WORK, which is exactly the kind of value that belongs in config rather than in a detector body.",
+      "_basis": "PROVISIONAL, but the ORDERING is deliberate and defensible: repeated data maintenance (address changes, duplicated record upkeep) is the most automatable FSC work; referral routing is partly automatable; queue ageing is a capacity question more than an automation one; and an approval or suitability review is the LEAST automatable — it is a regulated human decision, which is why that detector also carries a compliance guardrail. A weight edit here changes ranked order with no code deploy.",
+      "default": 0.5,
+      "by_detector": {
+        "FSC_SERVICING_REQUEST_RECURRENCE": 0.85,
+        "FSC_CROSS_OBJECT_REWORK": 0.80,
+        "FSC_REFERRAL_HANDOFF_FRICTION": 0.60,
+        "FSC_SERVICE_QUEUE_AGEING": 0.45,
+        "FSC_APPROVAL_REVIEW_CYCLE": 0.20
+      }
+    }
+  }
+}

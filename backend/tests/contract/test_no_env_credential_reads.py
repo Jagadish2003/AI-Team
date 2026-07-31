@@ -374,6 +374,16 @@ _INGEST_ALLOWLIST: Dict[Tuple[str, str], str] = {
         "Health-probe base-URL fallback; connection URL only, credential "
         "resolves via the vault regardless."
     ),
+    ("fsc.py", "FSC_INSTANCE_URL"): (
+        "2.0-D1 T2 FSC ingest: CLI/standalone instance-URL fallback mirroring "
+        "ncino.py's; non-credential — the FSC access token is vault-only and has "
+        "no env fallback, and _get_client() returns None before any credential "
+        "lookup when not live."
+    ),
+    ("fsc.py", "SF_INSTANCE_URL"): (
+        "FSC runs on the connected Salesforce org and reuses its instance URL as "
+        "a documented CLI/standalone fallback; connection URL only."
+    ),
     ("live_validator.py", "SF_INSTANCE_URL"): (
         "Standalone live-ingest validator CLI fallback; connection URL only, "
         "out of T2 scope per CLAUDE.md."

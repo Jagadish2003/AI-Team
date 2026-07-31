@@ -25,8 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections import deque
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional
 
 from ..models import DetectorResult, make_detector_evaluation
 from ..packs import security_ops_finding as fc
@@ -73,25 +72,10 @@ def _origin_ci(item: Mapping[str, Any]) -> Optional[str]:
     return common._text(item.get("ci_sys_id") or item.get("cmdb_ci"))
 
 
-def _reachable_within(adj: Dict[str, List[str]], start: str, max_hops: int) -> Dict[str, int]:
-    """BFS from ``start`` along depends-on edges; {ci: shortest_hop} for 1..max_hops.
-
-    Excludes ``start`` — the concentration target is a downstream shared DEPENDENCY.
-    """
-    reached: Dict[str, int] = {}
-    queue: deque[Tuple[str, int]] = deque([(start, 0)])
-    seen = {start}
-    while queue:
-        node, hops = queue.popleft()
-        if hops >= max_hops:
-            continue
-        for nxt in adj.get(node, []):
-            if nxt in seen:
-                continue
-            seen.add(nxt)
-            reached[nxt] = hops + 1
-            queue.append((nxt, hops + 1))
-    return reached
+#: The depth-bounded walk is the SHARED one (``ci_dependency_graph.reachable_within``,
+#: re-exported by ``security_ops_common``) — the cloud-ops hotspot detector walks the
+#: identical function, so "reachable within N hops" means one thing across both packs.
+_reachable_within = common.reachable_within
 
 
 def _hotspots(sn_data: Optional[Mapping[str, Any]], org_id: Optional[str] = None) -> List[Dict[str, Any]]:

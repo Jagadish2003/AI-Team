@@ -830,6 +830,18 @@ def _ingest_azure_events(org_id: str, run_id: str) -> Dict[str, Any]:
         "first_run": bool(result.first_run),
         "checkpoint_advanced": bool(result.checkpoint_advanced),
     }
+    # MSP-B7 T4: the connector admits its own events, so its budget report is the
+    # deferral proof for this poll. A breached budget is a partial ingest and must
+    # never be reported as a clean one (mirrors the AWS `poll` health block).
+    try:
+        budget = ingestor.budget_report()
+    except Exception:  # noqa: BLE001 — health reporting is never run-critical
+        budget = {}
+    if budget:
+        health["budget"] = dict(budget)
+        if budget.get("breached"):
+            health["status"] = "degraded"
+            health.setdefault("reason", "run_event_budget_exhausted")
     if result.error is not None:
         health["reason"] = type(result.error).__name__
         logger.warning(
@@ -1513,6 +1525,7 @@ def run(
         is_enterprise_ops_pack,
         is_cloud_ops_pack,
         is_security_ops_pack,
+        is_financial_services_cloud_pack,
     )
     _selected_pack_args = normalize_pack_ids(
         list(pack_ids or []) + ([pack] if pack else [])
@@ -1554,6 +1567,7 @@ def run(
     _any_db_opsignal = "sqlserver_opsignal" in _selected_domains
     _any_security_ops = "security_ops" in _selected_domains
     _any_cloud_ops = "cloud_ops" in _selected_domains
+    _any_fsc = "financial_services_cloud" in _selected_domains
 
     # Default to all systems if None
     if mode is None:
@@ -2010,6 +2024,48 @@ def run(
             logger.warning("nCino ingestion failed (non-blocking): %s", e)
         update_run_step(run_id, "sf_ncino", ok=ncino_ok)
 
+    # 2a-ii. Financial Services Cloud ingest (2.0-D1 T2) — FSC managed-package
+    # objects (FinServ__Referral__c, FinServ__FinancialAccount__c and their
+    # histories) alongside the standard-object reads, normalised into ONE
+    # detector-visible block at sf_data["fsc"]. Mirrors the nCino block above:
+    # gated on the pack being selected AND Salesforce being connected, merged into
+    # sf_data, and NON-BLOCKING — an FSC ingest failure degrades this pack's
+    # signal rather than aborting a run that may also be running other packs.
+    if _any_fsc and "salesforce" in _systems:
+        fsc_ok = True
+        try:
+            from .ingest.fsc import ingest as fsc_ingest
+            fsc_data = fsc_ingest()
+            if sf_data is None:
+                sf_data = {}
+            sf_data["fsc"] = fsc_data
+            logger.info(
+                "FSC ingestion: OK — %d servicing-request type(s), %d referral "
+                "route(s), %d review type(s), %d queue(s), %d rework pair(s)",
+                len(fsc_data.get("servicing_requests", [])),
+                len(fsc_data.get("referral_handoffs", [])),
+                len(fsc_data.get("approval_reviews", [])),
+                len(fsc_data.get("service_queues", [])),
+                len(fsc_data.get("cross_object_rework", [])),
+            )
+            _fsc_meta = fsc_data.get("_meta", {}) or {}
+            if _fsc_meta.get("unavailable_objects"):
+                logger.warning(
+                    "FSC ingestion: object(s) unavailable in this org — %s. The "
+                    "signals that read them degrade to empty.",
+                    _fsc_meta["unavailable_objects"],
+                )
+            if _fsc_meta.get("record_types_unresolved"):
+                logger.warning(
+                    "FSC ingestion: %s case(s) had an unresolvable RecordType and "
+                    "were excluded from scope rather than assumed in-scope.",
+                    _fsc_meta["record_types_unresolved"],
+                )
+        except Exception as e:
+            fsc_ok = False
+            logger.warning("FSC ingestion failed (non-blocking): %s", e)
+        update_run_step(run_id, "sf_fsc", ok=fsc_ok)
+
     # 2b. STRS Benefits ingest — if strs_benefits pack
     from .packs.pack_config import is_strs_benefits_pack as _is_strs
     if _any_strs and "salesforce" in _systems:
@@ -2255,6 +2311,13 @@ def run(
         is_security_ops_detector,
         rank_security_ops_findings,
     )
+    # 2.0-D1 T3: FSC scoring calibration (per-detector base scores in the scorer's
+    # _FSC_SCORES with inline provenance; the three dimension weights in pack config).
+    from .packs.financial_services_cloud_scorer import (
+        score_financial_services_cloud,
+        is_financial_services_cloud_detector,
+        rank_fsc_findings,
+    )
     from .evidence_builder import build_evidence
     # R16-B1 (T3): stable cross-run opportunity identity, computed at assembly.
     from .opportunity_identity import (
@@ -2332,6 +2395,23 @@ def run(
                 approval_bottleneck,
             ]
             logger.info("Pack: ncino — 5 lending detectors active")
+        elif is_financial_services_cloud_pack(pack_id):
+            # 2.0-D1 T2 — five FSC detectors reading sf_data["fsc"].
+            from .detectors import (
+                fsc_servicing_request_recurrence,
+                fsc_referral_handoff_friction,
+                fsc_approval_review_cycle,
+                fsc_service_queue_ageing,
+                fsc_cross_object_rework,
+            )
+            all_detectors = [
+                fsc_servicing_request_recurrence,
+                fsc_referral_handoff_friction,
+                fsc_approval_review_cycle,
+                fsc_service_queue_ageing,
+                fsc_cross_object_rework,
+            ]
+            logger.info("Pack: financial_services_cloud — 5 FSC detectors active")
         elif _is_strs(pack_id):
             from .detectors import (
                 application_stall,
@@ -2443,6 +2523,20 @@ def run(
             _validated = enforce_pack_findings(detector_results)
             logger.info(
                 "Pack: cloud_ops — four-part contract enforced on %d finding(s)",
+                _validated,
+            )
+
+        # 2.0-D1 T2: the FSC pack's four-part contract AND its AC5 aggregation
+        # floor are enforced at the pack boundary. Deliberately NOT wrapped in a
+        # try/except — a finding missing a contract part, or one that names an
+        # individual, must fail the run rather than reach a report.
+        if is_financial_services_cloud_pack(pack_id):
+            from .packs.fsc_finding import enforce_pack_findings
+
+            _validated = enforce_pack_findings(detector_results)
+            logger.info(
+                "Pack: financial_services_cloud — four-part contract and "
+                "no-individuals floor enforced on %d finding(s)",
                 _validated,
             )
 
@@ -2634,6 +2728,19 @@ def run(
                     _rank_err,
                 )
 
+        # 2.0-D1 T3: FSC ops-impact ranking, computed once per run so the three
+        # config-weighted dimensions normalise across the whole finding SET.
+        _fsc_ranking: Dict[int, Dict[str, Any]] = {}
+        if is_financial_services_cloud_pack(pack_id):
+            try:
+                _fsc_ranking = rank_fsc_findings(detector_results)
+            except Exception as _rank_err:  # noqa: BLE001 — ranking is non-blocking.
+                logger.warning(
+                    "financial_services_cloud ops-impact ranking failed "
+                    "(non-blocking): %s",
+                    _rank_err,
+                )
+
         pack_opportunities: List[Dict[str, Any]] = []
         for dr in detector_results:
             # Select scorer based on pack — this pack scores ONLY its own detectors
@@ -2668,6 +2775,13 @@ def run(
                 scored = score_cloud_ops(dr, ranking=_cloud_ops_ranking)
             elif is_security_ops_pack(pack_id) and is_security_ops_detector(dr.detector_id):
                 scored = score_security_ops(dr, ranking=_security_ops_ranking)
+            elif (
+                is_financial_services_cloud_pack(pack_id)
+                and is_financial_services_cloud_detector(dr.detector_id)
+            ):
+                # 2.0-D1 T3: FSC-specific calibration. Same two-key guard as every
+                # other pack, so no pack ever applies another pack's calibration.
+                scored = score_financial_services_cloud(dr, ranking=_fsc_ranking)
             else:
                 # R16-C1 T1: pass weighting context so the scorer can read
                 # role/priority for dr.signal_source (modulation is T2 work).

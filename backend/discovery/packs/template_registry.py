@@ -148,6 +148,126 @@ TEMPLATE_REGISTRY: Dict[str, TemplateDefinition] = {
             "industry_id": "financial_services",
             "source": "R18-C1",
             "version": "1.0.0",
+            # 2.0-D1 T4: composable with the FSC template in one multi-pack run
+            # (AC2). Declared on both entries so the pairing is discoverable from
+            # either side, matching the cloud_ops/security_ops precedent.
+            "compatible_templates": ["financial_services_cloud"],
+        },
+    ),
+
+    # 2.0-D1 T4: the Financial Services Cloud template — a registry-only instance
+    # of the same generic TemplateDefinition, added as a DICT ENTRY with no change
+    # to the model or to register_template (D1 AC4). commercial_lending directly
+    # above is the analogue it copies: same industry_id, same shape, a terminology
+    # map and a detector_emphasis list naming its own pack's detectors.
+    #
+    # COMPOSABLE WITH LENDING (AC2). A single run may select both this template and
+    # commercial_lending; resolve_launch_config unions their packs, so the run
+    # activates ["financial_services_cloud", "ncino"] and each pack's own scorer
+    # calibration applies only to its own findings — never blended. Where both
+    # packs surface the same underlying pattern (both have an approval detector:
+    # FSC_APPROVAL_REVIEW_CYCLE and APPROVAL_BOTTLENECK) the expected result is TWO
+    # findings, not one, distinguished by opportunity_identity — cross-pack merging
+    # is a permanent non-goal, so that is the correct outcome and not duplication.
+    #
+    # ONE CAVEAT WORTH KNOWING when composing: a run has a single workflow focus,
+    # and resolve_launch_config takes it from the FIRST selected template. This
+    # template's focus (member_customer_service) differs from lending's
+    # (approvals_compliance) — unlike the cloud_ops/security_ops pair, which both
+    # use core_operations and so never exposed this. Selection order therefore
+    # decides the run focus; both templates' own focus defaults are retained on
+    # their per-template snapshots for traceability, and focus stays editable.
+    "financial_services_cloud": TemplateDefinition(
+        template_id="financial_services_cloud",
+        label="Financial Services Cloud",
+        description=(
+            "Financial Services Cloud starting point: FSC as the system of record "
+            "for households, financial accounts and service processes, with "
+            "workflow, communication and documentation sources for corroboration — "
+            "the Financial Services Cloud pack with a client-servicing focus. "
+            "Speaks FSC: households, relationship groups, financial accounts, "
+            "service processes, referrals."
+        ),
+        # Mirrors commercial_lending's set with the FSC product in place of nCino,
+        # so the two templates in this industry read the same way. Every entry is
+        # an editable default (resolve_launch_config).
+        suggested_systems=[
+            "salesforce_fsc",
+            "jira",
+            "servicenow",
+            "slack",
+            "teams",
+            "confluence",
+        ],
+        # Roles mirror commercial_lending's for the shared systems, deliberately:
+        # consistency with the sibling template in the same industry is more useful
+        # than matching industry_registry's own role defaults (which class jira and
+        # servicenow as operational_signal_source). Both are editable pre-launch.
+        suggested_roles={
+            "salesforce_fsc": "system_of_record",
+            "jira": "workflow_system",
+            "servicenow": "workflow_system",
+            "slack": "operational_signal_source",
+            "teams": "operational_signal_source",
+            "confluence": "documentation_system",
+        },
+        focus_defaults=FocusDefaults(
+            # FSC is a client-servicing product and this pack's llm_context leads
+            # with servicing, so member_customer_service is the primary focus —
+            # the approvals/compliance angle is what composing with the lending
+            # template adds. focus_affinity already emphasises
+            # FSC_SERVICING_REQUEST_RECURRENCE under this focus (2.0-D1 T2), so no
+            # code change is required for the emphasis to take effect.
+            focus_id="member_customer_service",
+            emphasis=["service_casework", "intake_requests", "handoffs_routing"],
+        ),
+        # Financial Services Cloud pack
+        # (pack_config.PACK_REGISTRY["financial_services_cloud"]). register_template
+        # validates this reference, which is why T4 depends on T1 having landed.
+        pack_id="financial_services_cloud",
+        # The five FSC detectors this template emphasises — the exact DETECTOR_IDs
+        # scored by financial_services_cloud_scorer._FSC_SCORES. PROVENANCE ONLY:
+        # this field records the emphasis for the run and UI and does NOT itself
+        # change scoring. The real wiring is pack_id (activating the pack's
+        # detectors + T3 scorer) and focus_defaults.focus_id (driving
+        # focus-affinity ranking); a contract test pins each id against the scorer
+        # so this list cannot drift into looking right while being wrong.
+        detector_emphasis=[
+            "FSC_SERVICING_REQUEST_RECURRENCE",
+            "FSC_REFERRAL_HANDOFF_FRICTION",
+            "FSC_APPROVAL_REVIEW_CYCLE",
+            "FSC_SERVICE_QUEUE_AGEING",
+            "FSC_CROSS_OBJECT_REWORK",
+        ],
+        # FSC vocabulary — mirrors the pack's language_map in
+        # financial_services_cloud_pack_config.json so template and pack speak the
+        # same language (the same discipline the cloud_ops template follows). A
+        # contract test pins the two together.
+        #
+        # EVERY MAPPING HERE MUST BE IDEMPOTENT: `app/terminology.py` is a
+        # whole-word substitution engine, so a mapping whose REPLACEMENT CONTAINS
+        # its SOURCE double-expands any text that already uses the domain phrase.
+        # `account -> financial account` and `handoff -> referral handoff` were
+        # removed for exactly that reason — this pack's own label copy already says
+        # "financial account" and "referral handoffs", and the rewrite turned those
+        # into "financial financial account" and "referral referral handoffs" on
+        # every served finding, roadmap entry and executive report. Nothing is lost
+        # by dropping them: the labels are already written in FSC language, which is
+        # what the mappings were trying to achieve. A contract test now asserts the
+        # map is idempotent and that the label copy survives it unchanged.
+        terminology={
+            "customer": "household",
+            "ticket": "service process",
+            "backlog": "service queue",
+        },
+        metadata={
+            "industry_id": "financial_services",
+            "source": "2.0-D1",
+            "version": "1.0.0",
+            "salesforce_product": "salesforce_fsc",
+            "evidence_contract": "four_part_observed_finding",
+            # Composable with the Lending template in one multi-pack run (AC2).
+            "compatible_templates": ["commercial_lending"],
         },
     ),
 

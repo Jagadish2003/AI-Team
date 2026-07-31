@@ -93,6 +93,7 @@ FOCUS_AFFINITY: Dict[str, Optional[Tuple[str, ...]]] = {
         "REPETITIVE_AUTOMATION",   # repetitive front-line case handling
         "KNOWLEDGE_GAP",           # agents lack knowledge to serve members
         "APPLICATION_STALL",       # member application processing stalls
+        "FSC_SERVICING_REQUEST_RECURRENCE",  # FSC: repeat servicing requests per household
     ),
     # Operational throughput — queues, volume, resolution speed.
     FOCUS_CORE_OPERATIONS: (
@@ -103,6 +104,7 @@ FOCUS_AFFINITY: Dict[str, Optional[Tuple[str, ...]]] = {
         "RECURRING_RESOLUTION_LOOP",    # NOC: repeated same-resolution toil
         "ALERT_TRIAGE_TOIL",            # NOC: high-volume trivially-resolved alerts
         "QUEUE_AGEING",                 # NOC: operational queue ageing vs baseline
+        "FSC_SERVICE_QUEUE_AGEING",     # FSC: service-process queue ageing vs own baseline
     ),
     # The gate is the bottleneck: approval gates, compliance deadlines,
     # covenant tracking, permissions, SLA breaches, regulatory control points.
@@ -116,6 +118,7 @@ FOCUS_AFFINITY: Dict[str, Optional[Tuple[str, ...]]] = {
         "DISBURSEMENT_OVERDUE",         # deadline / overdue obligation
         "DISABILITY_REVIEW_BOTTLENECK", # regulatory review control point
         "CHECKLIST_BOTTLENECK",         # compliance document control point
+        "FSC_APPROVAL_REVIEW_CYCLE",    # FSC: approval + compliance/suitability review dwell
     ),
     # The handoff between teams/systems is the bottleneck.
     FOCUS_CROSS_SYSTEM_HANDOFFS: (
@@ -126,6 +129,7 @@ FOCUS_AFFINITY: Dict[str, Optional[Tuple[str, ...]]] = {
         "LOAN_ORIGINATION_ROUTING_FRICTION", # cross-stage routing/handoff friction
         "REASSIGNMENT_PING_PONG",            # NOC: incident bounced between groups/queues
         "SHARED_CI_HOTSPOT",                 # NOC: multi-service incidents on one shared CI
+        "FSC_REFERRAL_HANDOFF_FRICTION",     # FSC: referrals bouncing between teams
     ),
     # Internal staff productivity — repetitive manual work, document & data prep.
     FOCUS_BACK_OFFICE_PRODUCTIVITY: (
@@ -133,6 +137,7 @@ FOCUS_AFFINITY: Dict[str, Optional[Tuple[str, ...]]] = {
         "CHECKLIST_BOTTLENECK",    # back-office document checklist
         "SPREADING_BOTTLENECK",    # back-office financial spreading
         "KNOWLEDGE_GAP",           # internal knowledge / process gaps
+        "FSC_CROSS_OBJECT_REWORK",  # FSC: same fact maintained on several objects
     ),
     # Engineering change & release health.
     FOCUS_ENGINEERING_CHANGE: (
