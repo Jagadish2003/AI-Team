@@ -27,24 +27,32 @@ from .opportunity_movement_record import (
     VERDICT_NOT_COMPARABLE,
     VERDICT_WEAK,
 )
+from .projection_validation import PROJECTION_VALIDATION_VERDICTS
 from .rbac import require_role
 from .security import require_auth
 
 router = APIRouter(prefix="/api/opportunity-movement", tags=["opportunity-movement"])
 
 _VERDICTS = (VERDICT_COMPARABLE, VERDICT_WEAK, VERDICT_NOT_COMPARABLE)
+_CONFIDENCES = ("LOW", "MEDIUM", "HIGH")
 
 
 @router.get("", dependencies=[Depends(require_role("analyst"))])
 def list_opportunity_movements(
     verdict: Optional[List[str]] = Query(default=None),
+    projectionVerdict: Optional[List[str]] = Query(default=None),
+    pack: Optional[List[str]] = Query(default=None),
+    detector: Optional[List[str]] = Query(default=None),
+    confidence: Optional[List[str]] = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
     _token: str = Depends(require_auth),
 ) -> dict:
     """Every stored measurement in the caller's org, newest first.
 
-    Filterable by comparability verdict, which is what lets a portfolio view
-    COUNT caveated measurements rather than averaging them away.
+    Filterable by comparability verdict, projection-validation verdict, pack,
+    detector and confidence. Those latter filters are T5's calibration surface:
+    A1 and A3 can read aggregate projection results without scraping each
+    per-opportunity record.
     """
     if verdict:
         unknown = sorted({v for v in verdict if v not in _VERDICTS})
@@ -56,19 +64,63 @@ def list_opportunity_movements(
                     f"Valid: {', '.join(_VERDICTS)}"
                 ),
             )
+    if projectionVerdict:
+        unknown_projection = sorted(
+            {v for v in projectionVerdict if v not in PROJECTION_VALIDATION_VERDICTS}
+        )
+        if unknown_projection:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "unknown projection validation verdict(s): "
+                    f"{', '.join(unknown_projection)}. "
+                    f"Valid: {', '.join(PROJECTION_VALIDATION_VERDICTS)}"
+                ),
+            )
+    if confidence:
+        unknown_confidence = sorted({c.upper() for c in confidence if c.upper() not in _CONFIDENCES})
+        if unknown_confidence:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"unknown confidence filter(s): {', '.join(unknown_confidence)}. "
+                    f"Valid: {', '.join(_CONFIDENCES)}"
+                ),
+            )
     org_id = get_current_org_id()
-    items = list_movements(org_id, verdicts=verdict, limit=limit)
+    items = list_movements(
+        org_id,
+        verdicts=verdict,
+        projection_verdicts=projectionVerdict,
+        pack_ids=pack,
+        detector_ids=detector,
+        confidences=confidence,
+        limit=limit,
+    )
     caveated = sum(
         1
         for item in items
         if (item.get("comparability") or {}).get("verdict") != VERDICT_COMPARABLE
     )
+    projection_counts = {}
+    for item in items:
+        pv = ((item.get("projectionValidation") or {}).get("verdict")
+              or "unknown")
+        projection_counts[pv] = projection_counts.get(pv, 0) + 1
     return {
         "orgId": org_id,
         "count": len(items),
         # Surfaced alongside the count so an aggregate can never be read without
         # knowing how many of its inputs carried a caveat.
         "caveatedCount": caveated,
+        "projectionValidationCounts": projection_counts,
+        "filters": {
+            "comparabilityVerdict": verdict or [],
+            "projectionVerdict": projectionVerdict or [],
+            "pack": pack or [],
+            "detector": detector or [],
+            "confidence": [c.upper() for c in (confidence or [])],
+        },
         "items": items,
     }
 

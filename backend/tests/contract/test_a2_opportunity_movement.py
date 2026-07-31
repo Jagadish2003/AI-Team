@@ -40,6 +40,13 @@ from app.opportunity_movement_record import (
     VERDICT_WEAK,
     missing_movement_fields,
 )
+from app.projection_validation import (
+    VERDICT_ABOVE_BAND,
+    VERDICT_BELOW_BAND,
+    VERDICT_NOT_PROJECTED,
+    VERDICT_TOO_EARLY,
+    VERDICT_WITHIN_BAND,
+)
 
 DEV_TOKEN = os.getenv("DEV_JWT", "dev-token-change-me")
 VIEWER_TOKEN = os.getenv("VIEWER_JWT", "viewer-token")
@@ -200,6 +207,91 @@ def _raw_row(org: str, identity: str, run_id: str):
         with con.cursor() as cur:
             cur.execute(
                 "SELECT comparability_verdict, primary_delta, record, updated_at "
+                "FROM opportunity_movements WHERE org_id = %s "
+                "AND opportunity_identity = %s AND current_run_id = %s",
+                (org, identity, run_id),
+            )
+            return cur.fetchone()
+
+
+def _projection_payload(
+    *,
+    low: int = 25,
+    high: int = 55,
+    horizon: int = 30,
+    pack_id: str = "service_cloud",
+    pack_version: str = "1.2.0",
+    confidence: str = "HIGH",
+    run_id: str = "run_baseline",
+) -> Dict[str, Any]:
+    return {
+        "schemaVersion": "1.1.0",
+        "direction": "improves",
+        "magnitudeBand": {
+            "lowPct": low,
+            "highPct": high,
+            "basisUnit": "of the recurring instances",
+            "label": f"{low}-{high}% of the recurring instances",
+        },
+        "observationHorizonDays": horizon,
+        "movementSignal": {
+            "signalName": "owner_changes_90d",
+            "unit": "count",
+            "directionOfImprovement": "decrease",
+        },
+        "basis": {
+            "detectorId": DETECTOR,
+            "packId": pack_id,
+            "packVersion": pack_version,
+            "confidence": confidence,
+            "bandWidthModelVersion": "1.0.0",
+        },
+        "provenance": {
+            "runId": run_id,
+            "oppId": "opp_001",
+            "opportunityIdentity": "seeded",
+            "createdAt": "2026-01-01T00:00:00+00:00",
+            "packId": pack_id,
+            "packVersion": pack_version,
+            "projectionSchemaVersion": "1.1.0",
+        },
+    }
+
+
+def _attach_projection(
+    org: str,
+    identity: str,
+    run_id: str = "run_baseline",
+    **projection_kwargs,
+) -> Dict[str, Any]:
+    projection = _projection_payload(run_id=run_id, **projection_kwargs)
+    projection["provenance"]["opportunityIdentity"] = identity
+    with closing(db.connect()) as con:
+        with con.cursor() as cur:
+            cur.execute(
+                "SELECT metadata FROM opportunity_instances "
+                "WHERE org_id = %s AND opportunity_identity = %s AND run_id = %s",
+                (org, identity, run_id),
+            )
+            row = cur.fetchone()
+            assert row is not None, "seed the opportunity instance before projection"
+            metadata = json.loads(row[0]) if row[0] else {}
+            metadata["projection"] = projection
+            cur.execute(
+                "UPDATE opportunity_instances SET metadata = %s "
+                "WHERE org_id = %s AND opportunity_identity = %s AND run_id = %s",
+                (json.dumps(metadata), org, identity, run_id),
+            )
+        con.commit()
+    return projection
+
+
+def _validation_columns(org: str, identity: str, run_id: str):
+    with closing(db.connect()) as con:
+        with con.cursor() as cur:
+            cur.execute(
+                "SELECT projection_validation_verdict, projection_pack_id, "
+                "projection_pack_version, projection_confidence "
                 "FROM opportunity_movements WHERE org_id = %s "
                 "AND opportunity_identity = %s AND current_run_id = %s",
                 (org, identity, run_id),
@@ -504,6 +596,146 @@ class TestComparabilityAlwaysPopulated:
         response = client.get(f"{BASE}?verdict=nonsense", headers=_auth(org))
         assert response.status_code == 400
         assert "nonsense" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# AC6 / T5 - projection validation
+# ---------------------------------------------------------------------------
+
+
+class TestProjectionValidation:
+    def test_measured_movement_is_compared_to_the_stored_projection(self):
+        org, identity = _org(), _identity()
+        run = _full_setup(org, identity, current_value=150.0)
+        _attach_projection(org, identity)
+
+        record = _measure(org, identity, run)
+        validation = record["projectionValidation"]
+
+        assert validation["verdict"] == VERDICT_WITHIN_BAND
+        assert validation["projected"]["runId"] == "run_baseline"
+        assert validation["projected"]["packId"] == "service_cloud"
+        assert validation["projected"]["confidence"] == "HIGH"
+        assert validation["movementPct"] == 37.5
+
+        row = _validation_columns(org, identity, run)
+        assert tuple(row) == (
+            VERDICT_WITHIN_BAND,
+            "service_cloud",
+            "1.2.0",
+            "HIGH",
+        )
+
+    def test_no_projection_is_distinct_from_a_band_miss(self):
+        org, identity = _org(), _identity()
+        run = _full_setup(org, identity, current_value=150.0)
+
+        record = _measure(org, identity, run)
+
+        assert record["projectionValidation"]["verdict"] == VERDICT_NOT_PROJECTED
+        assert record["projectionValidation"]["verdict"] != VERDICT_BELOW_BAND
+        assert tuple(_validation_columns(org, identity, run))[0] == VERDICT_NOT_PROJECTED
+
+    def test_above_band_is_stored_per_measurement(self):
+        org, identity = _org(), _identity()
+        run = _full_setup(org, identity, current_value=60.0)
+        _attach_projection(org, identity, low=25, high=55)
+
+        record = _measure(org, identity, run)
+
+        assert record["projectionValidation"]["verdict"] == VERDICT_ABOVE_BAND
+        assert tuple(_validation_columns(org, identity, run))[0] == VERDICT_ABOVE_BAND
+
+    def test_too_early_recomputes_as_later_measurements_land(self):
+        from app.opportunity_movement import get_movement_history, measure_movement
+
+        org, identity = _org(), _identity()
+        action_day = TODAY - timedelta(days=40)
+        _freeze_baseline(org, identity, "run_baseline")
+        _action(org, identity, action_date=action_day.isoformat())
+        _instance(org, identity, "run_baseline", days_ago=100)
+        _instance(org, identity, "run_post_1", days_ago=30)
+        _instance(org, identity, "run_post_2", days_ago=5)
+        _signal(org, "run_post_1", 150.0, days_ago=30)
+        _signal(org, "run_post_2", 150.0, days_ago=5)
+        _attach_projection(org, identity, horizon=30)
+
+        action_dt = datetime(
+            action_day.year,
+            action_day.month,
+            action_day.day,
+            tzinfo=timezone.utc,
+        )
+        early = measure_movement(
+            org,
+            identity,
+            "run_post_1",
+            measured_at=action_dt + timedelta(days=10),
+        )
+        later = measure_movement(
+            org,
+            identity,
+            "run_post_2",
+            measured_at=action_dt + timedelta(days=40),
+        )
+
+        assert early["projectionValidation"]["verdict"] == VERDICT_TOO_EARLY
+        assert later["projectionValidation"]["verdict"] == VERDICT_WITHIN_BAND
+        assert [h["projectionValidation"]["verdict"] for h in get_movement_history(org, identity)] == [
+            VERDICT_TOO_EARLY,
+            VERDICT_WITHIN_BAND,
+        ]
+
+    def test_confounder_caveats_travel_with_the_projection_verdict(self):
+        org, identity = _org(), _identity()
+        _freeze_baseline(org, identity, "run_baseline")
+        _action(org, identity)
+        _instance(org, identity, "run_baseline", days_ago=200, pack_version="1.2.0")
+        _instance(org, identity, "run_post_1", days_ago=20, pack_version="9.9.9")
+        _signal(org, "run_post_1", 150.0, days_ago=20)
+        _attach_projection(org, identity, pack_version="1.2.0")
+
+        record = _measure(org, identity, "run_post_1")
+
+        assert record["confounderSummary"]["count"] >= 1
+        assert record["projectionValidation"]["confounderSummary"]["count"] >= 1
+        assert any(
+            c["type"] == "pack_version_change"
+            for c in record["projectionValidation"]["confounders"]
+        )
+
+    def test_projection_validation_is_queryable_by_pack_detector_and_confidence(self, client):
+        org = _org()
+        within = _identity()
+
+        run_within = _full_setup(org, within, current_value=150.0)
+        _attach_projection(org, within, pack_id="service_cloud", confidence="HIGH")
+        _measure(org, within, run_within)
+
+        response = client.get(
+            f"{BASE}?projectionVerdict={VERDICT_WITHIN_BAND}"
+            "&pack=service_cloud&detector=HANDOFF_FRICTION&confidence=HIGH",
+            headers=_auth(org),
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["count"] == 1
+        assert body["items"][0]["opportunityIdentity"] == within
+        assert body["projectionValidationCounts"] == {VERDICT_WITHIN_BAND: 1}
+        assert body["filters"]["confidence"] == ["HIGH"]
+
+        empty = client.get(
+            f"{BASE}?projectionVerdict={VERDICT_WITHIN_BAND}&pack=security_ops",
+            headers=_auth(org),
+        )
+        assert empty.status_code == 200
+        assert empty.json()["count"] == 0
+
+    def test_unknown_projection_verdict_filter_is_refused(self, client):
+        org = _org()
+        response = client.get(f"{BASE}?projectionVerdict=nope", headers=_auth(org))
+        assert response.status_code == 400
+        assert "nope" in response.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

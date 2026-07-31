@@ -41,6 +41,11 @@ from .opportunity_movement_record import (
     build_movement_record,
 )
 from .outcome_confounders import detect_confounders, summarise_confounders
+from .projection_validation import (
+    build_projection_validation,
+    select_projection_entry_for_baseline,
+    validation_filter_values,
+)
 from database.models.opportunity_movements import ALL_OPPORTUNITY_MOVEMENTS_DDL
 
 logger = logging.getLogger(__name__)
@@ -207,25 +212,30 @@ def _lower_is_better_map(detector_id: str) -> Dict[str, bool]:
     return {name: lower for name in names if name}
 
 
-def _projected_horizon_days(
-    org_id: str, opportunity_identity: str
-) -> Optional[int]:
-    """A1's projected observation horizon, from the stored projection.
-
-    Read from the projection history (A1 T6) rather than recomputed, so the
-    horizon judged against is the one that was actually projected.
-    """
+def _projection_entry_for_baseline(
+    org_id: str, opportunity_identity: str, baseline_run_id: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """The A1 projection stored on the baseline run, never a later projection."""
     try:
         from .projection_store import get_projection_history
 
         history = get_projection_history(opportunity_identity, org_id=org_id)
     except Exception:  # noqa: BLE001
         return None
-    for entry in history:
-        horizon = (entry.get("projection") or {}).get("observationHorizonDays")
-        if isinstance(horizon, int):
-            return horizon
-    return None
+    return select_projection_entry_for_baseline(baseline_run_id, history)
+
+
+def _projection_horizon_days(
+    projection: Optional[Mapping[str, Any]]
+) -> Optional[int]:
+    """A1's stored observation horizon, when structurally usable."""
+    if not isinstance(projection, Mapping):
+        return None
+    try:
+        value = int(projection.get("observationHorizonDays"))
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
 
 
 # --------------------------------------------------------------------------
@@ -280,6 +290,14 @@ def measure_movement(
         )
 
     detector_id = str(baseline.get("detectorId") or "").strip()
+    projection_entry = _projection_entry_for_baseline(
+        org_id, opportunity_identity, baseline.get("runId")
+    )
+    stored_projection = (
+        projection_entry.get("projection")
+        if isinstance(projection_entry, Mapping)
+        else None
+    )
 
     # Gate 3 — at least one run strictly after the action date. Anchored on the
     # action date only: there is no "most recent run" fallback, because that
@@ -335,7 +353,7 @@ def measure_movement(
         current_pack_version=current_pack_version,
         post_action_run_ids=post_action_run_ids,
         post_action_run_dates=post_action_run_dates,
-        projected_horizon_days=_projected_horizon_days(org_id, opportunity_identity),
+        projected_horizon_days=_projection_horizon_days(stored_projection),
         measured_at=now,
         lower_is_better_by_signal=_lower_is_better_map(detector_id),
     )
@@ -347,6 +365,11 @@ def measure_movement(
         org_id, opportunity_identity, baseline, record
     )
     record["confounderSummary"] = summarise_confounders(record["confounders"])
+    record["projectionValidation"] = build_projection_validation(
+        record,
+        stored_projection,
+        projection_entry=projection_entry,
+    )
 
     if persist:
         _store_movement(record)
@@ -439,6 +462,7 @@ def _store_movement(record: Mapping[str, Any]) -> None:
     now = _now()
     comparability = record.get("comparability") or {}
     summary = record.get("confounderSummary") or {}
+    validation = validation_filter_values(record.get("projectionValidation"))
 
     with closing(db.connect()) as con:
         with con.cursor() as cur:
@@ -449,9 +473,11 @@ def _store_movement(record: Mapping[str, Any]) -> None:
                 "  baseline_pack_version, current_pack_version, primary_signal,"
                 "  primary_baseline_value, primary_current_value, primary_delta,"
                 "  primary_direction, record, measured_at, created_at, updated_at,"
-                "  confounder_count, confounder_material_count, confounder_types"
+                "  confounder_count, confounder_material_count, confounder_types,"
+                "  projection_validation_verdict, projection_pack_id,"
+                "  projection_pack_version, projection_confidence"
                 ") VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
-                "%s,%s,%s) "
+                "%s,%s,%s,%s,%s,%s,%s) "
                 "ON CONFLICT (org_id, opportunity_identity, current_run_id) "
                 "DO UPDATE SET "
                 "  baseline_run_id = EXCLUDED.baseline_run_id,"
@@ -467,6 +493,10 @@ def _store_movement(record: Mapping[str, Any]) -> None:
                 "  confounder_count = EXCLUDED.confounder_count,"
                 "  confounder_material_count = EXCLUDED.confounder_material_count,"
                 "  confounder_types = EXCLUDED.confounder_types,"
+                "  projection_validation_verdict = EXCLUDED.projection_validation_verdict,"
+                "  projection_pack_id = EXCLUDED.projection_pack_id,"
+                "  projection_pack_version = EXCLUDED.projection_pack_version,"
+                "  projection_confidence = EXCLUDED.projection_confidence,"
                 "  updated_at = EXCLUDED.updated_at",
                 (
                     record["orgId"],
@@ -490,6 +520,10 @@ def _store_movement(record: Mapping[str, Any]) -> None:
                     int(summary.get("count", 0)),
                     int(summary.get("materialCount", 0)),
                     json.dumps(summary.get("types", [])),
+                    validation["verdict"],
+                    validation["packId"],
+                    validation["packVersion"],
+                    validation["confidence"],
                 ),
             )
         con.commit()
@@ -603,18 +637,45 @@ def get_movements_for_run(org_id: str, run_id: str) -> List[Dict[str, Any]]:
 
 
 def list_movements(
-    org_id: str, *, verdicts: Optional[Sequence[str]] = None, limit: int = 200
+    org_id: str,
+    *,
+    verdicts: Optional[Sequence[str]] = None,
+    projection_verdicts: Optional[Sequence[str]] = None,
+    pack_ids: Optional[Sequence[str]] = None,
+    detector_ids: Optional[Sequence[str]] = None,
+    confidences: Optional[Sequence[str]] = None,
+    limit: int = 200,
 ) -> List[Dict[str, Any]]:
     """Every stored measurement in one org, newest first.
 
     Filterable by comparability verdict, which is what lets T6's portfolio view
-    count caveated measurements rather than averaging them away.
+    count caveated measurements rather than averaging them away. Also filterable
+    by T5's projection-validation verdict, pack, detector and confidence so A1
+    and A3 can consume calibration data without scraping per-record JSON.
     """
     sql = _SELECT + " WHERE org_id = %s"
     params: List[Any] = [org_id]
     if verdicts:
         sql += f" AND comparability_verdict IN ({', '.join(['%s'] * len(verdicts))})"
         params.extend(verdicts)
+    if projection_verdicts:
+        sql += (
+            " AND projection_validation_verdict IN "
+            f"({', '.join(['%s'] * len(projection_verdicts))})"
+        )
+        params.extend(projection_verdicts)
+    if pack_ids:
+        sql += f" AND projection_pack_id IN ({', '.join(['%s'] * len(pack_ids))})"
+        params.extend(pack_ids)
+    if detector_ids:
+        sql += f" AND detector_id IN ({', '.join(['%s'] * len(detector_ids))})"
+        params.extend(detector_ids)
+    if confidences:
+        sql += (
+            " AND UPPER(projection_confidence) IN "
+            f"({', '.join(['%s'] * len(confidences))})"
+        )
+        params.extend(str(c).upper() for c in confidences)
     sql += " ORDER BY measured_at DESC LIMIT %s"
     params.append(max(1, min(int(limit), 1000)))
 
