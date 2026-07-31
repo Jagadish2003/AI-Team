@@ -123,6 +123,23 @@ def _safe_range(org_id: str, event_type: str) -> List[Any]:
     return get_telemetry_range(org_id, event_type, frm, to, limit=1000) or []
 
 
+def _newest_timestamp(*events: Any) -> Optional[str]:
+    """The newest ISO timestamp across the given telemetry events, or None.
+
+    Used to combine several ingestion-completion channels into one "last successful
+    ingestion" value. Events with no usable timestamp are ignored, so an unrelated
+    channel can never suppress a real one.
+    """
+    stamps = [
+        iso
+        for event in events
+        if event is not None
+        for iso in [_to_iso(getattr(event, "timestamp", None))]
+        if iso
+    ]
+    return max(stamps) if stamps else None
+
+
 def _latest_by(events: List[Any], predicate) -> Optional[Any]:
     """Newest matching event (get_telemetry_range is oldest-first, so take the
     last match)."""
@@ -168,6 +185,7 @@ def _connector_entry(
     record: Dict[str, Any],
     ingest_events: List[Any],
     health_events: List[Any],
+    completion_events: Optional[List[Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     connector_id = record.get("id")
     if not connector_id:
@@ -195,17 +213,25 @@ def _connector_entry(
     if not is_connected:
         return None
 
-    # Last successful ingestion: newest db.ingestor_completed event for this
-    # connector (existing telemetry). Falls back to the connector record's
-    # lastSynced overlay when no completion event has been recorded.
+    # Last successful ingestion: the newest completion event for this connector,
+    # from EITHER completion channel —
+    #   * db.ingestor_completed — the native DB ingestors' own event (unchanged), and
+    #   * ingestion.completed   — the connector-agnostic event the SHARED change-based
+    #     runner (discovery/ingest/change_runner.py) emits for every
+    #     ChangeBasedIngestor, so a connector reports its ingestion time by virtue of
+    #     being driven by that runner rather than by per-connector code.
+    # Both are org-scoped telemetry carrying a real timestamp, so taking the newest
+    # of the two is source-agnostic; no connector is named here.
     last_ingest_event = _latest_by(
         ingest_events, lambda e: getattr(e, "connector_id", None) == connector_id
     )
-    last_successful_ingestion = (
-        _to_iso(getattr(last_ingest_event, "timestamp", None))
-        if last_ingest_event is not None
-        else None
+    last_completion_event = _latest_by(
+        completion_events or [], lambda e: getattr(e, "connector_id", None) == connector_id
     )
+    last_successful_ingestion = _newest_timestamp(last_ingest_event, last_completion_event)
+    # Falls back to the connector record's lastSynced overlay when NEITHER channel
+    # has recorded a completion — the pre-existing behaviour for the connectors that
+    # do not run on the change-based path (salesforce / servicenow / jira).
     if last_successful_ingestion is None:
         synced = record.get("lastSynced")
         if isinstance(synced, str) and synced not in ("", "—", "-"):
@@ -251,10 +277,15 @@ def connectors_view(org_id: str) -> List[Dict[str, Any]]:
 
     ingest_events = _safe_range(org_id, "db.ingestor_completed")
     health_events = _safe_range(org_id, "connector.health_check")
+    # The connector-agnostic completion channel (emitted by the shared change-based
+    # ingestion runner for every ChangeBasedIngestor).
+    completion_events = _safe_range(org_id, "ingestion.completed")
 
     out: List[Dict[str, Any]] = []
     for record in records:
-        entry = _connector_entry(org_id, record, ingest_events, health_events)
+        entry = _connector_entry(
+            org_id, record, ingest_events, health_events, completion_events
+        )
         if entry is not None:
             out.append(entry)
     return out

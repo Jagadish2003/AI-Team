@@ -492,9 +492,14 @@ export function useResource<T>(
 
   const snap = useSyncExternalStore(subscribe, getSnapshot, getSnapshot) as Snapshot<T>;
 
+  // Which key this hook instance has already handed to prime(). A key it has not
+  // primed yet is one whose mount effect has not run — see the retry masking below.
+  const primedKeyRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!enabled) return;
     store!.prime(key!, stableFetcherRef.current!, opts?.staleTime);
+    primedKeyRef.current = key!;
   }, [enabled, key, store, opts?.staleTime]);
 
   const refetch = useCallback(() => {
@@ -510,8 +515,21 @@ export function useResource<T>(
   // the product picker flashed an unselected form. A DISABLED key is never
   // loading, and a cached key reports false immediately — so prefetched data
   // still renders instantly with no skeleton.
+  //
+  // A CACHED ERROR is masked on the render before this hook's mount effect runs,
+  // for the same reason: prime() retries a failed key with no data (that is its
+  // documented contract), so the error on screen is already being superseded and
+  // reporting it renders a failure the user is not in. This is the background
+  // prefetch case — `runs/{id}/evidence` 404s until the run materialises it, so a
+  // page mounting later inherits that failure and flashed its error panel for one
+  // frame before the retry's loading state arrived. Masked only until the effect
+  // has primed; a retry that genuinely fails reports the error normally.
+  const willRetryOnMount =
+    enabled && snap.data === undefined && snap.error !== null && primedKeyRef.current !== key;
   const loading =
-    enabled && snap.data === undefined && snap.error === null ? true : snap.loading;
+    enabled && snap.data === undefined && (snap.error === null || willRetryOnMount)
+      ? true
+      : snap.loading;
 
-  return { data: snap.data, loading, error: snap.error, refetch };
+  return { data: snap.data, loading, error: willRetryOnMount ? null : snap.error, refetch };
 }

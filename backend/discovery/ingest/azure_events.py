@@ -86,6 +86,29 @@ except ModuleNotFoundError:  # pragma: no cover - import shim
         map_service_health,
     )
 
+try:
+    from discovery.signals.ops_stream import (
+        DEFAULT_ACTIVE_PERIOD_SECONDS,
+        Admission,
+        OpsEventStream,
+    )
+except ModuleNotFoundError:  # pragma: no cover - import shim
+    from backend.discovery.signals.ops_stream import (  # type: ignore
+        DEFAULT_ACTIVE_PERIOD_SECONDS,
+        Admission,
+        OpsEventStream,
+    )
+
+try:
+    from app.provenance import EvidencePointer
+except ModuleNotFoundError:  # pragma: no cover - import shim
+    from backend.app.provenance import EvidencePointer  # type: ignore
+
+#: The ``source_artifact_type`` the SHARED cloud-event skeleton stamps on a native
+#: cloud event's OBSERVED pointer. Imported (never re-spelled) so the AWS and Azure
+#: native paths key their evidence pointers identically.
+from .cloud_event_connector import CLOUD_EVENT_ARTIFACT_TYPE
+
 logger = logging.getLogger(__name__)
 
 #: The transport provider tag stamped on emitted records (not a detector field —
@@ -98,11 +121,22 @@ STREAM_ACTIVITY_LOG = "activity_log"
 STREAM_SERVICE_HEALTH = "service_health"
 V1_STREAMS = (STREAM_ALERTS, STREAM_ACTIVITY_LOG, STREAM_SERVICE_HEALTH)
 
-#: Stream key → the B0 source_system its mapper stamps (for health reporting).
+#: Stream key → the MSP-B0 source_system its mapper stamps. Used for health
+#: reporting AND as each record's ``surface``: since AC4 re-stamps the EVENT's
+#: source_system to the provider family, this is where the per-stream B0 source
+#: system remains visible (on the transport wrapper, never on the event).
 _STREAM_SOURCE_SYSTEM = {
     STREAM_ALERTS: "azure_monitor",
     STREAM_ACTIVITY_LOG: "azure_activity",
     STREAM_SERVICE_HEALTH: "azure_service_health",
+}
+
+#: Stream key → the human-readable Azure surface name, used in LOG TEXT ONLY.
+#: Observability vocabulary: nothing branches on it and no record carries it.
+_STREAM_LABEL = {
+    STREAM_ALERTS: "Azure Monitor Alerts",
+    STREAM_ACTIVITY_LOG: "Azure Activity Log",
+    STREAM_SERVICE_HEALTH: "Azure Service Health",
 }
 
 
@@ -510,6 +544,9 @@ class AzureStreamResult:
     records: List[Dict[str, Any]] = field(default_factory=list)
     next_checkpoint: str = "{}"
     subscription_status: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    #: The MSP-B7 T4 per-run event-budget outcome for this poll (the deferral proof
+    #: — see :meth:`AzureEventIngestor.budget_report`). Empty when no budget is set.
+    budget: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def emitted_count(self) -> int:
@@ -520,8 +557,23 @@ class AzureStreamResult:
         return [s for s, st in self.subscription_status.items() if st.get("status") == "error"]
 
     @property
+    def deferred_subscriptions(self) -> List[str]:
+        """Subscriptions the per-run event budget cut short (resumable, not failed).
+
+        Kept DISTINCT from ``failed_subscriptions``: a deferral is a bounded, declared
+        degradation whose checkpoint was deliberately left unadvanced, not an error.
+        """
+        return [s for s, st in self.subscription_status.items() if st.get("status") == "deferred"]
+
+    @property
     def all_ok(self) -> bool:
-        return not self.failed_subscriptions
+        """True only when every subscription drained cleanly.
+
+        A budget deferral counts against this: reporting a poll that skipped part of
+        its backlog as "all ok" is the silent-partial-ingest failure mode the rest of
+        this connector is written to avoid.
+        """
+        return not self.failed_subscriptions and not self.deferred_subscriptions
 
 
 #: Back-compat alias — T2 named the alerts outcome AzureAlertsResult; the type is
@@ -548,6 +600,22 @@ class AzureEventIngestor(ChangeBasedIngestor):
     are normalised through their MSP-B0 mappers (``map_azure_monitor`` /
     ``map_azure_activity_log`` / ``map_service_health``) — those three classes ONLY
     (scope defence). :meth:`ingest_all` runs the three streams for a full poll.
+
+    Two responsibilities the shared cloud-event skeleton (MSP-B1 / AT-641) defines
+    for EVERY native cloud connector, held here so the AWS and Azure paths behave
+    identically rather than diverging:
+
+    * **Transport re-stamp (AC4)** — each mapped event's ``source_system`` is
+      re-stamped to the provider family (``'azure'``) while the mapper's
+      ``event_signature`` is left untouched, so a native event equals its bridged
+      twin in every field except that one. The mapper's per-stream MSP-B0 source
+      system remains visible on the record wrapper as ``surface``.
+    * **MSP-B7 admission** — the connector owns its own :class:`OpsEventStream` and
+      admits every event it maps (:meth:`_ingest_stream`), so re-fires fold into one
+      active signal with a count and the per-run event budget is enforced while
+      polling. :meth:`active_signals` / :meth:`budget_report` are the read side.
+      Admission is part of ingesting a cloud event — never something a downstream
+      caller has to remember to do.
     """
 
     connector_id = CONNECTOR_ID
@@ -572,6 +640,9 @@ class AzureEventIngestor(ChangeBasedIngestor):
         raw_store: Optional[Any] = None,
         retry_policy: Optional[RetryPolicy] = None,
         sleep_fn: Optional[Callable[[float], None]] = None,
+        stream: Optional[OpsEventStream] = None,
+        active_period_seconds: int = DEFAULT_ACTIVE_PERIOD_SECONDS,
+        budget: Optional[int] = None,
     ) -> None:
         self.org_id = org_id
         self.config = config
@@ -581,6 +652,14 @@ class AzureEventIngestor(ChangeBasedIngestor):
         self._activity_log_client = activity_log_client
         self._service_health_client = service_health_client
         self._raw_store = raw_store
+        # MSP-B7 admission (dedup + per-run budget) is owned by the CONNECTOR, exactly
+        # as the shared cloud-event skeleton owns it for AWS — admission is part of
+        # ingesting a cloud event, not something a caller may forget to do. The stream
+        # is stateful for this ingestor's lifetime: after a poll, `active_signals()`
+        # is the deduplicated view and `budget_report()` the deferral proof.
+        self.stream = stream if stream is not None else OpsEventStream(
+            active_period_seconds=active_period_seconds, budget=budget
+        )
         # T6: bounded retry/backoff for transient per-subscription failures, and an
         # injectable sleep so tests exercise backoff without real delay.
         self._retry = retry_policy or RetryPolicy()
@@ -634,8 +713,61 @@ class AzureEventIngestor(ChangeBasedIngestor):
 
     # ── record shaping (shared by every stream) ─────────────────────────────────
 
+    def _stamp_transport(self, event: Any) -> None:
+        """Re-stamp the event's transport to the provider FAMILY (MSP-B1 AC4).
+
+        The shared cloud-event skeleton's contract, applied identically here: a
+        natively-ingested event's ``source_system`` is the provider family
+        (``'azure'``) — the same value its bridged twin carries as ``'bridge:azure'``
+        differs in — so a native event equals its bridged twin in EVERY other field.
+
+        The recurrence fingerprint is NEVER recomputed: ``event_signature`` is left
+        exactly as the ``map_azure_*`` mapper derived it. (``OperationalEvent``
+        derives the signature only when it is empty, so assigning ``source_system``
+        afterwards cannot overwrite it — that is what keeps a native event's
+        signature equal to its bridged twin's, which is the whole point of the
+        equivalence guarantee.) The per-stream MSP-B0 source system stays visible on
+        the record WRAPPER as ``surface``, so nothing is lost.
+
+        Provenance is re-pointed at the native cloud artifact and keyed so it
+        resolves through the raw-event store under the same ``(provider, signal_id)``
+        pair :meth:`_store_raw` writes.
+        """
+        event.source_system = PROVIDER_AZURE
+        event.provenance = EvidencePointer.observed(
+            source_system=PROVIDER_AZURE,
+            source_artifact=event.signal_id,
+            source_timestamp=event.observed_at,
+            source_artifact_type=CLOUD_EVENT_ARTIFACT_TYPE,
+        ).to_dict()
+
+    def _store_raw(self, event: Any, raw: Dict[str, Any], *, stream: str, sub: str) -> None:
+        """Persist the raw provider payload against the event's OBSERVED pointer.
+
+        Keyed ``(org, provider, signal_id)`` — exactly the tuple the re-pointed
+        evidence pointer carries, so ``resolve_raw_event`` walks a normalised event
+        back to its raw payload (MSP-B0 / AT-638). The detector-visible event never
+        embeds it. Best-effort: the evidence store is not a run-critical path.
+        """
+        if self._raw_store is None:
+            return
+        try:
+            self._raw_store.put(self.org_id, PROVIDER_AZURE, event.signal_id, raw)
+        except Exception:  # evidence store is best-effort
+            logger.warning(
+                "azure_events: raw-store put failed for %s %s (sub=%s)",
+                stream, event.signal_id, sub, exc_info=True,
+            )
+
     def _to_record(
-        self, event: Any, subscription_id: str, provider_event_id: str
+        self,
+        event: Any,
+        subscription_id: str,
+        provider_event_id: str,
+        *,
+        stream: str,
+        surface: str,
+        admission: Optional[Admission] = None,
     ) -> Dict[str, Any]:
         """Wrap a normalised OperationalEvent as a pipeline delta record.
 
@@ -643,20 +775,30 @@ class AzureEventIngestor(ChangeBasedIngestor):
         event, IDENTICAL in shape to what any other cloud connector emits). The
         wrapper carries transport-only metadata — the change kind, provider,
         ``account_scope`` (the subscription, B0's account scope, kept OFF the event
-        so no provider-specific detector field is invented), the dedupe id, and the
-        evidence pointer that resolves to the raw payload. Identical shape for all
-        three streams; ``event.source_system`` (azure_monitor / azure_activity /
-        azure_service_health) is what distinguishes them.
+        so no provider-specific detector field is invented), the dedupe id, the B7
+        admission ``disposition``, and the evidence pointer that resolves to the raw
+        payload. Identical shape for all three streams; since the event's
+        ``source_system`` is now the provider family (AC4), the stream is carried
+        here as ``surface`` (the mapper's MSP-B0 source system — azure_monitor /
+        azure_activity / azure_service_health) plus the ``stream`` key, mirroring
+        the AWS skeleton's per-surface record metadata.
+
+        ``artifact_id`` keeps the surface in the key so two streams can never
+        collide on a shared provider event id.
         """
         return {
-            "artifact_id": f"{event.source_system}:{provider_event_id}",
+            "artifact_id": f"{PROVIDER_AZURE}:{surface}:{provider_event_id}",
             "change_kind": ChangeKind.CREATED,
-            "source_system": event.source_system,
+            "source_system": PROVIDER_AZURE,
             "provider": PROVIDER_AZURE,
+            "stream": stream,
+            "surface": surface,
             "account_scope": subscription_id,
             "provider_event_id": provider_event_id,
+            "event_signature": event.event_signature,
             "event": event.to_dict(),
             "evidence_pointer": event.provenance,
+            **({"admission": admission.disposition} if admission is not None else {}),
         }
 
     # ── the shared per-subscription stream engine (reused by all 3 streams) ──────
@@ -679,30 +821,64 @@ class AzureEventIngestor(ChangeBasedIngestor):
         advance-checkpoint loop shared by alerts, activity log, and service health.
         Per subscription: fetch, drop out-of-scope records (``prefilter``, e.g. the
         Administrative-only gate — T3-AC4), keep only records newer than the
-        subscription's checkpoint, normalise each through its B0 ``mapper``, wrap as
-        a delta record carrying the subscription as ``account_scope``, and advance
-        that subscription's checkpoint to the newest record SEEN — ONLY after the
+        subscription's checkpoint, normalise each through its B0 ``mapper``, re-stamp
+        the transport to the provider family (AC4), store its raw payload, ADMIT it
+        to this connector's MSP-B7 stream (dedup + per-run budget), wrap as a delta
+        record carrying the subscription as ``account_scope``, and advance that
+        subscription's checkpoint to the newest record SEEN — ONLY after the
         subscription processed cleanly. Subscriptions are INDEPENDENT: a fetch
         failure is caught, reported loudly, and leaves that subscription's checkpoint
         unadvanced while the others continue; a single malformed record is
-        loud-skipped without failing the subscription.
+        loud-skipped without failing the subscription. A budget deferral is likewise
+        loud and leaves the checkpoint unadvanced (no silent thinning).
         """
         env = self.config.environment
         next_checkpoints: Dict[str, str] = dict(checkpoints)
         records: List[Dict[str, Any]] = []
         status: Dict[str, Dict[str, Any]] = {}
 
+        surface = _STREAM_SOURCE_SYSTEM.get(stream, stream)
         for sub in self.authorized_subscriptions():
             since_iso = checkpoints.get(sub)
+            # MSP-B7 T4: the budget must stop the run FETCHING, not merely admitting —
+            # otherwise it bounds the data but never the work. Checked between
+            # subscriptions (each still gets its full page or none of it), so a
+            # budget-exhausted run stops paying for provider pages whose events would
+            # only be deferred. Loud, and the checkpoint stays put.
+            if not self.stream.has_capacity():
+                logger.warning(
+                    "azure_events: %s poll SKIPPED for subscription %s (org=%s) — "
+                    "per-run event budget exhausted; checkpoint preserved, resumes next run",
+                    stream, sub, self.org_id,
+                )
+                status[sub] = {
+                    "status": "deferred",
+                    "reason": "run_event_budget_exhausted",
+                    "polled": 0,
+                    "emitted": 0,
+                    "checkpoint_advanced": False,
+                }
+                continue
             try:
                 fetched, attempts = self._fetch_with_retry(
                     fetch, stream=stream, token=token, subscription_id=sub,
                     environment=env, since_iso=since_iso,
                 )
+                if not fetched:
+                    # An empty provider page is a FACT worth stating: without it, a
+                    # zero-record poll is indistinguishable from one whose records were
+                    # all filtered, folded, or suppressed further down. Informational —
+                    # an empty page is a normal steady-state outcome, not a fault.
+                    logger.info(
+                        "azure_events: %s returned 0 records for subscription %s",
+                        _STREAM_LABEL.get(stream, stream), sub,
+                    )
                 in_scope = [r for r in fetched if prefilter(r)] if prefilter else list(fetched)
                 new_records = _filter_new(in_scope, since_iso, ts_of)
                 emitted = 0
                 skipped = 0
+                deduped = 0
+                deferred = 0
                 for raw in new_records:
                     try:
                         event = mapper(raw, org_id=self.org_id)
@@ -713,29 +889,72 @@ class AzureEventIngestor(ChangeBasedIngestor):
                         )
                         skipped += 1
                         continue
-                    if self._raw_store is not None:
-                        try:
-                            self._raw_store.put(
-                                self.org_id, event.source_system, id_of(raw), raw
-                            )
-                        except Exception:  # evidence store is best-effort
-                            logger.warning(
-                                "azure_events: raw-store put failed for %s %s (sub=%s)",
-                                stream, id_of(raw), sub, exc_info=True,
-                            )
-                    records.append(self._to_record(event, sub, id_of(raw)))
+                    # AC4 transport re-stamp (signature untouched) → raw evidence →
+                    # B7 admission. The connector performs its OWN admission, so no
+                    # caller can consume its events un-deduplicated.
+                    self._stamp_transport(event)
+                    self._store_raw(event, raw, stream=stream, sub=sub)
+                    admission: Admission = self.stream.admit(event)
+                    if admission.is_deferred:
+                        # Budget exhausted mid-page: stop this subscription and leave
+                        # its checkpoint UNADVANCED so the whole page is re-polled next
+                        # run (admission is idempotent, so a re-poll never double-counts).
+                        deferred += 1
+                        break
+                    if admission.is_duplicate:
+                        # An at-least-once redelivery of a firing already counted —
+                        # handled by B7, not silently dropped.
+                        deduped += 1
+                        continue
+                    records.append(
+                        self._to_record(
+                            event, sub, id_of(raw),
+                            stream=stream, surface=surface, admission=admission,
+                        )
+                    )
                     emitted += 1
-                advanced = _max_ts(new_records, ts_of, floor=since_iso)
+                advanced = None if deferred else _max_ts(new_records, ts_of, floor=since_iso)
                 if advanced:
                     next_checkpoints[sub] = advanced
+                if deferred:
+                    logger.warning(
+                        "azure_events: %s poll DEFERRED for subscription %s (org=%s) — "
+                        "per-run event budget exhausted after %d emitted; checkpoint "
+                        "preserved, resumes next run",
+                        stream, sub, self.org_id, emitted,
+                    )
                 status[sub] = {
-                    "status": "ok",
+                    "status": "deferred" if deferred else "ok",
                     "polled": len(fetched),
                     "emitted": emitted,
                     "attempts": attempts,
                     **({"in_scope": len(in_scope)} if prefilter else {}),
                     **({"skipped": skipped} if skipped else {}),
+                    **({"deduped": deduped} if deduped else {}),
+                    **(
+                        {
+                            "reason": "run_event_budget_exhausted",
+                            "checkpoint_advanced": False,
+                        }
+                        if deferred
+                        else {}
+                    ),
                 }
+                # The per-subscription ingestion funnel, emitted on EVERY successful
+                # poll including an all-zero one. Each stage the records could have
+                # been lost at is a separate number, so "the endpoint succeeded but no
+                # events appeared" is answerable from one log line instead of a
+                # debugger. Reports the same counts already recorded in status[sub];
+                # nothing here is computed for logging alone.
+                logger.info(
+                    "azure_events: stream=%s subscription=%s polled=%d in_scope=%d "
+                    "new=%d mapped=%d mapper_skipped=%d deduped=%d deferred=%d "
+                    "since=%s checkpoint=%s",
+                    stream, sub, len(fetched), len(in_scope), len(new_records),
+                    emitted, skipped, deduped, deferred,
+                    since_iso or "(first_run)",
+                    next_checkpoints.get(sub) or "(unchanged)",
+                )
             except AzureSubscriptionError as se:
                 # Loud, structured, isolated. Checkpoint is NOT advanced for this
                 # subscription (no silent thinning — it is retried next run).
@@ -758,6 +977,7 @@ class AzureEventIngestor(ChangeBasedIngestor):
             records=records,
             next_checkpoint=encode_checkpoints(next_checkpoints),
             subscription_status=status,
+            budget=self.budget_report(),
         )
 
     def _fetch_with_retry(
@@ -906,6 +1126,21 @@ class AzureEventIngestor(ChangeBasedIngestor):
             id_of=service_health_id,
         )
 
+    # ── Admission read side (the deduplicated view) ─────────────────────────────
+    #
+    # Mirrors the shared cloud-event skeleton's read side exactly, so a caller reads
+    # the same two surfaces off either native cloud connector.
+
+    def active_signals(self, org_id: Optional[str] = None):
+        """The folded, deduplicated active signals produced by admission (AC5)."""
+        return self.stream.active_signals(org_id)
+
+    def budget_report(self) -> Dict[str, Any]:
+        """The run's MSP-B7 event-budget outcome (deferred volume; loud degradation)."""
+        report = self.stream.budget_report()
+        to_dict = getattr(report, "to_dict", None)
+        return to_dict() if callable(to_dict) else dict(report or {})
+
     # ── Full poll across all three V1 streams ───────────────────────────────────
 
     def ingest_all(self, *, token: Optional[str] = None, checkpoint: Any = None) -> AzureStreamResult:
@@ -950,6 +1185,8 @@ class AzureEventIngestor(ChangeBasedIngestor):
             records=alerts.records + activity.records + health.records,
             next_checkpoint=encode_stream_checkpoints(next_ns),
             subscription_status=status,
+            # One stream serves all three surfaces, so this is the whole poll's proof.
+            budget=self.budget_report(),
         )
 
     def _auth_failure_result(
@@ -984,6 +1221,7 @@ class AzureEventIngestor(ChangeBasedIngestor):
             records=[],
             next_checkpoint=encode_stream_checkpoints(ns),  # preserved, not advanced
             subscription_status=status,
+            budget=self.budget_report(),
         )
 
     # ── ChangeBasedIngestor contract (pipeline entrypoint) ───────────────────────
@@ -1023,6 +1261,7 @@ def build_ingestor(
     activity_log_client: Optional[AzureEventStreamClient] = None,
     service_health_client: Optional[AzureEventStreamClient] = None,
     raw_store: Optional[Any] = None,
+    budget: Optional[int] = None,
 ) -> Optional[AzureEventIngestor]:
     """Build an :class:`AzureEventIngestor` for ``org_id`` from configuration.
 
@@ -1038,6 +1277,17 @@ def build_ingestor(
     config = resolve_azure_event_config(org_id, env=env)
     if config is None:
         return None
+    if budget is None:
+        # The calibrated per-run event budget (MSP-B7 T6), resolved here exactly as
+        # the AWS connector's build_ingestor resolves it — so the runner-driven path
+        # is budgeted on both clouds while a directly-constructed test ingestor stays
+        # unbounded. Calibration is advisory: its absence must not block ingestion.
+        try:
+            from discovery.signals.ops_calibration import CALIBRATED_RUN_EVENT_BUDGET
+
+            budget = CALIBRATED_RUN_EVENT_BUDGET
+        except Exception:  # pragma: no cover - calibration is advisory here
+            budget = None
     return AzureEventIngestor(
         org_id,
         config,
@@ -1047,4 +1297,5 @@ def build_ingestor(
         activity_log_client=activity_log_client,
         service_health_client=service_health_client,
         raw_store=raw_store,
+        budget=budget,
     )

@@ -275,6 +275,7 @@ class _HttpStreamClient:
         timeout_seconds: int = 30,
         transport: Any = None,
         params_builder: Optional[Callable[[Optional[str]], Dict[str, str]]] = None,
+        stream: str = "",
     ) -> None:
         self._path = path
         self._api_version = api_version
@@ -284,6 +285,8 @@ class _HttpStreamClient:
         # (its REQUIRED $filter); Alerts and Service Health pass none, so their
         # requests are unchanged.
         self._params_builder = params_builder
+        # The stream key, for LOG TEXT ONLY (never sent to ARM, never on a record).
+        self._stream = stream or path
 
     def fetch(self, *, token, subscription_id, environment, since_iso):
         import httpx  # local import so offline runs never require httpx at import
@@ -295,6 +298,16 @@ class _HttpStreamClient:
         params = {"api-version": self._api_version}
         if self._params_builder is not None:
             params.update(self._params_builder(since_iso))
+        # DEBUG transport trace. The URL and $filter are non-secret request
+        # configuration and are the two things that explain a legitimate 200/empty
+        # (a clamped or collapsed time window). The bearer token lives only in the
+        # headers dict below and is NEVER logged, here or anywhere.
+        logger.debug(
+            "azure_admin_events: request stream=%s subscription=%s url=%s "
+            "api-version=%s filter=%s",
+            self._stream, subscription_id, url, self._api_version,
+            params.get("$filter", "(none)"),
+        )
         with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
             resp = client.get(
                 url,
@@ -303,7 +316,12 @@ class _HttpStreamClient:
             )
         resp.raise_for_status()
         body = resp.json()
-        return list(body.get("value", []) if isinstance(body, dict) else [])
+        records = list(body.get("value", []) if isinstance(body, dict) else [])
+        logger.debug(
+            "azure_admin_events: response stream=%s subscription=%s status=%s records=%d",
+            self._stream, subscription_id, resp.status_code, len(records),
+        )
+        return records
 
 
 def default_activity_log_client() -> AzureEventStreamClient:
@@ -313,6 +331,7 @@ def default_activity_log_client() -> AzureEventStreamClient:
             path=_ACTIVITY_LOG_PATH,
             api_version=ACTIVITY_LOG_API_VERSION,
             params_builder=activity_log_params,  # $filter is REQUIRED by this operation
+            stream="activity_log",
         )
     return _FixtureStreamClient(ACTIVITY_LOG_FIXTURE, activity_subscription_id)
 
@@ -320,5 +339,9 @@ def default_activity_log_client() -> AzureEventStreamClient:
 def default_service_health_client() -> AzureEventStreamClient:
     """Offline fixture client, or the live Service Health HTTP client when live."""
     if is_live():
-        return _HttpStreamClient(path=_SERVICE_HEALTH_PATH, api_version=SERVICE_HEALTH_API_VERSION)
+        return _HttpStreamClient(
+            path=_SERVICE_HEALTH_PATH,
+            api_version=SERVICE_HEALTH_API_VERSION,
+            stream="service_health",
+        )
     return _FixtureStreamClient(SERVICE_HEALTH_FIXTURE, service_health_subscription_id)

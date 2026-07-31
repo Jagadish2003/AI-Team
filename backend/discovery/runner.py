@@ -830,6 +830,18 @@ def _ingest_azure_events(org_id: str, run_id: str) -> Dict[str, Any]:
         "first_run": bool(result.first_run),
         "checkpoint_advanced": bool(result.checkpoint_advanced),
     }
+    # MSP-B7 T4: the connector admits its own events, so its budget report is the
+    # deferral proof for this poll. A breached budget is a partial ingest and must
+    # never be reported as a clean one (mirrors the AWS `poll` health block).
+    try:
+        budget = ingestor.budget_report()
+    except Exception:  # noqa: BLE001 — health reporting is never run-critical
+        budget = {}
+    if budget:
+        health["budget"] = dict(budget)
+        if budget.get("breached"):
+            health["status"] = "degraded"
+            health.setdefault("reason", "run_event_budget_exhausted")
     if result.error is not None:
         health["reason"] = type(result.error).__name__
         logger.warning(
