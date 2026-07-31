@@ -25,6 +25,7 @@ export interface OpportunityOverride {
 export interface OpportunityCandidate {
   id: string;
   identifier?: string;             // legacy mock field
+  opportunity_identity?: string;    // stable cross-run outcome/lifecycle key
   title: string;
   category: string;
   tier: Tier;

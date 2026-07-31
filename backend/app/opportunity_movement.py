@@ -164,7 +164,12 @@ def _current_signal_values(
     return values, captured_at, window_days
 
 
-def _entity_keys_as_of_run(org_id: str, run_id: str) -> Optional[List[str]]:
+def _entity_keys_as_of_run(
+    org_id: str,
+    run_id: str,
+    *,
+    opportunity_identity: Optional[str] = None,
+) -> Optional[List[str]]:
     """The resolved entity population visible as of one run.
 
     Reuses ``ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE`` — the shared clause both
@@ -174,6 +179,15 @@ def _entity_keys_as_of_run(org_id: str, run_id: str) -> Optional[List[str]]:
     correctly suppresses a fabricated population confounder.
     """
     try:
+        if opportunity_identity:
+            by_instance_time = _entity_keys_as_of_run_for_opportunity(
+                org_id,
+                run_id,
+                opportunity_identity,
+            )
+            if by_instance_time is not None:
+                return by_instance_time
+
         from database.models.entities import ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE
 
         with closing(db.connect()) as con:
@@ -192,6 +206,84 @@ def _entity_keys_as_of_run(org_id: str, run_id: str) -> Optional[List[str]]:
     # The stable resolution key, not the random per-row uuid — the same identity
     # entity_resolution dedupes on, so a recreated row is not read as a change.
     return sorted(f"{row[0]}:{row[1]}" for row in rows)
+
+
+def _entity_keys_as_of_run_for_opportunity(
+    org_id: str,
+    run_id: str,
+    opportunity_identity: str,
+) -> Optional[List[str]]:
+    """Resolved entity population using this opportunity's observed run order.
+
+    The shared entity visibility clause derives chronology from ``runs.seq``.
+    Movement records also have the stable ``opportunity_identity`` and the
+    opportunity instance series, so use that series' timestamps when available.
+    This keeps a reused or replayed run id from making a later observation look
+    older than the baseline and fabricating a CI population removal.
+    """
+    identity = str(opportunity_identity or "").strip()
+    if not identity:
+        return None
+
+    with closing(db.connect()) as con:
+        with con.cursor() as cur:
+            cur.execute(
+                "SELECT run_id, created_at FROM opportunity_instances "
+                "WHERE org_id = %s AND opportunity_identity = %s "
+                "AND is_deleted = FALSE",
+                (org_id, identity),
+            )
+            series_rows = cur.fetchall()
+            run_times: Dict[str, datetime] = {}
+            for row in series_rows:
+                parsed = _parse_dt(row[1])
+                if row[0] and parsed is not None:
+                    run_times[str(row[0])] = parsed
+            target_created = run_times.get(run_id)
+            if target_created is None:
+                return None
+
+            cur.execute(
+                "SELECT entity_type, canonical_name, first_seen_run_id "
+                "FROM entities WHERE org_id = %s",
+                (org_id,),
+            )
+            entity_rows = cur.fetchall()
+
+            unknown_run_ids = sorted(
+                {
+                    str(row[2])
+                    for row in entity_rows
+                    if row[2] and str(row[2]) not in run_times
+                }
+                | {run_id}
+            )
+            seq_by_run: Dict[str, int] = {}
+            if unknown_run_ids:
+                placeholders = ", ".join(["%s"] * len(unknown_run_ids))
+                cur.execute(
+                    f"SELECT id, seq FROM runs WHERE id IN ({placeholders})",
+                    tuple(unknown_run_ids),
+                )
+                seq_by_run = {str(row[0]): int(row[1]) for row in cur.fetchall()}
+
+    target_seq = seq_by_run.get(run_id)
+    keys: List[str] = []
+    for entity_type, canonical_name, first_seen_run_id in entity_rows:
+        first_seen = str(first_seen_run_id or "")
+        first_seen_at = run_times.get(first_seen)
+        if first_seen_at is not None:
+            if first_seen_at <= target_created:
+                keys.append(f"{entity_type}:{canonical_name}")
+            continue
+
+        first_seen_seq = seq_by_run.get(first_seen)
+        if first_seen_seq is None or (
+            target_seq is not None and first_seen_seq <= target_seq
+        ):
+            keys.append(f"{entity_type}:{canonical_name}")
+
+    return sorted(keys)
 
 
 def _lower_is_better_map(detector_id: str) -> Dict[str, bool]:
@@ -395,10 +487,14 @@ def _detect_record_confounders(
             baseline=baseline,
             movement=record,
             baseline_entity_keys=_entity_keys_as_of_run(
-                org_id, str(record.get("baselineRunId") or "")
+                org_id,
+                str(record.get("baselineRunId") or ""),
+                opportunity_identity=opportunity_identity,
             ),
             current_entity_keys=_entity_keys_as_of_run(
-                org_id, str(record.get("currentRunId") or "")
+                org_id,
+                str(record.get("currentRunId") or ""),
+                opportunity_identity=opportunity_identity,
             ),
         )
     except Exception as exc:  # noqa: BLE001

@@ -44,6 +44,10 @@ export const cacheKeys = {
   runOppEnrichment: (runId: string, oppId: string) =>
     `runs/${runId}/opportunities/${oppId}/enrichment`,
   runExecutiveReport: (runId: string) => `runs/${runId}/executive-report`,
+  outcomesScope: 'outcomes',
+  outcomePortfolio: 'outcomes/portfolio',
+  opportunityOutcome: (opportunityIdentity: string) =>
+    `outcomes/opportunity/${opportunityIdentity}`,
 
   // ── Run Health dashboard ─────────────────────────────────────────────────
   /** Prefix covering every run-health panel — invalidate to refresh them all. */

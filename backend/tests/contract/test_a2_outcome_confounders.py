@@ -297,6 +297,24 @@ class TestSeededCiPopulationChange:
 
         assert _delta(record) == -90
 
+    def test_reused_run_ids_do_not_invert_the_population_window(self):
+        """The movement series, not stale global run seq, orders the comparison."""
+        other_org = _org()
+        _run("run_post_2", other_org, 20)
+
+        org, identity = _org(), _identity()
+        run = _setup(org, identity)
+        for i in range(5):
+            _entity(org, "run_baseline", f"seq-service-{i}")
+        for i in range(5, 10):
+            _entity(org, "run_post_2", f"seq-service-{i}")
+
+        record = _measure(org, identity, run)
+
+        detail = _caveats(record, CONFOUNDER_CI_POPULATION_CHANGE)[0]["detail"]
+        assert detail["addedCount"] >= 1
+        assert detail["removedCount"] == 0
+
     def test_no_caveat_when_the_population_is_unchanged(self):
         org, identity = _org(), _identity()
         run = _setup(org, identity)
