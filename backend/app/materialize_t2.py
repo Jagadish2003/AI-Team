@@ -652,6 +652,8 @@ def run_trackb_and_persist(
             raise
         except Exception as e:
             errors["exec_report"] = str(e)
+            from .outcome_surfaces import build_empty_outcome_report_section
+
             db.run_kv_set(
                 "executive_report",
                 run_id,
@@ -672,6 +674,7 @@ def run_trackb_and_persist(
                     "topQuickWins": [],
                     "snapshotBubbles": [],
                     "roadmapHighlights": [],
+                    "outcomeSection": build_empty_outcome_report_section(run_id),
                 },
             )
 
@@ -787,6 +790,73 @@ def run_trackb_and_persist(
             )
         except Exception as e:
             logger.warning("T7 temporal enrichment failed (non-blocking): %s", e)
+
+        # 2.0-A2 T2: freeze the measurement basis for every finding this run
+        # CREATED. Runs after temporal enrichment so the captured values include
+        # the baseline statistics as they stood at capture, and after identity
+        # stamping so the artifact can be keyed on the stable identity.
+        #
+        # Write-once: a finding that already has a baseline is left exactly as it
+        # was, so a re-run — or a replay of this run — never restates what the
+        # finding was born with. Non-blocking, like every other Stage-2 writer.
+        try:
+            from .opportunity_baseline import (
+                capture_baselines_for_run,
+                ensure_opportunity_baseline_table,
+            )
+
+            ensure_opportunity_baseline_table()
+            _baseline_counts = capture_baselines_for_run(
+                opps, org_id=run_org_id, run_id=run_id
+            )
+            logger.info(
+                "Baseline capture for run %s: %d created, %d already frozen, %d skipped",
+                run_id,
+                _baseline_counts["created"],
+                _baseline_counts["existing"],
+                _baseline_counts["skipped"],
+            )
+        except Exception as e:  # noqa: BLE001
+            errors["opportunity_baseline"] = str(e)
+            logger.warning("Baseline capture failed (non-blocking): %s", e)
+
+        # 2.0-A2 T3: post-action monitoring. For every opportunity a human marked
+        # actioned, re-measure the same signals this baseline froze and store the
+        # comparison. Runs AFTER baseline capture so a finding created by this run
+        # has its basis before anything tries to compare against it.
+        #
+        # No outcome without action: an opportunity that is not actioned, has no
+        # frozen baseline, or has no run after its action date produces NO record
+        # — never a zero-delta one. Non-blocking.
+        try:
+            from .opportunity_movement import measure_movements_for_run
+
+            _movement = measure_movements_for_run(run_org_id, run_id)
+            logger.info(
+                "Movement measurement for run %s: %d measured, %d skipped (%s), %d failed",
+                run_id,
+                _movement["measured"],
+                _movement["skipped"],
+                _movement["skipReasons"] or "no skips",
+                _movement["failed"],
+            )
+        except Exception as e:  # noqa: BLE001
+            errors["opportunity_movement"] = str(e)
+            logger.warning("Movement measurement failed (non-blocking): %s", e)
+
+        # 2.0-A2 T6: store the report outcome section from movement artifacts.
+        try:
+            from .outcome_surfaces import build_executive_outcome_section
+
+            _exec_report = db.run_kv_get("executive_report", run_id, {}) or {}
+            _exec_report["outcomeSection"] = build_executive_outcome_section(
+                run_org_id,
+                run_id,
+            )
+            db.run_kv_set("executive_report", run_id, _exec_report)
+        except Exception as e:  # noqa: BLE001
+            errors["outcome_section"] = str(e)
+            logger.warning("Outcome report section failed (non-blocking): %s", e)
 
         # 2.0-A1 — intervention projection (non-blocking). See the helper
         # docstring: runs after temporal enrichment, stamps provenance, and
