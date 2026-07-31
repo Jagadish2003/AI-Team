@@ -555,6 +555,10 @@ CREATE TABLE "public"."opportunity_movements" (
     "confounder_count" integer DEFAULT 0 NOT NULL,
     "confounder_material_count" integer DEFAULT 0 NOT NULL,
     "confounder_types" "text",
+    "projection_validation_verdict" character varying(24) DEFAULT 'not_projected'::character varying NOT NULL,
+    "projection_pack_id" character varying(64),
+    "projection_pack_version" character varying(32),
+    "projection_confidence" character varying(16),
     CONSTRAINT "opportunity_movements_pkey" PRIMARY KEY ("org_id", "opportunity_identity", "current_run_id")
 );
 
@@ -1577,7 +1581,15 @@ CREATE INDEX "idx_opp_movements_org_verdict" ON "public"."opportunity_movements"
 
 CREATE INDEX "idx_opp_movements_org_confounders" ON "public"."opportunity_movements" USING "btree" ("org_id", "confounder_count");
 
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0034') ON CONFLICT DO NOTHING;
+CREATE INDEX "idx_opp_movements_org_projection_verdict" ON "public"."opportunity_movements" USING "btree" ("org_id", "projection_validation_verdict");
+
+CREATE INDEX "idx_opp_movements_org_projection_pack" ON "public"."opportunity_movements" USING "btree" ("org_id", "projection_pack_id");
+
+CREATE INDEX "idx_opp_movements_org_detector" ON "public"."opportunity_movements" USING "btree" ("org_id", "detector_id");
+
+CREATE INDEX "idx_opp_movements_org_projection_confidence" ON "public"."opportunity_movements" USING "btree" ("org_id", "projection_confidence");
+
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0035') ON CONFLICT DO NOTHING;
 
 
 --

@@ -65,6 +65,12 @@ CREATE TABLE IF NOT EXISTS opportunity_movements (
     confounder_count           INTEGER  NOT NULL DEFAULT 0,
     confounder_material_count  INTEGER  NOT NULL DEFAULT 0,
     confounder_types           TEXT,
+    -- 2.0-A2 T5: projection-validation calibration verdict, promoted for A1/A3
+    -- aggregate reads. The full validation payload stays in `record`.
+    projection_validation_verdict  VARCHAR(24) NOT NULL DEFAULT 'not_projected',
+    projection_pack_id             VARCHAR(64),
+    projection_pack_version        VARCHAR(32),
+    projection_confidence          VARCHAR(16),
     PRIMARY KEY (org_id, opportunity_identity, current_run_id)
 )
 """
@@ -93,15 +99,45 @@ CREATE INDEX IF NOT EXISTS idx_opp_movements_org_confounders
     ON opportunity_movements (org_id, confounder_count)
 """
 
+# T5 calibration aggregate: within/above/below/not projected/too early.
+CREATE_OPPORTUNITY_MOVEMENTS_IDX_PROJECTION_VERDICT = """
+CREATE INDEX IF NOT EXISTS idx_opp_movements_org_projection_verdict
+    ON opportunity_movements (org_id, projection_validation_verdict)
+"""
+
+# T5 aggregate filters A1/A3 consume.
+CREATE_OPPORTUNITY_MOVEMENTS_IDX_PROJECTION_PACK = """
+CREATE INDEX IF NOT EXISTS idx_opp_movements_org_projection_pack
+    ON opportunity_movements (org_id, projection_pack_id)
+"""
+
+CREATE_OPPORTUNITY_MOVEMENTS_IDX_DETECTOR = """
+CREATE INDEX IF NOT EXISTS idx_opp_movements_org_detector
+    ON opportunity_movements (org_id, detector_id)
+"""
+
+CREATE_OPPORTUNITY_MOVEMENTS_IDX_PROJECTION_CONFIDENCE = """
+CREATE INDEX IF NOT EXISTS idx_opp_movements_org_projection_confidence
+    ON opportunity_movements (org_id, projection_confidence)
+"""
+
 ALL_OPPORTUNITY_MOVEMENTS_DDL: tuple[str, ...] = (
     CREATE_OPPORTUNITY_MOVEMENTS_TABLE,
     CREATE_OPPORTUNITY_MOVEMENTS_IDX_IDENTITY,
     CREATE_OPPORTUNITY_MOVEMENTS_IDX_RUN,
     CREATE_OPPORTUNITY_MOVEMENTS_IDX_VERDICT,
     CREATE_OPPORTUNITY_MOVEMENTS_IDX_CONFOUNDERS,
+    CREATE_OPPORTUNITY_MOVEMENTS_IDX_PROJECTION_VERDICT,
+    CREATE_OPPORTUNITY_MOVEMENTS_IDX_PROJECTION_PACK,
+    CREATE_OPPORTUNITY_MOVEMENTS_IDX_DETECTOR,
+    CREATE_OPPORTUNITY_MOVEMENTS_IDX_PROJECTION_CONFIDENCE,
 )
 
 DROP_OPPORTUNITY_MOVEMENTS_DDL: tuple[str, ...] = (
+    "DROP INDEX IF EXISTS idx_opp_movements_org_projection_confidence",
+    "DROP INDEX IF EXISTS idx_opp_movements_org_detector",
+    "DROP INDEX IF EXISTS idx_opp_movements_org_projection_pack",
+    "DROP INDEX IF EXISTS idx_opp_movements_org_projection_verdict",
     "DROP INDEX IF EXISTS idx_opp_movements_org_confounders",
     "DROP INDEX IF EXISTS idx_opp_movements_org_verdict",
     "DROP INDEX IF EXISTS idx_opp_movements_org_run",
@@ -131,6 +167,10 @@ OPPORTUNITY_MOVEMENT_COLUMNS: tuple[str, ...] = (
     "confounder_count",
     "confounder_material_count",
     "confounder_types",
+    "projection_validation_verdict",
+    "projection_pack_id",
+    "projection_pack_version",
+    "projection_confidence",
 )
 
 __all__ = [
