@@ -82,6 +82,7 @@ from .routes_secops_evidence import register_secops_evidence_routes
 from .routes_opportunity_lifecycle import register_opportunity_lifecycle_routes
 from .routes_opportunity_baseline import register_opportunity_baseline_routes
 from .routes_opportunity_movement import register_opportunity_movement_routes
+from .routes_learning_feedback import register_learning_routes
 from .routes_outcomes import register_outcome_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
@@ -375,6 +376,10 @@ register_opportunity_movement_routes(app)
 # 2.0-A2 T6: customer-facing outcome surfaces, assembled from stored lifecycle and
 # movement artifacts with caveat counts and run-id evidence.
 register_outcome_routes(app)
+# 2.0-A3 T1: the learning signal set — analyst accept/dismiss/defer-with-reason
+# plus A2 outcome results, outcome-weighted. Records and inspects signals only;
+# the bounded ranking adjustment is T2 and is not registered here.
+register_learning_routes(app)
 
 origins = [
     o.strip()
@@ -797,6 +802,50 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
     )
 
 
+#: 2.0-A3 T1 — how a review decision maps onto a learning action. UNREVIEWED is
+#: absent on purpose: clearing a decision is the absence of a judgement, and
+#: recording it as one would let a reset teach the ranking layer something.
+_REVIEW_DECISION_TO_LEARNING_ACTION = {"APPROVED": "accept", "REJECTED": "dismiss"}
+
+
+def _mirror_decision_to_learning(
+    opp: Dict[str, Any], decision: str, run_id: str
+) -> None:
+    """Record a review decision as a durable learning signal. Never blocks.
+
+    The review decision answers "is this finding real?" per run; the learning
+    record answers "is this finding type worth our team's time?" across runs.
+    They are different questions with different lifetimes, which is why this
+    mirrors rather than replaces — see ``database/models/opportunity_feedback.py``.
+
+    A finding with no ``opportunity_identity`` (materialized before A1 T6 stamped
+    it) is skipped rather than recorded under a run-scoped id: a learning signal
+    that cannot be matched on the next run is worse than no signal, because it
+    counts towards the cold-start threshold while informing nothing.
+    """
+    action = _REVIEW_DECISION_TO_LEARNING_ACTION.get(decision)
+    if not action:
+        return
+    identity = str(opp.get("opportunity_identity") or "").strip()
+    if not identity:
+        return
+    try:
+        from .learning_feedback import record_feedback
+
+        debug = opp.get("_debug") if isinstance(opp.get("_debug"), dict) else {}
+        record_feedback(
+            get_current_org_id(),
+            identity,
+            action,
+            actor_id="review_decision",
+            detector_id=(debug or {}).get("detector_id"),
+            pack_id=opp.get("packId"),
+            run_id=run_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - learning must never break review
+        logger.warning("Could not mirror decision to learning record: %s", exc)
+
+
 @app.post(
     "/api/runs/{run_id}/opportunities/{opp_id}/decision",
     dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
@@ -844,6 +893,14 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
         }
         audit = run_kv_get("audit", run_id, default_audit())
         run_kv_set("audit", run_id, [event, *audit])
+        # 2.0-A3 T1: mirror the review decision into the durable learning record.
+        # APPROVED/REJECTED is a per-run judgement stored in a KV blob that
+        # materialization rewrites and replay resets; the learning layer needs it
+        # keyed on the stable opportunity_identity and surviving the run. Mirroring
+        # here means the existing analyst UI feeds learning with no frontend
+        # change. UNREVIEWED is deliberately not mirrored — clearing a decision is
+        # the absence of a judgement, not a third kind of one.
+        _mirror_decision_to_learning(o, decision, run_id)
     # with_display (not just title) so impact/effort carry the same stable matrix
     # offset as the list endpoint — otherwise the bubble jumps when its decision
     # response replaces the listed opportunity in the UI. R18-C1 T4: same

@@ -1,5 +1,5 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0034.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0036.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
 -- 03_lazy_runtime_tables.sql. Creates the agentiq role, all tables (incl.
@@ -11,7 +11,7 @@
 -- runbook_match_decision_history / runbook_match_feedback, and the R-1.9.1-L3
 -- vendor-side license_registry + append-only issuance_audit),
 -- indexes/constraints/rules, seeds the connector catalog, grants the app login
--- role(s) privileges on the schema, and stamps alembic_version to head 0034.
+-- role(s) privileges on the schema, and stamps alembic_version to head 0036.
 --
 -- BEFORE RUNNING ON PRODUCTION — two values in this file are dev defaults and
 -- MUST be set for the target environment. Both are marked "TODO(deploy)" below:
@@ -560,6 +560,36 @@ CREATE TABLE "public"."opportunity_movements" (
     "projection_pack_version" character varying(32),
     "projection_confidence" character varying(16),
     CONSTRAINT "opportunity_movements_pkey" PRIMARY KEY ("org_id", "opportunity_identity", "current_run_id")
+);
+
+
+--
+-- Name: opportunity_feedback; Type: TABLE; Schema: public; Owner: -
+--
+-- 2.0-A3 T1: the durable analyst accept/dismiss/defer record the learning
+-- signal set reads. Keyed on the stable opportunity_identity, NOT on a run:
+-- the run-scoped `opps` KV `decision` field is rewritten wholesale by
+-- materialization and reset by replay, so a learning signal stored there would
+-- not survive to inform the next run. APPEND-ONLY: an analyst who changes their
+-- mind appends a new row (see FEEDBACK_GRANTS in the model module for the
+-- production REVOKE that makes that a capability, not a convention).
+--
+
+CREATE TABLE "public"."opportunity_feedback" (
+    "feedback_id" character varying(64) NOT NULL,
+    "org_id" character varying(64) NOT NULL,
+    "opportunity_identity" character varying(64) NOT NULL,
+    "action" character varying(16) NOT NULL,
+    "reason_code" character varying(48),
+    "reason_detail" "text",
+    "actor_id" character varying(128) NOT NULL,
+    "detector_id" character varying(128),
+    "pack_id" character varying(64),
+    "signal_concept" character varying(160),
+    "run_id" character varying(64),
+    "recorded_at" timestamp with time zone NOT NULL,
+    "record" "jsonb" NOT NULL,
+    CONSTRAINT "opportunity_feedback_pkey" PRIMARY KEY ("feedback_id")
 );
 
 
@@ -1589,7 +1619,18 @@ CREATE INDEX "idx_opp_movements_org_detector" ON "public"."opportunity_movements
 
 CREATE INDEX "idx_opp_movements_org_projection_confidence" ON "public"."opportunity_movements" USING "btree" ("org_id", "projection_confidence");
 
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0035') ON CONFLICT DO NOTHING;
+
+--
+-- Name: idx_opportunity_feedback_*; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_opportunity_feedback_identity" ON "public"."opportunity_feedback" USING "btree" ("org_id", "opportunity_identity", "recorded_at" DESC);
+
+CREATE INDEX "idx_opportunity_feedback_similarity" ON "public"."opportunity_feedback" USING "btree" ("org_id", "detector_id", "pack_id", "recorded_at" DESC);
+
+CREATE INDEX "idx_opportunity_feedback_org_recorded" ON "public"."opportunity_feedback" USING "btree" ("org_id", "recorded_at" DESC);
+
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0036') ON CONFLICT DO NOTHING;
 
 
 --
