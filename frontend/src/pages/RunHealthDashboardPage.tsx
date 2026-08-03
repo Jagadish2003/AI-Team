@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import PackCertificationBadge from "../components/common/PackCertificationBadge";
+import {
+  PackDeprecationBadge,
+  PackDeprecationDetail,
+} from "../components/common/PackDeprecationNotice";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Activity,
@@ -915,8 +919,32 @@ function PacksPanel({
                       testId={`pack-certification-badge-${pack.pack_id}`}
                     />
                   </span>
+                  {/* 2.0-C4 T2 (AT-843 / AC1): a fourth orthogonal fact — is this
+                      pack being retired? Its own pill for the same reason
+                      certification has one: a pack can be active, current, certified
+                      AND deprecated all at once. */}
+                  <span data-testid={`pack-deprecation-${pack.pack_id}`}>
+                    <PackDeprecationBadge
+                      phase={pack.deprecation_phase}
+                      label={pack.deprecation_label}
+                      notice={pack.deprecation_notice}
+                      testId={`pack-deprecation-badge-${pack.pack_id}`}
+                    />
+                  </span>
                 </div>
               </div>
+              {pack.deprecation_phase ? (
+                <div className="mt-3" data-testid={`pack-deprecation-note-${pack.pack_id}`}>
+                  <PackDeprecationDetail
+                    phase={pack.deprecation_phase}
+                    notice={pack.deprecation_notice}
+                    graceEndsOn={pack.deprecation_ends_on}
+                    replacementLabel={pack.deprecation_replacement_label}
+                    daysRemaining={pack.deprecation_days_remaining}
+                    testId={`pack-deprecation-detail-${pack.pack_id}`}
+                  />
+                </div>
+              ) : null}
               {pack.pack_state === "disabled" ? (
                 <p data-testid={`pack-disabled-note-${pack.pack_id}`} className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-300">
                   This pack is disabled and will not run again. Everything it produced

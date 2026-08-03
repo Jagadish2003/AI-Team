@@ -68,6 +68,20 @@ export interface OpportunityCandidate {
   // Valid badge, reviewed against an older platform version. Additive, never a
   // downgrade.
   packCertificationReviewDue?: boolean;
+  // 2.0-C4 T2 (AT-843 / AC1): the producing pack is being superseded. Stamped at
+  // serve time (like packState and the certification level, and unlike the
+  // immutable packVersion) and present ONLY for a deprecated pack, so a surface
+  // renders a notice or nothing. The finding itself is never altered.
+  packDeprecated?: boolean;
+  packDeprecationPhase?: "grace" | "grace_expired";
+  packDeprecationLabel?: string;
+  /** The one-sentence notice: reason, dates, and the replacement. */
+  packDeprecationNotice?: string;
+  /** The date support ends. Absent when no removal date has been announced. */
+  packDeprecationEndsOn?: string;
+  /** Absent when no replacement pack has been named. */
+  packDeprecationReplacementPackId?: string;
+  packDeprecationReplacementLabel?: string;
 }
 
 export interface ReviewAuditEvent {

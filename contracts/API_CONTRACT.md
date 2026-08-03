@@ -1,6 +1,51 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.20
+Version: v1.21
 Date: 2026-08-03
+
+> v1.21 — 2.0-C4 T2 (Pack Deprecation Notice Surfacing): a pack that is being
+> superseded now carries a notice at run configuration, in run health, and on its
+> findings, with the date it stops being supported and what replaces it. All fields
+> are additive; no pack ships a deprecation today, so every shape below is absent or
+> null on current responses and a pre-v1.21 consumer is unaffected.
+>
+> **A notice is present ONLY for a deprecated pack.** There is no "not deprecated"
+> object: the field is `null`/absent otherwise, so a consumer renders a notice or
+> renders nothing. Do not synthesise one.
+>
+> **New shape — `PackDeprecationNotice`** (identical on every surface, built once
+> server-side so the three surfaces cannot word it differently):
+> `{ packId, version, phase: "grace" | "grace_expired", label, statusLabel, reason,
+> deprecatedOn (YYYY-MM-DD), graceEndsOn (YYYY-MM-DD, "" ⇒ no removal date
+> announced), daysRemaining (number | null), replacementPackId ("" ⇒ none named),
+> replacementLabel, summary }`.
+>
+> `phase` is `grace` while the pack still runs normally and `grace_expired` once the
+> announced grace period has passed. An empty `graceEndsOn` never expires.
+>
+> **Extended shapes:**
+> - `GET /api/packs/state` — each pack row gains `deprecation`
+>   (`PackDeprecationNotice | null`; null for a live pack and for an orphaned row).
+> - `GET /api/run-health/packs` — each pack row gains `deprecated` (true, absent
+>   otherwise), `deprecation_phase`, `deprecation_label`, `deprecation_reason`,
+>   `deprecation_on`, `deprecation_ends_on` (null ⇒ no announced date),
+>   `deprecation_days_remaining`, `deprecation_replacement_pack_id`,
+>   `deprecation_replacement_label`, `deprecation_notice`.
+> - `OpportunityCandidate` — gains `packDeprecated` (true, absent otherwise),
+>   `packDeprecationPhase`, `packDeprecationLabel`, `packDeprecationNotice`, and —
+>   only when declared — `packDeprecationEndsOn`, `packDeprecationReplacementPackId`,
+>   `packDeprecationReplacementLabel`. Absent rather than empty, so a surface never
+>   renders a date or replacement with nothing after it.
+> - Run record / `pack_deprecations` run-scoped KV — gains `packDeprecations`, the
+>   deprecation position of each activated pack AS EVALUATED AT LAUNCH
+>   (`{ evaluatedOn, evaluated[], deprecated[], inGrace[], graceExpired[],
+>   replacements{}, packs[] }`). This is an AUDIT record: every display surface
+>   reports the LIVE position, because "is this pack still supported" is a question
+>   about now.
+>
+> Deprecation is a THIRD orthogonal fact beside pack state (2.0-C1) and certification
+> (2.0-C2). A pack can be active, current, certified, and deprecated at once; none of
+> those fields implies another. A deprecated pack in grace runs normally, so a
+> consumer must not present it as an error or as unhealthy.
 
 > v1.20 — 2.0-C2 T5 (Certification Expiry): a certification now expires on TWO
 > rules — the platform-version scope it was reviewed against, and the age of the

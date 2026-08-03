@@ -1,5 +1,6 @@
 import { apiGet } from '../lib/apiClient';
 import type { PackCertification } from '../types/packCertification';
+import type { PackDeprecationNotice } from '../types/packDeprecation';
 
 /**
  * packStateApi — the pack lifecycle + certification read surface (2.0-C1 / 2.0-C2).
@@ -27,6 +28,14 @@ export interface PackStateItem {
    * no longer declares — never a guessed level.
    */
   certification: PackCertification | null;
+  /**
+   * 2.0-C4 T2 (AT-843): the pack's deprecation notice — why it is going away, the
+   * date it stops being supported, and what replaces it. Null for a pack that is
+   * not deprecated (the normal case) and for an orphaned row, so a picker renders
+   * a notice or nothing. Optional because it is additive — a response served
+   * before contract v1.21 omits the field entirely.
+   */
+  deprecation?: PackDeprecationNotice | null;
   /**
    * 2.0-C2 T4 (AT-834): true when this org's certification policy would refuse the
    * pack at activation. Advisory — the gate lives at activation — so a selection
@@ -70,6 +79,22 @@ export function certificationsByPackId(
   const out: Record<string, PackCertification> = {};
   for (const pack of response?.packs ?? []) {
     if (pack.certification) out[pack.packId] = pack.certification;
+  }
+  return out;
+}
+
+/**
+ * `{packId: notice}` for the DEPRECATED packs only (2.0-C4 T2 / AT-843).
+ *
+ * Packs that are not deprecated are absent rather than mapped to null, so a
+ * lookup is falsy for them and a caller cannot accidentally render an empty notice.
+ */
+export function deprecationsByPackId(
+  response: PackStateResponse | null | undefined,
+): Record<string, PackDeprecationNotice> {
+  const out: Record<string, PackDeprecationNotice> = {};
+  for (const pack of response?.packs ?? []) {
+    if (pack.deprecation) out[pack.packId] = pack.deprecation;
   }
   return out;
 }

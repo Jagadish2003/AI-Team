@@ -130,6 +130,23 @@ export interface PackHealthItem {
   // 2.0-C2 T5 (AT-835): why it is due, and the date it falls due.
   certification_review_due_detail?: string | null;
   certification_review_due_on?: string | null;
+  /**
+   * 2.0-C4 T2 (AT-843 / AC1): the pack is DEPRECATED today. Read LIVE for the same
+   * reason `pack_state` and the certification level are — "is this pack still
+   * supported, and until when" is a question about now. Absent (not `false`) for a
+   * pack that is not deprecated, so the panel renders a notice or nothing.
+   */
+  deprecated?: boolean;
+  deprecation_phase?: "grace" | "grace_expired";
+  deprecation_label?: string;
+  deprecation_reason?: string;
+  deprecation_on?: string;
+  /** The date support ends. Null when no removal date has been announced. */
+  deprecation_ends_on?: string | null;
+  deprecation_days_remaining?: number | null;
+  deprecation_replacement_pack_id?: string | null;
+  deprecation_replacement_label?: string | null;
+  deprecation_notice?: string;
 }
 
 /**

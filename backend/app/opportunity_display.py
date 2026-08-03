@@ -35,12 +35,14 @@ def with_display_title(
     opp: Dict[str, Any],
     disabled_pack_ids: Optional[Set[str]] = None,
     certifications: Optional[Dict[str, Dict[str, Any]]] = None,
+    deprecations: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Shape one opportunity for display.
 
     ``disabled_pack_ids`` is the caller's pre-resolved set of this org's disabled
-    packs (2.0-C1 T2) and ``certifications`` the pre-resolved certification badges
-    (2.0-C2 T3). Pass them when shaping a LIST so each is read once for the whole
+    packs (2.0-C1 T2), ``certifications`` the pre-resolved certification badges
+    (2.0-C2 T3), and ``deprecations`` the pre-resolved deprecation notices
+    (2.0-C4 T2). Pass them when shaping a LIST so each is read once for the whole
     list instead of once per finding; omit them for a single opportunity and they
     are resolved here.
     """
@@ -54,12 +56,15 @@ def with_display_title(
     )
     if display_title:
         display_opp["title"] = display_title
-    return with_pack_certification(
-        with_pack_state(
-            with_runbook_lifecycle(display_opp),
-            disabled_pack_ids=disabled_pack_ids,
+    return with_pack_deprecation(
+        with_pack_certification(
+            with_pack_state(
+                with_runbook_lifecycle(display_opp),
+                disabled_pack_ids=disabled_pack_ids,
+            ),
+            certifications=certifications,
         ),
-        certifications=certifications,
+        deprecations=deprecations,
     )
 
 
@@ -186,6 +191,91 @@ def with_pack_certifications(opps: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     ]
 
 
+def _resolve_pack_deprecations() -> Dict[str, Dict[str, Any]]:
+    """Deprecation notices for the packs that have one, resolved once.
+
+    Only DEPRECATED packs appear (``deprecation_notices`` omits the rest), so the
+    common case is an empty dict and the common finding is stamped with nothing.
+
+    Fail-soft on every axis, exactly like :func:`_resolve_disabled_pack_ids` and
+    :func:`_resolve_pack_certifications`: a finding must stay retrievable and
+    viewable even when deprecation cannot be resolved. Note the degradation
+    direction — a missing notice, never a notice invented for a live pack.
+    """
+    try:
+        from discovery.packs.pack_deprecation import deprecation_notices
+
+        return deprecation_notices()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def with_pack_deprecation(
+    opp: Dict[str, Any],
+    deprecations: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Mark a finding whose producing pack is DEPRECATED today (2.0-C4 T2 / AC1).
+
+    *"...and on the pack's findings — with the date it stops being supported and
+    what replaces it."* A reader looking at a single finding must be able to see
+    that the pack behind it is going away, without first going to look at run
+    configuration. ADDITIVE fields only (the ``with_pack_state`` pattern):
+
+        packDeprecated                     : True
+        packDeprecationPhase               : "grace" | "grace_expired"
+        packDeprecationLabel               : e.g. "Deprecated — runs until 2026-09-29"
+        packDeprecationNotice              : the one-sentence notice
+        packDeprecationEndsOn              : the date support ends (absent if open-ended)
+        packDeprecationReplacementPackId   : the replacement (absent if none named)
+        packDeprecationReplacementLabel    : that replacement, named for a human
+
+    Read LIVE at serve time, like ``packState`` and the certification badge and
+    unlike the immutable ``packVersion``: whether a pack is superseded is a question
+    about now. The run record's ``packDeprecations`` snapshot is the audit record of
+    what was true at launch.
+
+    A pack that is NOT deprecated is stamped with nothing at all — the overwhelming
+    majority case, and a field-per-finding saying "not deprecated" would be noise
+    that invites an empty banner. ``packDeprecationEndsOn`` and
+    ``...ReplacementPackId`` are likewise absent rather than empty when the
+    declaration has no end date or no replacement, so a surface never renders
+    "stops on " with nothing after it.
+
+    Nothing else is touched. A finding with no ``packId`` (pre-R16-B1) is returned
+    unchanged rather than guessed at.
+    """
+    pack_id = str(opp.get("packId") or "").strip()
+    if not pack_id:
+        return opp
+    notices = (
+        _resolve_pack_deprecations() if deprecations is None else deprecations
+    )
+    notice = notices.get(pack_id)
+    if not notice:
+        return opp
+    result = {
+        **opp,
+        "packDeprecated": True,
+        "packDeprecationPhase": notice["phase"],
+        "packDeprecationLabel": notice["statusLabel"],
+        "packDeprecationNotice": notice["summary"],
+    }
+    if notice.get("graceEndsOn"):
+        result["packDeprecationEndsOn"] = notice["graceEndsOn"]
+    if notice.get("replacementPackId"):
+        result["packDeprecationReplacementPackId"] = notice["replacementPackId"]
+        result["packDeprecationReplacementLabel"] = notice["replacementLabel"]
+    return result
+
+
+def with_pack_deprecations(opps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Apply :func:`with_pack_deprecation` to a list, reading notices ONCE."""
+    deprecations = _resolve_pack_deprecations()
+    return [
+        with_pack_deprecation(opp, deprecations=deprecations) for opp in opps
+    ]
+
+
 def with_runbook_lifecycle(opp: Dict[str, Any]) -> Dict[str, Any]:
     """Apply one lifecycle label to finding, report, and demo opportunity data.
 
@@ -218,14 +308,19 @@ def with_runbook_lifecycle(opp: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def with_display_titles(opps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    # Pack state and certification badges are each resolved ONCE for the whole list
-    # and threaded down, so a 200-finding response costs one state read and one
-    # signature verification pass rather than 200 of each.
+    # Pack state, certification badges, and deprecation notices are each resolved
+    # ONCE for the whole list and threaded down, so a 200-finding response costs one
+    # state read, one signature verification pass, and one deprecation evaluation
+    # rather than 200 of each.
     disabled = _resolve_disabled_pack_ids()
     certifications = _resolve_pack_certifications()
+    deprecations = _resolve_pack_deprecations()
     return [
         with_display_title(
-            opp, disabled_pack_ids=disabled, certifications=certifications
+            opp,
+            disabled_pack_ids=disabled,
+            certifications=certifications,
+            deprecations=deprecations,
         )
         for opp in opps
     ]
@@ -259,28 +354,37 @@ def with_display(
     opp: Dict[str, Any],
     disabled_pack_ids: Optional[Set[str]] = None,
     certifications: Optional[Dict[str, Dict[str, Any]]] = None,
+    deprecations: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Full single-opportunity display shaping: title overrides + the stable matrix
-    score offset + the pack-state label + the pack certification badge. Use at every
-    opportunity return site so list/decision/override responses are consistent.
+    score offset + the pack-state label + the pack certification badge + the pack
+    deprecation notice. Use at every opportunity return site so list/decision/override
+    responses are consistent.
 
     For a LIST of opportunities use :func:`with_display_all`, which resolves pack
-    state and certification once instead of once per finding."""
+    state, certification, and deprecation once instead of once per finding."""
     return with_display_scores(
         with_display_title(
             opp,
             disabled_pack_ids=disabled_pack_ids,
             certifications=certifications,
+            deprecations=deprecations,
         )
     )
 
 
 def with_display_all(opps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """:func:`with_display` over a list, resolving pack state and certification ONCE."""
+    """:func:`with_display` over a list, resolving each pack fact ONCE."""
     disabled = _resolve_disabled_pack_ids()
     certifications = _resolve_pack_certifications()
+    deprecations = _resolve_pack_deprecations()
     return [
-        with_display(opp, disabled_pack_ids=disabled, certifications=certifications)
+        with_display(
+            opp,
+            disabled_pack_ids=disabled,
+            certifications=certifications,
+            deprecations=deprecations,
+        )
         for opp in opps
     ]
 

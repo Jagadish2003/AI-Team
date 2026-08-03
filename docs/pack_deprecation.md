@@ -3,10 +3,10 @@
 Read this before deprecating a pack, changing a deprecation declaration, or writing
 any code that reads a pack's deprecation state.
 
-This document currently covers **T1 (AT-842) — deprecation metadata**. Notice
-surfacing (AT-843), migration assist (AT-844), grace behaviour (AT-845), and the
-audit events (AT-846) are separate sub-tasks that layer on what this one reports; each
-adds its own section here as it lands.
+This document currently covers **T1 (AT-842) — deprecation metadata** and
+**T2 (AT-843) — notice surfacing**. Migration assist (AT-844), grace behaviour
+(AT-845), and the audit events (AT-846) are separate sub-tasks that layer on these;
+each adds its own section here as it lands.
 
 ---
 
@@ -185,3 +185,95 @@ Tuesday when its fixture dates age out.
 4. Remember what the grace period commits you to: on the day after `graceEndsOn`, every
    org still selecting that pack loses it from future runs (AT-845). Pick a date the
    replacement is actually ready for.
+5. Nothing else is needed to make the notice appear: run configuration, run health,
+   and the pack's findings all read the declaration (§9), so the block IS the release
+   step.
+
+---
+
+# 9. Notice surfacing (T2 / AT-843)
+
+## 9.1 The one rule
+
+Every surface renders the SAME notice, built once by
+`pack_deprecation.deprecation_notice()`. Nothing composes its own wording from the
+declared fields.
+
+That is not tidiness. A customer who reads "runs until 2026-09-29, replaced by Cloud
+Operations" on the pack picker has to meet the identical sentence on the finding that
+pack produced and in run health when the output changes. Three near-miss phrasings of
+the same deprecation is how a customer concludes the platform is confused about its
+own state, and it is exactly what one shared builder makes impossible. A test asserts
+the three surfaces return character-identical `summary`, `statusLabel`, `graceEndsOn`,
+and `replacementPackId`.
+
+The corollary: **a pack that is not deprecated surfaces nothing.** No pill, no banner,
+no "not deprecated" object to render. Every surface's map/field is absent or null.
+
+## 9.2 The three surfaces
+
+| Surface | Where | Shape |
+|---|---|---|
+| **Run configuration** | `GET /api/packs/state` → Discovery Plan | `deprecation` on each pack row (`PackDeprecationNotice \| null`) |
+| **Run health** | `GET /api/run-health/packs` → packs panel | `deprecated` + `deprecation_*` fields on each pack row |
+| **Findings** | every opportunity serve site, via `with_display_title` | `packDeprecated` + `packDeprecation*` fields on the finding |
+
+Run configuration matters most: it is the moment someone is about to build a run on a
+pack that is going away, and the only moment the warning can still change what they
+do. Run health is where they look when the output surprises them. The finding is
+where a reader who never saw either still needs the context.
+
+All three read the **live** position, for the same reason `packState` and the
+certification badge do: "is this pack still supported, and until when" is a question
+about now, not about the run. The run record's `packDeprecations` snapshot (written at
+launch) is the audit record beside them — and it lists every pack it *evaluated*, so a
+clean run can prove it checked rather than merely not mentioning it.
+
+## 9.3 Date and replacement, stated even when absent
+
+AC1 names two things the notice must carry: the date it stops being supported, and
+what replaces it. Both are surfaced explicitly — including when they do not exist:
+
+* no end date → "No removal date has been announced." (never "Supported until "
+  trailing into nothing);
+* no replacement → "No replacement pack has been named."
+
+On findings the two fields are **omitted rather than empty** when undeclared, so a
+consumer cannot render a half-sentence from a blank string.
+
+## 9.4 Amber, never red — and never "unhealthy"
+
+A deprecated pack in grace *works*. It runs exactly as it did before the notice, which
+is the entire point of a grace period. So the notice is amber (advance warning), never
+red (fault), and a deprecated pack does **not** make the run-health packs panel read
+unhealthy — the same rule 2.0-C1 T5 established for a disabled pack, for the same
+reason: this is intentional lifecycle, not a failure.
+
+Deprecation is also a fourth **orthogonal** fact beside pack state, version, and
+certification. A pack can be active, current, certified, and deprecated at once, so it
+gets its own pill rather than being folded into the state word. Tests pin that
+`packLifecycleLabel` is unchanged by any deprecation field.
+
+## 9.5 Fail-soft, in one direction
+
+Every surface degrades to **no notice**, never to an invented one — a resolution
+failure must not tell a customer their pack is being retired when it is not. A pack
+the registry no longer declares reports nothing either: `get_pack()` resolves an
+unknown id to the default pack, which would attribute *its* notice to a pack that is
+gone (the same trap `_pack_certification` documents).
+
+The launch snapshot is fail-soft too: a deprecation notice is a label, and failing to
+resolve one must never fail a launch.
+
+## 9.6 Contract
+
+Contract **v1.21**. All additive; no pack ships a deprecation today, so every new
+field is absent or null on current responses.
+
+## 9.7 Tests
+
+* `backend/tests/unit/test_pack_deprecation_surfacing.py` — DB-free; each surface
+  separately, plus the one-notice-three-surfaces assertion and the fail-soft paths.
+* `frontend/src/__tests__/PackDeprecationSurfacing.test.tsx` — the badge and detail
+  components, the findings provenance row, the run-health lifecycle pills, and the
+  API mapping.

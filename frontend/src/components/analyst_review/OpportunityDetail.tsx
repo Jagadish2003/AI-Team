@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import PackCertificationBadge from '../common/PackCertificationBadge';
+import { PackDeprecationBadge } from '../common/PackDeprecationNotice';
 import {
   OpportunityCandidate,
   ReviewAuditEvent,
@@ -109,6 +110,12 @@ function WhyBulletList({ items }: { items: string[] }) {
  * retained history for something a live pack produced — the finding stays fully
  * readable either way.
  *
+ * 2.0-C4 T2 (AT-843 / AC1) adds the DEPRECATION notice on the same principle: a
+ * reader looking at one finding must be able to see that the pack behind it is
+ * being retired, with the date support ends and what replaces it, without going to
+ * look at run configuration to find out. The finding itself is untouched — it stays
+ * exactly as produced.
+ *
  * Renders nothing when the finding carries no pack stamp (runs materialised before
  * R191-P1 T3), rather than inventing one.
  */
@@ -151,6 +158,23 @@ export function PackProvenanceRow({ opp }: { opp: OpportunityCandidate }) {
             className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] leading-tight text-amber-700"
           >
             {opp.packStateLabel ?? "Produced by a now-disabled pack"}
+          </span>
+        )}
+        {/* 2.0-C4 T2 (AT-843 / AC1): the producing pack is being retired. The
+            pill carries the date; the full notice (including the replacement) is
+            its tooltip, so a dense findings view stays dense. */}
+        <PackDeprecationBadge
+          phase={opp.packDeprecationPhase}
+          label={opp.packDeprecationLabel}
+          notice={opp.packDeprecationNotice}
+          testId="pack-provenance-deprecation"
+        />
+        {opp.packDeprecationReplacementPackId && (
+          <span
+            data-testid="pack-provenance-deprecation-replacement"
+            className="rounded border border-border bg-panel2 px-2 py-0.5 text-[11px] leading-tight text-muted"
+          >
+            Replaced by {opp.packDeprecationReplacementLabel ?? opp.packDeprecationReplacementPackId}
           </span>
         )}
       </div>

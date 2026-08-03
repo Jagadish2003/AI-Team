@@ -136,6 +136,36 @@ def certification_snapshot(
         return {}
 
 
+def deprecation_snapshot(
+    pack_ids: Iterable[str],
+) -> Dict[str, Any]:
+    """The run-scoped deprecation snapshot (2.0-C4 T2 / AT-843).
+
+    Captured at ACTIVATION for the same reason as the compatibility and
+    certification snapshots: it records where each activated pack stood in its
+    deprecation lifecycle when the run was launched, so an audit of an old run can
+    say what the customer was told AT THE TIME — including that they were told
+    nothing, because ``evaluated`` lists every pack that was checked.
+
+    It is deliberately NOT what the display surfaces read. Run configuration, run
+    health, and findings all show the LIVE position, because "is this pack still
+    supported, and until when" is a question about now; this snapshot is the audit
+    record beside them.
+
+    Fail-soft: a deprecation notice is a label, and failing to resolve one must
+    never fail a launch.
+    """
+    try:
+        from discovery.packs.pack_deprecation import deprecation_summary
+
+        return deprecation_summary(list(pack_ids))
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Could not snapshot pack deprecation at activation", exc_info=True
+        )
+        return {}
+
+
 # ── 2.0-C1 T2 (AT-827) — disabled packs are excluded from future runs ─────────
 
 

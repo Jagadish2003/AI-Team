@@ -54,6 +54,7 @@ from .pack_activation import (
     AllPacksDisabledError,
     certification_snapshot,
     compatibility_snapshot,
+    deprecation_snapshot,
     resolve_activatable_packs,
 )
 from .pack_certification_policy import (
@@ -284,6 +285,11 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         # Audit record only — every display surface reads the LIVE verified level,
         # so a badge that stops verifying stops being shown everywhere at once.
         pack_certifications = certification_snapshot(eff_pack_ids)
+        # 2.0-C4 T2 (AT-843): where each activated pack stood in its deprecation
+        # lifecycle AT LAUNCH — including that nothing was deprecated, which is what
+        # makes it an audit record rather than only a warning log. Display surfaces
+        # read the live position; this is the record of what the customer was told.
+        pack_deprecations = deprecation_snapshot(eff_pack_ids)
         platform_version_at_launch = get_platform_version()
         # 2.0-C1 T3 (AT-828): packs this org has rolled back. Recorded separately
         # from pack_versions so the run says both "it ran 1.1.0" and "1.1.0 was a
@@ -354,6 +360,9 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             # 2.0-C2 T3 (AT-833 / AC2): the certification level of each activated
             # pack as evaluated at launch.
             "packCertifications": pack_certifications,
+            # 2.0-C4 T2 (AT-843 / AC1): the deprecation position of each activated
+            # pack as evaluated at launch.
+            "packDeprecations": pack_deprecations,
             "platformVersion": platform_version_at_launch,
             # 2.0-C1 T2 (AT-827 / AC5): packs the caller selected that will NOT run
             # because this org has disabled them. Recorded so the exclusion is
@@ -389,6 +398,7 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         # mutable registry after the fact.
         run_kv_set("pack_compatibility", run_id, pack_compatibility)
         run_kv_set("pack_certifications", run_id, pack_certifications)
+        run_kv_set("pack_deprecations", run_id, pack_deprecations)
         run_kv_set("excluded_packs", run_id, excluded_packs)
         run_kv_set("pinned_pack_versions", run_id, pinned_pack_versions)
         run_kv_set("template_ids", run_id, eff_template_ids)

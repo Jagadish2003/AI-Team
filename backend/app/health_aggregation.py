@@ -561,6 +561,9 @@ def _packs_view_multi(
                 # wherever a pack is attributed. Live, for the same reason
                 # `pack_state` is.
                 **_certification_fields(pack_id),
+                # 2.0-C4 T2 (AT-843 / AC1): the deprecation notice, with the date
+                # support ends and what replaces it. Live, same reason again.
+                **_deprecation_fields(pack_id),
             }
         )
 
@@ -569,6 +572,52 @@ def _packs_view_multi(
         "packs": packs_out,
         "excluded_packs": _excluded_packs_for_run(run_id, latest),
         "pinned_pack_versions": run_pins,
+    }
+
+
+def _deprecation_fields(pack_id: str) -> Dict[str, Any]:
+    """The deprecation fields for a packs-panel row (2.0-C4 T2 / AT-843 / AC1).
+
+    *"orgs using a deprecated pack see it ... in run health ... with the date it
+    stops being supported and what replaces it."* Run health is where an operator
+    looks when a run's output surprises them, so a pack that is on its way out has
+    to say so here — with the date and the replacement, not just a flag.
+
+    Read LIVE, like ``_current_pack_state`` and ``_pack_certification`` and unlike
+    every immutable execution field on the row: "is this pack still supported, and
+    until when" is a question about now. The run record's ``packDeprecations``
+    snapshot is the audit record of what was true at launch.
+
+    A pack that is not deprecated contributes NO fields — the panel shows a notice
+    or shows nothing. Same treatment for a pack the registry no longer declares
+    (see ``_pack_certification`` for why resolving it to the default pack would be
+    actively wrong on an attribution panel), and the whole thing is fail-soft.
+    """
+    try:
+        from discovery.packs.pack_config import PACK_REGISTRY
+        from discovery.packs.pack_deprecation import deprecation_notice
+
+        if pack_id not in PACK_REGISTRY:
+            return {}
+        notice = deprecation_notice(pack_id)
+    except Exception:  # noqa: BLE001
+        return {}
+    if not notice:
+        return {}
+    return {
+        "deprecated": True,
+        "deprecation_phase": notice["phase"],
+        "deprecation_label": notice["statusLabel"],
+        "deprecation_reason": notice["reason"],
+        "deprecation_on": notice["deprecatedOn"],
+        # The date support ends. None when no removal date has been announced —
+        # stated as null rather than omitted, because "deprecated with no end date
+        # yet" is a real answer and the panel should be able to say it.
+        "deprecation_ends_on": notice["graceEndsOn"] or None,
+        "deprecation_days_remaining": notice["daysRemaining"],
+        "deprecation_replacement_pack_id": notice["replacementPackId"] or None,
+        "deprecation_replacement_label": notice["replacementLabel"] or None,
+        "deprecation_notice": notice["summary"],
     }
 
 
@@ -782,6 +831,8 @@ def packs_view(org_id: str) -> Dict[str, Any]:
                 "rolled_back": pack_id in run_pins,
                 # 2.0-C2 T3 (AT-833 / AC2) — see _pack_certification.
                 **_certification_fields(pack_id),
+                # 2.0-C4 T2 (AT-843 / AC1) — see _deprecation_fields.
+                **_deprecation_fields(pack_id),
             }
         ],
         "excluded_packs": _excluded_packs_for_run(run_id, latest),
