@@ -144,12 +144,15 @@
   },
 
   "cold_start": {
-    "_note": "AC4. Below this many distinct contributing signals in an org, the signal set reports itself INACTIVE and T2's adjustment layer must apply nothing. 'No pretending to personalise from three data points.'",
-    "_basis": "operationally_justified",
-    "_basis_detail": "Ten distinct signals is the smallest count at which a per-detector pattern is more plausible than coincidence, and it is a number a customer can be told without embarrassment. Deliberately counts DISTINCT OPPORTUNITY IDENTITIES, not rows: one analyst clicking accept ten times on the same finding is one data point, and a threshold a single opportunity can satisfy is not a threshold.",
+    "_note": "AC4. Below this threshold, the signal set reports itself INACTIVE and the adjustment layer must apply nothing. 'No pretending to personalise from three data points.'",
+    "_basis": "provisional",
+    "_basis_detail": "There is no measured production data yet to calibrate the cold-start floor, so the number is declared provisional. The policy is a simple decision floor plus distinct finding spread: outcomes remain weighted higher after activation, but measured outcomes cannot bypass the minimum decision count and make a tiny sample look mature.",
+    "activation_policy": "decision_floor_plus_distinct_identity",
+    "_activation_policy_note": "Chosen over a naive weighted total or separate outcome bypass because ten dismissals and zero outcomes should not be treated as the same evidence position as two decisions plus one outcome. The floor asks first whether the org has enough explicit current decisions; outcome weights then shape the adjustment once the floor is crossed.",
+    "minimum_decisions": 10,
     "minimum_signals": 10,
     "minimum_distinct_identities": 5,
-    "_distinct_note": "Both must be met. The second is what stops a single enthusiastically-reviewed opportunity from switching learning on for a whole org."
+    "_distinct_note": "All thresholds must be met. The distinct finding threshold stops a single enthusiastically-reviewed opportunity from switching learning on for a whole org; minimum_signals remains a weighted-evidence guard so zero-weight deferrals cannot unlock learning."
   },
 
   "ranking_adjustment": {

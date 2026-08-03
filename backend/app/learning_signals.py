@@ -567,6 +567,9 @@ class SignalSet:
     org_id: str
     signals: Tuple[LearningSignal, ...]
     config_version: str
+    cold_start_basis: str
+    activation_policy: str
+    minimum_decisions: int
     minimum_signals: int
     minimum_distinct_identities: int
     collected_at: str
@@ -589,31 +592,68 @@ class SignalSet:
 
     @property
     def is_active(self) -> bool:
-        """Both thresholds must be met.
+        """All cold-start thresholds must be met.
 
         The distinct-identity rule is what stops a single enthusiastically
         reviewed opportunity from switching learning on for a whole org.
         """
-        return (
-            len(self.weighted) >= self.minimum_signals
-            and self.distinct_identities >= self.minimum_distinct_identities
-        )
+        return not any(self.activation_remaining().values())
 
     @property
     def inactive_reason(self) -> Optional[str]:
         """Plain language, for the UI's "learning not yet active" state."""
         if self.is_active:
             return None
+        if self.decision_count < self.minimum_decisions:
+            return (
+                f"Learning is not yet active: {self.decision_count} of "
+                f"{self.minimum_decisions} informing decisions recorded."
+            )
         if len(self.weighted) < self.minimum_signals:
             return (
                 f"Learning is not yet active: {len(self.weighted)} of "
-                f"{self.minimum_signals} decisions and measured outcomes recorded."
+                f"{self.minimum_signals} weighted decisions and measured outcomes recorded."
             )
         return (
             f"Learning is not yet active: signals so far cover "
             f"{self.distinct_identities} of {self.minimum_distinct_identities} "
             "distinct findings."
         )
+
+    def activation_remaining(self) -> Dict[str, int]:
+        return {
+            "decisions": max(0, self.minimum_decisions - self.decision_count),
+            "weightedSignals": max(0, self.minimum_signals - len(self.weighted)),
+            "distinctIdentities": max(
+                0, self.minimum_distinct_identities - self.distinct_identities
+            ),
+        }
+
+    def activation_state(self) -> Dict[str, Any]:
+        counts = {
+            "weightedSignals": len(self.weighted),
+            "decisions": self.decision_count,
+            "outcomes": self.outcome_count,
+            "distinctIdentities": self.distinct_identities,
+        }
+        thresholds = {
+            "minimumDecisions": self.minimum_decisions,
+            "minimumSignals": self.minimum_signals,
+            "minimumDistinctIdentities": self.minimum_distinct_identities,
+        }
+        remaining = self.activation_remaining()
+        return {
+            "status": "active" if self.is_active else "learning_not_yet_active",
+            "isActive": self.is_active,
+            "message": self.inactive_reason,
+            "currentCount": self.decision_count,
+            "threshold": self.minimum_decisions,
+            "counts": counts,
+            "thresholds": thresholds,
+            "remaining": remaining,
+            "basis": self.cold_start_basis,
+            "policy": self.activation_policy,
+        }
 
     def for_identity(self, opportunity_identity: str) -> Tuple[LearningSignal, ...]:
         identity = _norm(opportunity_identity)
@@ -663,9 +703,11 @@ class SignalSet:
                 "distinctIdentities": self.distinct_identities,
             },
             "thresholds": {
+                "minimumDecisions": self.minimum_decisions,
                 "minimumSignals": self.minimum_signals,
                 "minimumDistinctIdentities": self.minimum_distinct_identities,
             },
+            "activation": self.activation_state(),
             "signals": [s.to_dict() for s in self.signals],
         }
 
@@ -724,6 +766,9 @@ def collect_learning_signals(
         org_id=org,
         signals=tuple(signals),
         config_version=cfg.config_version,
+        cold_start_basis=cfg.basis_for("cold_start"),
+        activation_policy=cfg.cold_start.activation_policy,
+        minimum_decisions=cfg.cold_start.minimum_decisions,
         minimum_signals=cfg.cold_start.minimum_signals,
         minimum_distinct_identities=cfg.cold_start.minimum_distinct_identities,
         collected_at=reference.isoformat(),

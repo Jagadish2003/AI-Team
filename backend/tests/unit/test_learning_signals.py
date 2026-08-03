@@ -284,6 +284,7 @@ class TestAnOutcomeOutweighsAnOpinion:
         """No production outcome data exists yet; the config must say so."""
         assert CONFIG.is_provisional("outcome_signals")
         assert CONFIG.is_provisional("decision_signals")
+        assert CONFIG.is_provisional("cold_start")
 
 
 # --------------------------------------------------------------------------
@@ -819,11 +820,27 @@ class TestColdStart:
         signal_set = a_set(
             decisions=[
                 a_decision(feedbackId=f"fb_{i}", opportunityIdentity=f"opp_{i}")
-                for i in range(CONFIG.cold_start.minimum_signals)
+                for i in range(CONFIG.cold_start.minimum_decisions)
             ]
         )
         assert signal_set.is_active
         assert signal_set.inactive_reason is None
+
+    def test_outcomes_do_not_bypass_the_decision_floor(self):
+        """Outcome weights shape ranking after activation; they do not fake maturity."""
+        signal_set = a_set(
+            decisions=[
+                a_decision(feedbackId=f"fb_{i}", opportunityIdentity=f"opp_d_{i}")
+                for i in range(2)
+            ],
+            outcomes=[
+                an_outcome(opportunityIdentity=f"opp_o_{i}") for i in range(20)
+            ],
+        )
+        assert signal_set.decision_count == 2
+        assert len(signal_set.weighted) >= CONFIG.cold_start.minimum_signals
+        assert not signal_set.is_active
+        assert "informing decisions" in signal_set.inactive_reason
 
     def test_unweighted_signals_do_not_count_towards_the_threshold(self):
         """A zero-weight signal informs nothing and must not unlock learning."""
@@ -942,9 +959,15 @@ class TestTheSetIsInspectable:
         payload = describe_signal_set(a_set(decisions=[a_decision()]))
         assert payload["isActive"] is False
         assert payload["inactiveReason"]
+        assert payload["thresholds"]["minimumDecisions"] == (
+            CONFIG.cold_start.minimum_decisions
+        )
         assert payload["thresholds"]["minimumSignals"] == (
             CONFIG.cold_start.minimum_signals
         )
+        assert payload["activation"]["status"] == "learning_not_yet_active"
+        assert payload["activation"]["currentCount"] == payload["counts"]["decisions"]
+        assert payload["activation"]["remaining"]["decisions"] > 0
 
     def test_the_summary_reports_the_config_version_in_force(self):
         payload = describe_signal_set(a_set())

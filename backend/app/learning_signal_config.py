@@ -107,8 +107,10 @@ class AdjustmentPolicy:
 
 @dataclass(frozen=True)
 class ColdStartConfig:
-    """AC4's threshold. Both conditions must be met before learning activates."""
+    """AC4's threshold. All conditions must be met before learning activates."""
 
+    activation_policy: str = "decision_floor_plus_distinct_identity"
+    minimum_decisions: int = 10
     minimum_signals: int = 10
     minimum_distinct_identities: int = 5
 
@@ -358,10 +360,23 @@ def validate_config(config: LearningSignalConfig) -> None:
             "the two disagree"
         )
 
+    if not config.cold_start.activation_policy:
+        raise LearningConfigError("cold_start.activation_policy must be declared")
+    if config.cold_start.minimum_decisions < 1:
+        raise LearningConfigError(
+            "cold_start.minimum_decisions must be at least 1 - a decision "
+            "floor of zero means outcomes could activate learning before the "
+            "org has enough explicit judgements, which is what AC4 forbids"
+        )
     if config.cold_start.minimum_signals < 1:
         raise LearningConfigError(
             "cold_start.minimum_signals must be at least 1 — a threshold of zero "
             "means learning is always active, which is what AC4 forbids"
+        )
+    if config.cold_start.minimum_distinct_identities < 1:
+        raise LearningConfigError(
+            "cold_start.minimum_distinct_identities must be at least 1 - a "
+            "single finding must not switch learning on for an org"
         )
     if not 0.0 < config.similarity.minimum_score <= 1.0:
         raise LearningConfigError("similarity.minimum_score must be in (0, 1]")
@@ -479,6 +494,17 @@ def parse_config(raw: Mapping[str, Any]) -> LearningSignalConfig:
             ),
         ),
         cold_start=ColdStartConfig(
+            activation_policy=str(
+                cold_raw.get(
+                    "activation_policy", "decision_floor_plus_distinct_identity"
+                )
+            ),
+            minimum_decisions=int(
+                _as_float(
+                    cold_raw.get("minimum_decisions"),
+                    _as_float(cold_raw.get("minimum_signals"), 10),
+                )
+            ),
             minimum_signals=int(_as_float(cold_raw.get("minimum_signals"), 10)),
             minimum_distinct_identities=int(
                 _as_float(cold_raw.get("minimum_distinct_identities"), 5)

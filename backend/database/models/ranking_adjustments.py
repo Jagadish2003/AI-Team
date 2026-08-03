@@ -81,8 +81,9 @@ CREATE TABLE IF NOT EXISTS ranking_adjustment_history (
     org_id                VARCHAR(64)  NOT NULL,
     detector_id           VARCHAR(128) NOT NULL DEFAULT '',
     pack_id               VARCHAR(64)  NOT NULL DEFAULT '',
-    -- 'recomputed' | 'reset'. The vocabulary lives in Python; the column is
-    -- deliberately not an enum so T4 can add a case without a migration.
+    -- 'activated' | 'deactivated' | 'recomputed' | 'reset'. The vocabulary
+    -- lives in Python; the column is deliberately not an enum so governance
+    -- transitions can be added without a migration.
     change_kind           VARCHAR(32)  NOT NULL,
     previous_net_weight   DOUBLE PRECISION,
     net_weight            DOUBLE PRECISION NOT NULL DEFAULT 0,

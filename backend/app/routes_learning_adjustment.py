@@ -69,6 +69,7 @@ def get_adjustment_state(_token: str = Depends(require_auth)) -> Dict[str, Any]:
     org_id = get_current_org_id()
     config = load_config()
     policy = config.adjustment
+    signal_set = collect_learning_signals(org_id)
     return {
         "orgId": org_id,
         "enabled": policy.enabled,
@@ -78,6 +79,7 @@ def get_adjustment_state(_token: str = Depends(require_auth)) -> Dict[str, Any]:
             "pointsPerSignalUnit": policy.points_per_signal_unit,
         },
         "configVersion": config.config_version,
+        "learningState": signal_set.activation_state(),
         "groups": list_adjustment_state(org_id),
     }
 
@@ -164,6 +166,7 @@ def preview_adjustment(
     payload["runId"] = run_id
     payload["learningActive"] = signal_set.is_active
     payload["inactiveReason"] = signal_set.inactive_reason
+    payload["learningState"] = signal_set.activation_state()
     return payload
 
 

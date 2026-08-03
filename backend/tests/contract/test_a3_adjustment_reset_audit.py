@@ -222,7 +222,7 @@ class TestResetNeutralisesTheCurrentState:
 
         history = client.get(f"{BASE}/history", headers=_auth(org)).json()
         assert any(row["changeKind"] == "reset" for row in history)
-        assert any(row["changeKind"] == "recomputed" for row in history)
+        assert any(row["changeKind"] in {"activated", "recomputed"} for row in history)
 
     def test_reset_restores_served_rankings_to_base_order(self, client):
         org = _org()
@@ -252,8 +252,14 @@ class TestAuditAndTelemetryRegistration:
 
         rows = _audit_rows(org)
         kinds = [row["payload"]["change_kind"] for row in rows]
-        assert "recomputed" in kinds
+        assert "activated" in kinds
         assert "reset" in kinds
+
+        activation = next(
+            row for row in rows if row["payload"]["change_kind"] == "activated"
+        )
+        assert activation["payload"]["previous_state"] == []
+        assert activation["payload"]["current_state"]
 
         reset = next(row for row in rows if row["payload"]["change_kind"] == "reset")
         assert reset["event_type"] == EVENT
