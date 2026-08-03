@@ -16,6 +16,7 @@ import { isViewerRole } from '../utils/roles';
 import { CheckCircle2, Database, Layers3, Target } from 'lucide-react';
 import type { WorkspaceCatalogResponse } from '../types/workspace_catalog';
 import { getCatalogSystemIds } from '../types/workspace_catalog';
+import { resolveAnalysisPackId } from '../data/analysisPacks';
 import { fetchTokenStatus, type TokenStatus } from '../services/staticApi';
 import { useToast } from '../components/common/Toast';
 import { useResource } from '../lib/dataCache';
@@ -226,9 +227,30 @@ export function resolvePackIds(
   const salesforcePacks = salesforcePacksFromCatalog(catalog);
   const analysisPacks = (state.packIds ?? []).filter(Boolean);
   const all = Array.from(new Set([...salesforcePacks, ...analysisPacks]));
-  if (all.length > 0) return all;
-  // Nothing declared or selected — fall back to a single resolved pack.
-  return [resolvePackId(state, catalog, industries, templates)];
+  const resolved = all.length > 0
+    ? all
+    // Nothing declared or selected — fall back to a single resolved pack.
+    : [resolvePackId(state, catalog, industries, templates)];
+
+  // The cloud-events default: selecting an AWS/Azure Events connector on Step 2
+  // activates cloud_ops unless the user has chosen otherwise on Step 4. Applied
+  // LAST and purely ADDITIVELY — it can never displace a declared Salesforce
+  // pack, a template's pack, or the fallback above, so no run that already
+  // resolved a pack changes shape. Deduped, so a template that already
+  // contributed cloud_ops (managed_cloud_operations) makes this a no-op.
+  //
+  // This mirrors the Step 4 dropdown, which derives its displayed value from the
+  // same resolveAnalysisPackId helper — the menu and the launched pack_ids are
+  // always the same answer.
+  const analysisSlot = resolveAnalysisPackId(
+    state.packIds,
+    state.selectedSystemIds,
+    state.analysisPackTouched,
+  );
+  if (analysisSlot && !resolved.includes(analysisSlot)) {
+    return [...resolved, analysisSlot];
+  }
+  return resolved;
 }
 
 // ── Launch payload builder ─────────────────────────────────────────────────────

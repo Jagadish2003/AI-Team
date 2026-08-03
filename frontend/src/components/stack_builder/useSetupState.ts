@@ -19,6 +19,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import type { WorkspaceCatalogResponse } from '../../types/workspace_catalog';
 import { getCatalogSystemIds, getCatalogSalesforceProducts } from '../../types/workspace_catalog';
+import { ANALYSIS_PACK_IDS } from '../../data/analysisPacks';
 import {
   SetupState, FocusId, IndustryId, TemplateId,
   SystemWeighting, SystemRole, SystemPriority, WorkflowFocusTag,
@@ -226,6 +227,7 @@ const INITIAL: SetupState = {
   templateIds: [],
   packId: null,
   packIds: [],
+  analysisPackTouched: false,
   selectedSystemIds: [],
   selectedSalesforceClouds: [],
   weightings: {},
@@ -263,6 +265,29 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
     setState(s => {
       const deduped = Array.from(new Set((packIds ?? []).filter(Boolean)));
       return { ...s, packIds: deduped, packId: deduped[0] ?? null };
+    });
+  }, []);
+
+  // The Step 4 analysis-pack choice — SINGLE-select over the offerable analysis
+  // packs, '' meaning None. Replaces whatever analysis pack was selected while
+  // preserving every non-analysis entry on packIds (the fixed Salesforce packs
+  // and any pack a template contributed are never dropped by a choice here).
+  //
+  // Marks the slot as touched, which is what lets the user turn OFF the
+  // cloud-events → Cloud Ops default: after this runs, their choice (including
+  // None) wins over the default. See data/analysisPacks.ts.
+  const setAnalysisPack = useCallback((packId: string) => {
+    setState(s => {
+      const preserved = (s.packIds ?? []).filter(
+        id => id && !ANALYSIS_PACK_IDS.has(id),
+      );
+      const next = packId ? [...preserved, packId] : preserved;
+      return {
+        ...s,
+        packIds: next,
+        packId: next[0] ?? null,
+        analysisPackTouched: true,
+      };
     });
   }, []);
 
@@ -606,6 +631,7 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
     setIndustry,
     setPack,
     setPackIds,
+    setAnalysisPack,
     setTemplate,
     applyTemplate,
     applyIndustryDefaults,
