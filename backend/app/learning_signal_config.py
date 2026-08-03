@@ -140,6 +140,7 @@ class LearningSignalConfig:
     adjustment: AdjustmentPolicy = field(default_factory=AdjustmentPolicy)
     similarity: SimilarityConfig = field(default_factory=SimilarityConfig)
     config_version: str = "1.0.0"
+    configuration_scope: str = "deployment_wide"
     bases: Dict[str, str] = field(default_factory=dict)
 
     # -- lookups -----------------------------------------------------------
@@ -520,6 +521,11 @@ def parse_config(raw: Mapping[str, Any]) -> LearningSignalConfig:
             (raw.get("_meta") or {}).get("configVersion", "1.0.0")
             if isinstance(raw.get("_meta"), Mapping)
             else "1.0.0"
+        ),
+        configuration_scope=str(
+            (raw.get("_meta") or {}).get("configurationScope", "deployment_wide")
+            if isinstance(raw.get("_meta"), Mapping)
+            else "deployment_wide"
         ),
         bases=bases,
     )
