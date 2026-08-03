@@ -317,12 +317,79 @@ emits the `entity_merged` audit event.
 Applying is a deliberate, explicit step — it is not wired into the discovery run.
 That is an operational decision, and a merge is irreversible until unmerge ships.
 
+## The corroboration identity gate (T6)
+
+Cross-source corroboration is the platform's strongest confidence signal: two
+independent systems agreeing takes a finding to HIGH. That only means something if
+both are talking about the same thing.
+
+Before T6, COR-01 (ServiceNow) and COR-02 (Jira) fired on a **detector** link and
+nothing checked identity — so a ServiceNow team "Payments" and a Jira project
+"Payments", two unrelated things sharing a word, produced "Corroborated across
+ServiceNow and Jira" and a HIGH. `backend/app/corroboration_identity_gate.py`
+closes that: **a same name is not a shared identity.**
+
+### When the gate engages
+
+Only when *both* cross-source rules fired **and** the two sides' entity references
+claim to be one thing — equal normalised names from different source systems. That
+is the shape a reader interprets as "about one entity", and the only shape this
+gate judges.
+
+| Both sides reference an entity? | Same normalised name, different sources? | Genuinely resolved? | Cross-source elevation |
+|---|---|---|---|
+| no | — | — | unchanged (no identity claim) |
+| yes | no | — | unchanged (no identity claim) |
+| yes | yes | **yes** | **allowed**, basis recorded |
+| yes | yes | **no** | **refused** — the AC5 case |
+
+Corroboration that never made an identity claim (a ServiceNow *team* and a Jira
+*process*) still rests on the pre-existing detector link and is untouched — T6 is
+not a licence to silently downgrade it. But the result always records
+`identity_verified`, so a reviewer can tell a HIGH resting on a **proven shared
+identity** from one resting only on a shared detector.
+
+### What counts as genuinely resolved
+
+Strongest first, and every one is a statement a machine or a human actually made:
+
+1. the two references are the **same entity row**;
+2. they resolve to the same **T2 merge survivor** — the merge that actually
+   happened, reported with the rule its provenance recorded. Authoritative over
+   any re-derivation (an alias table edited after a merge could otherwise make the
+   gate disagree with what the graph already did);
+3. a human **confirmed** the pair in the T3 review surface;
+4. the **T1 ranked engine auto-merges** them — an explicit cross-reference or the
+   org alias table (the answer for a pair not yet applied).
+
+A name match can never be a basis. `RESOLVED_BASES` has no name entry, step 4 asks
+T1 for a *merge* and T1's name tier is structurally incapable of producing one, and
+step 2 reads only rules T2 was permitted to merge on. A test pins
+`RESOLVED_BASES == T1's AUTO_MERGE_TIERS + {same_entity, confirmed_proposal}` so
+the two layers cannot drift into the gate trusting something T1 does not.
+
+### Degradation fails CLOSED
+
+An identity claim that is not *positively* resolved never elevates — whatever the
+reason (unresolved, resolver error, no resolver). Elevating on an unreadable graph
+would reopen this hole exactly when the system is unhealthy, and a wrong HIGH is
+the harmful direction: it gets quoted in a board paper, while a conservative MEDIUM
+merely waits for the next run. Every refusal records its reason, so a lost
+elevation is visible as a refusal rather than looking like a genuine downgrade.
+
+The one fail-open path is the gate module failing to **import** — a packaging fault
+CI catches, logged with the consequence named.
+
+### Where it shows up
+
+`CorroborationResult.identity_gate` carries `applied`, `identity_verified`,
+`identity_claim`, `blocked_rules`, `basis`, `reason`, and both references.
+Blocking removes the **elevation**, not the evidence: COR-01/COR-02 stay on the
+result and the card still explains what each system found.
+
 ## What is still to come
 
-**Unmerge** (restore constituents, flag dependent findings for re-evaluation) and
-the **corroboration uplift** (cross-source corroboration counting only across
-resolved identities) are the remaining 2.0-B2 tasks. `merged_constituents()` and
-the `merged_into` pointer are what unmerge will read; `source_systems` on the
-provenance block is what the uplift will count. An Owner-facing editor for the
-alias table is also still open — `put_alias_mappings` is the validated seam it
-will write through.
+**Unmerge** (restore constituents, flag dependent findings for re-evaluation) is
+the remaining 2.0-B2 task. `merged_constituents()` and the `merged_into` pointer
+are what it will read. An Owner-facing editor for the alias table is also still
+open — `put_alias_mappings` is the validated seam it will write through.
