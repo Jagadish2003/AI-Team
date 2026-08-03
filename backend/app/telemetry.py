@@ -206,6 +206,30 @@ class PackCertificationReviewedPayload(TypedDict, total=False):
     reviewed_at: NotRequired[str]
 
 
+class PackCertificationPolicyChangedPayload(TypedDict, total=False):
+    """2.0-C2 T4 (AT-834) — an org's pack certification activation floor changed."""
+    org_id: NotRequired[str]
+    previous_minimum_level: NotRequired[str]
+    minimum_level: NotRequired[str]
+    revision: NotRequired[int]
+    actor_id: NotRequired[str]
+    changed_at: NotRequired[str]
+
+
+class PackCertificationPolicyRefusedPayload(TypedDict, total=False):
+    """2.0-C2 T4 (AT-834) — an activation was refused by the org's policy.
+
+    Emitted at the activation edges so a refusal is observable in run health and
+    support tooling rather than existing only as an HTTP 409 the caller saw once.
+    Pack ids and levels only.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_ids: NotRequired[list]
+    minimum_level: NotRequired[str]
+    violations: NotRequired[list]
+
+
 class PackVersionPinnedPayload(TypedDict, total=False):
     """2.0-C1 T3 (AT-828) — a run executed a ROLLED-BACK pack version.
 
@@ -1020,6 +1044,15 @@ register_event_type("pack.version_pin_unservable", PackVersionPinUnservablePaylo
 # 2.0-C2 T2 (AT-832): a checklist-driven certification review was recorded. The
 # review records a DECISION; only the AT-831 signature grants a badge.
 register_event_type("pack.certification_reviewed", PackCertificationReviewedPayload)
+# 2.0-C2 T4 (AT-834): the activation-policy control. `policy_changed` records an
+# owner raising or lowering the floor; `policy_refused` records an activation the
+# floor blocked.
+register_event_type(
+    "pack.certification_policy_changed", PackCertificationPolicyChangedPayload
+)
+register_event_type(
+    "pack.certification_policy_refused", PackCertificationPolicyRefusedPayload
+)
 # T3-S11-A Sprint 11
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
 # T3-S12-A T7 Sprint 12

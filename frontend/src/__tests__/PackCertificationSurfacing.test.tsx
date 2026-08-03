@@ -19,6 +19,7 @@ import PackCertificationBadge from '../components/common/PackCertificationBadge'
 import { PackProvenanceRow } from '../components/analyst_review/OpportunityDetail';
 import { packLifecycleLabel } from '../pages/RunHealthDashboardPage';
 import { certificationsByPackId } from '../api/packStateApi';
+import type { PackStateItem, PackStateResponse } from '../api/packStateApi';
 import type { OpportunityCandidate } from '../types/analystReview';
 import type { PackHealthItem } from '../types/runHealth';
 
@@ -220,5 +221,76 @@ describe('selection surface', () => {
   it('degrades to no badges when the pack-state read fails', () => {
     expect(certificationsByPackId(null)).toEqual({});
     expect(certificationsByPackId(undefined)).toEqual({});
+  });
+});
+
+
+describe('certification policy surfacing (AT-834)', () => {
+  const row = (overrides: Partial<PackStateItem> = {}): PackStateItem =>
+    ({
+      packId: 'cloud_ops',
+      packName: 'Cloud Operations',
+      packVersion: '1.2.0',
+      state: 'active',
+      revision: 0,
+      reason: null,
+      updatedBy: null,
+      updatedAt: null,
+      pinnedVersion: null,
+      effectiveVersion: '1.2.0',
+      availableVersions: [],
+      registered: true,
+      certification: {
+        packId: 'cloud_ops',
+        level: 'community',
+        label: 'Community',
+        declaredLevel: 'certified',
+      },
+      ...overrides,
+    }) as PackStateItem;
+
+  it('carries the block flag and its reason through the API shape', () => {
+    const blocked = row({
+      activationBlocked: true,
+      activationBlockedReason:
+        "pack 'cloud_ops' is Community; this organisation requires CloudFulcrum Certified or higher",
+    });
+    expect(blocked.activationBlocked).toBe(true);
+    expect(blocked.activationBlockedReason).toContain('requires CloudFulcrum Certified');
+  });
+
+  it('still maps the badge for a blocked pack', () => {
+    // A blocked pack is not a badge-less pack: the reader needs to see the level
+    // that caused the block.
+    const byId = certificationsByPackId({
+      orgId: 'default',
+      packs: [row({ activationBlocked: true })],
+      certificationPolicy: {
+        orgId: 'default',
+        minimumLevel: 'certified',
+        minimumLevelLabel: 'CloudFulcrum Certified',
+        restricted: true,
+        label: 'CloudFulcrum Certified or higher',
+        revision: 1,
+        reason: null,
+        updatedBy: null,
+        updatedAt: null,
+      },
+    });
+    expect(byId.cloud_ops.level).toBe('community');
+    expect(byId.cloud_ops.declaredLevel).toBe('certified');
+  });
+
+  it('treats an absent policy as no restriction only when the backend says so', () => {
+    // `certificationPolicy: null` means the policy could NOT be read. The UI must
+    // not render "unrestricted" from it — it simply shows no banner, and the gate
+    // at activation still refuses.
+    const response: PackStateResponse = {
+      orgId: 'default',
+      packs: [row()],
+      certificationPolicy: null,
+    };
+    expect(response.certificationPolicy?.restricted).toBeUndefined();
+    expect(certificationsByPackId(response).cloud_ops).toBeDefined();
   });
 });

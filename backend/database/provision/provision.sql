@@ -8,11 +8,11 @@
 -- ops_event_staging + ops_event_load_batches, the MSP-B5 runbook_matches /
 -- runbook_match_decision_history / runbook_match_feedback, the 2.0-C1
 -- pack_states + append-only pack_state_history, the 2.0-C2 append-only
--- pack_certification_reviews, and the R-1.9.1-L3
+-- pack_certification_reviews + pack_certification_policies, and the R-1.9.1-L3
 -- vendor-side license_registry + append-only issuance_audit),
 -- indexes/constraints/rules, seeds the connector catalog, grants the app login
 -- role(s) privileges on the schema, REVOKES DELETE/TRUNCATE on the run-history
--- tables (2.0-C1 AC4), and stamps alembic_version to head 0034.
+-- tables (2.0-C1 AC4), and stamps alembic_version to head 0035.
 --
 -- BEFORE RUNNING ON PRODUCTION — two values in this file are dev defaults and
 -- MUST be set for the target environment. Both are marked "TODO(deploy)" below:
@@ -1475,6 +1475,34 @@ CREATE INDEX IF NOT EXISTS idx_pack_certification_reviews_org_pack
 
 
 --
+-- Name: pack_certification_policies — 2.0-C2 T4 (AT-834) alembic 0035
+--
+-- Per-org activation floor: the MINIMUM certification level a pack must hold to be
+-- activated (e.g. a federal deployment setting 'certified'). No runtime ensure_*
+-- helper — provisioning is the only thing that creates it.
+--
+-- ABSENCE OF A ROW MEANS NO RESTRICTION. Provisioning changes no behaviour until an
+-- owner sets a floor; there is no seed step.
+--
+-- Unlike every other pack read, the policy read FAILS CLOSED: if this table cannot
+-- be read, activation is refused rather than proceeding as though no policy were
+-- set — a security control that fails open would lift the restriction exactly when
+-- it matters most. Lifting a restriction WRITES 'community'; there is no delete
+-- path, so "who lowered the floor, and when" stays answerable in audit_log.
+--
+
+CREATE TABLE IF NOT EXISTS pack_certification_policies (
+    org_id        VARCHAR(64)  PRIMARY KEY,
+    minimum_level VARCHAR(16)  NOT NULL,
+    revision      INTEGER      NOT NULL DEFAULT 0,
+    reason        TEXT,
+    updated_by    VARCHAR(128),
+    created_at    TIMESTAMPTZ  NOT NULL,
+    updated_at    TIMESTAMPTZ  NOT NULL
+);
+
+
+--
 -- PostgreSQL database dump complete
 --
 
@@ -1539,11 +1567,12 @@ INSERT INTO "public"."connectors" ("id", "payload") VALUES ('zendesk', '{"id": "
 --
 -- 2.0-C1/C2: this file now carries the 0031 (pack_states / pack_state_history),
 -- 0032 (version-pin columns), 0033 (REVOKE DELETE/TRUNCATE on the history tables)
--- and 0034 (pack_certification_reviews) objects, so it must stamp 0034. A stale stamp would leave a
+-- 0034 (pack_certification_reviews) and 0035 (pack_certification_policies)
+-- objects, so it must stamp 0035. A stale stamp would leave a
 -- freshly provisioned database claiming a head it is ahead of, and `alembic upgrade
 -- head` would then re-run 0031-0033. Those are all idempotent, so it would not
 -- break, but the recorded head would be wrong. Bump this whenever you add DDL here.
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0034') ON CONFLICT DO NOTHING;
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0035') ON CONFLICT DO NOTHING;
 
 
 --

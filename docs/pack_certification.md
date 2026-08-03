@@ -4,9 +4,9 @@ Read this before adding a pack, changing certification metadata, rotating the si
 key, or writing any code that reads a pack's certification level.
 
 This document currently covers **T1 (AT-831) — certification metadata**,
-**T2 (AT-832) — the internal review workflow**, and **T3 (AT-833) — surfacing**.
-Org policy control (AT-834) and date-based expiry (AT-835) are separate tasks that
-build on what is described here; sections will be added as they land.
+**T2 (AT-832) — the internal review workflow**, **T3 (AT-833) — surfacing**, and
+**T4 (AT-834) — policy control**. Date-based expiry (AT-835) is a separate task that
+builds on what is described here; its section will be added when it lands.
 
 ---
 
@@ -432,3 +432,122 @@ a label could not be resolved.
   (13 tests) — the shared badge component (including that an unknown level renders
   nothing), the finding provenance row, the disabled-AND-certified case, the
   run-health lifecycle regression, and the selection mapping.
+
+---
+
+# 12. Policy control (T4 / AT-834)
+
+## 12.1 A floor, not a list
+
+An org declares the **minimum** certification level a pack must hold to be activated.
+A floor rather than an enumeration of permitted levels, because the levels are
+genuinely ordered: an org that accepts Partner packs necessarily accepts Certified
+ones. Expressing it as a set would allow the configuration where someone permits
+`community` but not `partner`, which means nothing.
+
+`community` is the default floor and restricts nothing — every pack clears it. So
+provisioning the table changes no behaviour until an org opts in, the same discipline
+as `pack_states`' "absence of a row means active".
+
+## 12.2 Refuse, don't exclude
+
+A policy violation **refuses** the activation (409), matching 2.0-C1's compatibility
+gate rather than its disable behaviour:
+
+* **disabled** = "this customer turned the pack off" — a deliberate ongoing state, so
+  the run proceeds without it;
+* **policy violation** = "this selection is not allowed here" — a configuration error
+  the operator must resolve.
+
+Quietly dropping the pack instead would leave a federal reviewer unable to tell a
+policy block from a pack that simply found nothing — the opposite of what a control
+like this exists to provide.
+
+The refusal names every offending pack, the level each holds, and the level required.
+Where a pack **claimed** more than it can prove, the message says so ("it claims
+CloudFulcrum Certified, but the claim could not be verified") — reporting it as
+plainly "Community" would send an operator hunting for a pack that is, on paper,
+Certified.
+
+## 12.3 Fail CLOSED — deliberately unlike the rest of the lifecycle
+
+Every other read in the pack lifecycle fails soft. `pack_state` treats an unreadable
+store as "everything active" because a display label must never hide a finding. This
+module does the opposite, and the difference is the point:
+
+> A **security control that fails open** would lift the restriction at exactly the
+> moment it matters — a database blip in the federal deployment that set "Certified
+> only" precisely so an uncertified pack could not run.
+
+So a policy that cannot be read, **and** a pack level that cannot be verified while a
+restriction is in force, both refuse activation with an explicit reason (503 for the
+former, since it is an availability fault rather than a caller error). "We could not
+tell" never reads as "it qualifies" — an unresolvable badge under an active
+restriction is a violation.
+
+The availability cost is close to zero: runs are persisted in the same database, so a
+deployment that cannot read its policy cannot start a run either way.
+
+Be precise about what an org that has NOT opted in still pays: **one policy read per
+activation**. That is unavoidable — you cannot know a policy is absent without
+looking, and treating "could not look" as "absent" is exactly the hole this posture
+closes. What it does not pay is certification verification: the default floor
+short-circuits before any signature is checked (`test_no_restriction_costs_nothing`
+pins that). The read is also why the DB-free unit suites that exercise activation now
+inject an in-memory policy store alongside the pack-state one — without it, a
+fail-closed gate correctly refuses every activation.
+
+The **display** annotation is the one fail-soft piece: `annotate_activation_blocked`
+leaves rows unannotated when the policy cannot be read, because it is a convenience
+for the selection screen. The gate still refuses, so a surfacing hiccup can never
+become a way past the policy.
+
+## 12.4 Where it runs
+
+Inside `resolve_activatable_packs`, the single activation resolution both API edges
+**and** the discovery runner call — so a CLI or direct caller cannot walk around it.
+The pipeline is now four stages:
+
+| # | Stage | On violation |
+|---|---|---|
+| 1 | Disabled packs (AT-827) | Excluded, loudly |
+| 2 | Compatibility (AT-826) | **409** |
+| 3 | **Certification policy (AT-834)** | **409** (or 503 if unverifiable) |
+| 4 | Version pins (AT-828) | Degrades with a warning |
+
+Policy is evaluated **after** compatibility so a pack that cannot run here at all is
+reported as incompatible rather than as a policy violation — the operator needs the
+more fundamental reason first. And **after** the disabled drop, for the same reason
+compatibility is: a pack the customer already turned off is not going to execute
+either way, so it must not be able to fail the run.
+
+## 12.5 Owner-controlled, and auditable
+
+`PUT /api/packs/certification/policy` is **owner**; reading it is viewer+, because a
+user who cannot select a pack must be able to see the rule stopping them.
+
+Lifting a restriction **writes** `community` rather than deleting the row, and every
+real change emits a `pack_certification_policy_changed` audit event. That event is
+this policy's **only** durable history — the table holds current state, not a
+timeline — which is why a sibling history table was not added: `audit_log` is the
+immutable org-wide trail an auditor actually reads, and nothing in the product
+surfaces a policy timeline that would justify a second copy. "Who lowered the floor,
+and when" is answerable, which for this setting is the whole point.
+
+## 12.6 Contract
+
+`contracts/API_CONTRACT.md` **v1.18 → v1.19**: two new routes, plus
+`certificationPolicy` and per-row `activationBlocked` on `GET /api/packs/state`, and
+the new 409/503 on both activation edges.
+
+## 12.7 Tests
+
+* [`backend/tests/unit/test_pack_certification_policy.py`](../backend/tests/unit/test_pack_certification_policy.py)
+  (28 tests) — the floor semantics, the gate, enforcement inside the shared
+  activation resolution, and the fail-closed behaviours: unreadable policy,
+  unverifiable levels, and an unresolvable badge under a restriction. Plus the
+  no-delete-path and no-destructive-SQL structural checks.
+* [`backend/tests/contract/test_pack_certification_policy_api.py`](../backend/tests/contract/test_pack_certification_policy_api.py)
+  (18 tests) — the API, RBAC, org isolation, the audit entry, and AC3 end to end at
+  the real launch edge: restricted org + uncertified pack → 409 naming the pack, the
+  level it holds, and the level required; lifting the policy restores activation.

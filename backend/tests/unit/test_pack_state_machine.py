@@ -71,6 +71,25 @@ def in_memory_store():
 
 
 @pytest.fixture(autouse=True)
+def in_memory_certification_policy():
+    """Keep the 2.0-C2 T4 policy read local too.
+
+    Activation now consults a SECOND org-scoped store (the certification policy),
+    and that read deliberately FAILS CLOSED — so a DB-free suite must inject it or
+    every activation refuses. No org sets a floor here, so the policy is the
+    permissive default and these tests exercise the disable half unchanged.
+    """
+    from app.pack_certification_policy import (
+        InMemoryPackCertificationPolicyStore,
+        set_policy_store,
+    )
+
+    set_policy_store(InMemoryPackCertificationPolicyStore())
+    yield
+    set_policy_store(None)
+
+
+@pytest.fixture(autouse=True)
 def no_telemetry_db(monkeypatch):
     """Capture telemetry instead of writing it (these tests must not touch a DB)."""
     import app.telemetry as telemetry

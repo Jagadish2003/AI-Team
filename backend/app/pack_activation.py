@@ -250,14 +250,20 @@ def resolve_activatable_packs(
 ) -> ActivationDecision:
     """The single activation resolution both API edges and the runner use.
 
-    Three stages, in this order:
+    Four stages, in this order:
 
     1. **Drop disabled packs** (AT-827). A disabled pack is intentionally turned
        off, so it is excluded rather than refused — and the exclusion is recorded
        loudly (run record, run health, telemetry), never silent.
     2. **Gate the remainder on compatibility** (AT-826). An incompatible pack is a
        configuration error and still REFUSES the activation with a 409.
-    3. **Apply version pins** (AT-828). A rolled-back pack contributes its pinned
+    3. **Gate on the org's certification policy** (AT-834). A pack below the org's
+       minimum certification level REFUSES the activation with a 409 naming the pack
+       and the level it holds. Refuse rather than exclude, because "this selection
+       is not allowed here" is an operator decision to resolve — quietly dropping
+       the pack would leave a federal reviewer unable to tell a policy block from a
+       pack that simply found nothing.
+    4. **Apply version pins** (AT-828). A rolled-back pack contributes its pinned
        version and that version's archived config path, so the run executes AND is
        stamped with the pinned version.
 
@@ -272,8 +278,12 @@ def resolve_activatable_packs(
     the operator can act on it.
 
     Raises :class:`AllPacksDisabledError` when the exclusion leaves nothing to run,
-    and :class:`PackIncompatibleError` when a pack that WOULD have run is
-    incompatible. A pin that has become unservable (its artifact was removed) is
+    :class:`PackIncompatibleError` when a pack that WOULD have run is incompatible,
+    and :class:`~app.pack_certification_policy.PackCertificationPolicyViolation` when
+    one is below the org's certification floor (or
+    :class:`~app.pack_certification_policy.PackCertificationPolicyUnavailable` when
+    that floor cannot be read — the policy gate fails CLOSED, unlike every other
+    read here, because it is a security control). A pin that has become unservable (its artifact was removed) is
     NOT fatal — it degrades to the current version with a loud warning rather than
     failing every run for the org.
     """
@@ -324,7 +334,30 @@ def resolve_activatable_packs(
         org_id=org_id, pack_ids=remaining, run_id=run_id
     )
 
-    # ── Stage 3: version pins (AT-828) ────────────────────────────────────────
+    # ── Stage 3: certification policy (AT-834) ────────────────────────────────
+    # Evaluated AFTER compatibility so a pack that cannot run here at all is
+    # reported as incompatible rather than as a policy violation — the operator
+    # needs the more fundamental reason first. Both refuse with a 409, so a caller
+    # fixing one will see the other on the next attempt.
+    from .pack_certification_policy import (
+        PackCertificationPolicyViolation,
+        assert_selection_permitted,
+        record_policy_refusal,
+    )
+
+    try:
+        assert_selection_permitted(
+            org_id, [report.pack_id for report in activated]
+        )
+    except PackCertificationPolicyViolation as exc:
+        logger.warning(
+            "Pack activation refused by certification policy for org=%s run=%s: %s",
+            org_id, run_id, exc,
+        )
+        record_policy_refusal(org_id=org_id, error=exc, run_id=run_id)
+        raise
+
+    # ── Stage 4: version pins (AT-828) ────────────────────────────────────────
     pinned_versions, pinned_config_paths = _resolve_version_pins(
         org_id=org_id,
         pack_ids=[report.pack_id for report in activated],

@@ -89,16 +89,24 @@ def incompatible_packs(monkeypatch):
 def offline_pack_state():
     """Keep this suite DB-free.
 
-    Activation resolution reads the org's pack-state store (2.0-C1 T2). Injecting
-    the in-memory store keeps that read local — the read is fail-soft either way,
-    but a Postgres round trip does not belong in a unit suite. No pack is disabled
-    in it, so every test here exercises the compatibility half unchanged.
+    Activation resolution reads TWO org-scoped stores: the pack-state store
+    (2.0-C1 T2) and the certification policy (2.0-C2 T4). Injecting both keeps the
+    reads local. The pack-state read is fail-soft either way; the POLICY read is
+    deliberately fail-CLOSED, so without its store injected every activation here
+    would refuse. Neither store restricts anything in this suite, so every test
+    exercises the compatibility half unchanged.
     """
+    from app.pack_certification_policy import (
+        InMemoryPackCertificationPolicyStore,
+        set_policy_store,
+    )
     from app.pack_state import InMemoryPackStateStore, set_pack_state_store
 
     set_pack_state_store(InMemoryPackStateStore())
+    set_policy_store(InMemoryPackCertificationPolicyStore())
     yield
     set_pack_state_store(None)
+    set_policy_store(None)
 
 
 @pytest.fixture

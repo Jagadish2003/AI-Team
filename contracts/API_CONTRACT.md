@@ -1,6 +1,38 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.18
+Version: v1.19
 Date: 2026-07-31
+
+> v1.19 — 2.0-C2 T4 (Pack Certification Policy Control): an org can restrict which
+> certification levels may be activated, Owner-controlled and enforced at activation.
+> New routes plus additive fields; a pre-v1.19 consumer is unaffected, and an org
+> that sets no policy behaves exactly as before.
+>
+> **New routes** (`app/routes_pack_certification.py`):
+> - `GET /api/packs/certification/policy` (viewer+) — `PackCertificationPolicy` =
+>   `{ orgId, minimumLevel: "certified" | "partner" | "community", minimumLevelLabel,
+>   restricted (boolean), label, revision, reason, updatedBy, updatedAt }`. Viewer+
+>   because a user who cannot select a pack must be able to see the rule stopping
+>   them. **503** when the policy cannot be read — deliberately NOT "unrestricted".
+> - `PUT /api/packs/certification/policy` (**owner**) — body
+>   `{ minimumLevel, reason?: string }`. The floor is a MINIMUM, not a list: the
+>   levels are ordered, so an org accepting Partner necessarily accepts Certified.
+>   `"community"` lifts the restriction (a write, not a delete — the change stays on
+>   the audit trail). Idempotent; the response adds `previousMinimumLevel`,
+>   `changed`, and `levels`.
+>
+> **Extended responses:**
+> - `GET /api/packs/state` — gains `certificationPolicy`
+>   (`PackCertificationPolicy | null`; `null` means it could not be read, never
+>   "unrestricted"), and each `PackStateItem` gains `activationBlocked` (boolean) and
+>   `activationBlockedReason` (string | null). Advisory, so a selection surface can
+>   grey a pack out rather than 409 after a run is configured; the enforcement point
+>   is activation.
+> - `POST /api/stack-builder/launch` and `POST /api/runs/{runId}/compute` — may now
+>   return **409** when a selected pack is below the org's certification floor (the
+>   detail names each pack, the level it holds, and the level required), and **503**
+>   when the policy itself cannot be read. The policy gate FAILS CLOSED: unlike every
+>   other pack-lifecycle read, an unreadable policy refuses activation rather than
+>   assuming no restriction.
 
 > v1.18 — 2.0-C2 T3 (Pack Certification Surfacing): the certification LEVEL is now
 > reported wherever a pack is selected, activated, or attributed. Every field is

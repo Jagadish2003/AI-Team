@@ -56,6 +56,10 @@ from .pack_activation import (
     compatibility_snapshot,
     resolve_activatable_packs,
 )
+from .pack_certification_policy import (
+    PackCertificationPolicyUnavailable,
+    PackCertificationPolicyViolation,
+)
 from discovery.packs.pack_compatibility import PackIncompatibleError
 from discovery.packs.pack_config import get_pack_version, normalize_pack_ids
 from discovery.packs.platform_capabilities import get_platform_version
@@ -262,6 +266,15 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except PackIncompatibleError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # 2.0-C2 T4 (AT-834 / AC3): the org restricts which certification levels
+        # may be activated. 409 with the reason naming each offending pack and the
+        # level it holds — the same shape as the compatibility refusal.
+        except PackCertificationPolicyViolation as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # The policy could not be READ. Refusing (rather than proceeding as if no
+        # policy were set) is the whole point of a fail-closed security control.
+        except PackCertificationPolicyUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
         eff_pack_ids = activation.activated_pack_ids
         eff_pack = eff_pack_ids[0] if eff_pack_ids else eff_pack

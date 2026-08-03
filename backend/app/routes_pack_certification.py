@@ -1,10 +1,12 @@
-"""Pack certification review API — 2.0-C2 T2 (AT-832).
+"""Pack certification API — 2.0-C2 T2 (AT-832) review + T4 (AT-834) policy.
 
-Three endpoints:
+Five endpoints:
 
     GET  /api/packs/certification/criteria           — the review checklist (viewer+)
     POST /api/packs/{pack_id}/certification/reviews  — record a review     (owner)
     GET  /api/packs/{pack_id}/certification/reviews  — the review trail    (analyst+)
+    GET  /api/packs/certification/policy             — the activation floor (viewer+)
+    PUT  /api/packs/certification/policy             — set the floor        (owner)
 
 Role rationale
 --------------
@@ -30,7 +32,9 @@ request body carries neither, so a review can never be attributed to somebody el
 or written into another tenant's trail. The reviewed pack version, platform version,
 and date are stamped server-side for the same reason.
 
-Nothing here deletes or edits anything. Re-reviewing appends the next revision.
+Nothing here deletes or edits anything. Re-reviewing appends the next revision, and
+lifting a certification restriction WRITES the permissive floor rather than deleting
+the policy row.
 """
 
 from __future__ import annotations
@@ -41,7 +45,11 @@ from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from .middleware.audit import PACK_CERTIFICATION_REVIEWED, log_event
+from .middleware.audit import (
+    PACK_CERTIFICATION_POLICY_CHANGED,
+    PACK_CERTIFICATION_REVIEWED,
+    log_event,
+)
 from .middleware.tenancy import get_current_org_id
 from .pack_certification_review import (
     DECISION_APPROVED,
@@ -52,6 +60,14 @@ from .pack_certification_review import (
     pack_review_history,
     record_certification_review,
     review_view,
+)
+from .pack_certification_policy import (
+    POLICY_LEVELS,
+    PackCertificationPolicyError,
+    PackCertificationPolicyUnavailable,
+    PolicyOutcome,
+    get_certification_policy,
+    set_certification_policy,
 )
 from .pack_state import PackNotFound
 from .rbac import _get_user_id_from_token, require_role
@@ -280,6 +296,114 @@ def _record_review_telemetry(review: PackCertificationReview) -> None:
         )
 
 
+class CertificationPolicyRequest(BaseModel):
+    """The org's activation floor (2.0-C2 T4 / AT-834).
+
+    ``minimumLevel`` is the TARGET floor, so the call is idempotent. ``community``
+    lifts the restriction — it is a write, not a delete, so lowering the floor stays
+    on the audit trail exactly as raising it does.
+    """
+
+    minimumLevel: Literal["certified", "partner", "community"] = Field(
+        description=(
+            "Minimum certification level a pack must hold to be activated. "
+            "'community' imposes no restriction."
+        )
+    )
+    reason: Optional[str] = Field(
+        default=None,
+        max_length=1000,
+        description=(
+            "Why the floor was set, recorded on the policy row and the audit trail "
+            "(e.g. 'FedRAMP boundary — certified packs only')."
+        ),
+    )
+
+
+@router.get(
+    "/certification/policy",
+    dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+    summary="This org's pack certification activation policy",
+)
+def get_certification_policy_route() -> Dict[str, Any]:
+    """The activation floor in force for this org.
+
+    Viewer-readable: a user who cannot select a pack must be able to see the rule
+    that is stopping them, otherwise the refusal is unexplainable from the UI.
+
+    **503** when the policy cannot be read — the same fail-closed posture as the
+    gate. Reporting "no restriction" on a read failure would tell an operator their
+    federal deployment is unrestricted, which is worse than an error.
+    """
+    org_id = get_current_org_id()
+    try:
+        return get_certification_policy(org_id).to_dict()
+    except PackCertificationPolicyUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.put(
+    "/certification/policy",
+    dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+    summary="Restrict which certification levels may be activated for this org",
+)
+def put_certification_policy(
+    body: CertificationPolicyRequest,
+    token: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Set the activation floor. Owner-only.
+
+    Takes effect at the next activation: a pack below the floor is REFUSED with a
+    409 naming the pack and the level it holds (2.0-C2 AC3). Existing findings are
+    untouched — the policy governs what may run, never what has already run.
+    """
+    org_id = get_current_org_id()
+    actor_id = _get_user_id_from_token(token)
+    try:
+        outcome = set_certification_policy(
+            org_id, body.minimumLevel, actor_id=actor_id, reason=body.reason
+        )
+    except PackCertificationPolicyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # A no-op is not an audit event — only a real change to the floor is.
+    if outcome.changed:
+        log_event(
+            PACK_CERTIFICATION_POLICY_CHANGED,
+            org_id=org_id,
+            user_id=actor_id,
+            previous_minimum_level=outcome.previous_level,
+            minimum_level=outcome.policy.minimum_level,
+            revision=outcome.policy.revision,
+            reason=body.reason,
+        )
+        _record_policy_telemetry(outcome)
+    return {**outcome.as_dict(), "levels": list(POLICY_LEVELS)}
+
+
+def _record_policy_telemetry(outcome: PolicyOutcome) -> None:
+    """Mirror the change into telemetry. Observability only — never fails the write."""
+    from .telemetry import record_event
+
+    try:
+        record_event(
+            "pack.certification_policy_changed",
+            {
+                "org_id": outcome.policy.org_id,
+                "previous_minimum_level": outcome.previous_level,
+                "minimum_level": outcome.policy.minimum_level,
+                "revision": outcome.policy.revision,
+                "actor_id": outcome.actor_id,
+                "changed_at": outcome.policy.updated_at,
+            },
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "pack.certification_policy_changed telemetry failed (non-blocking)",
+            exc_info=True,
+        )
+
+
 def register_pack_certification_routes(app: FastAPI) -> None:
     """Attach the certification review routes exactly once (idempotent)."""
     existing = {getattr(route, "path", None) for route in app.routes}
@@ -289,6 +413,7 @@ def register_pack_certification_routes(app: FastAPI) -> None:
 
 
 __all__ = [
+    "CertificationPolicyRequest",
     "CertificationReviewRequest",
     "CriterionVerdict",
     "register_pack_certification_routes",

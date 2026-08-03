@@ -91,8 +91,30 @@ def _pack_not_found(pack_id: str) -> HTTPException:
     summary="List every discovery pack with its lifecycle state for this org",
 )
 def list_pack_states() -> Dict[str, Any]:
+    """Every pack with its lifecycle state, certification, and activation eligibility.
+
+    2.0-C2 T4 (AT-834): the response also carries this org's certification policy and
+    stamps each row with ``activationBlocked``. The gate itself lives at activation —
+    this is so a selection surface can grey out a pack it would only be refused for
+    later, which beats a 409 after the user has configured a whole run.
+
+    The annotation is fail-soft (an unreadable policy leaves rows unannotated) while
+    the GATE fails closed, so a surfacing hiccup can never become a way past the
+    policy.
+    """
+    from .pack_certification_policy import (
+        PackCertificationPolicyUnavailable,
+        annotate_activation_blocked,
+        get_certification_policy,
+    )
+
     org_id = get_current_org_id()
-    return {"orgId": org_id, "packs": pack_state_view(org_id)}
+    packs = annotate_activation_blocked(org_id, pack_state_view(org_id))
+    try:
+        policy = get_certification_policy(org_id).to_dict()
+    except PackCertificationPolicyUnavailable:
+        policy = None
+    return {"orgId": org_id, "packs": packs, "certificationPolicy": policy}
 
 
 @router.put(

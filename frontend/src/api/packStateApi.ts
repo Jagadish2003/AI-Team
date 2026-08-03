@@ -27,11 +27,36 @@ export interface PackStateItem {
    * no longer declares — never a guessed level.
    */
   certification: PackCertification | null;
+  /**
+   * 2.0-C2 T4 (AT-834): true when this org's certification policy would refuse the
+   * pack at activation. Advisory — the gate lives at activation — so a selection
+   * surface can grey a pack out instead of 409-ing after a whole run is configured.
+   * Absent when the policy could not be read (the annotation is fail-soft; the gate
+   * is not).
+   */
+  activationBlocked?: boolean;
+  activationBlockedReason?: string | null;
+}
+
+/** 2.0-C2 T4 (AT-834): the org's activation floor. */
+export interface PackCertificationPolicy {
+  orgId: string;
+  minimumLevel: 'certified' | 'partner' | 'community';
+  minimumLevelLabel: string;
+  /** False when the floor is `community`, which excludes nothing. */
+  restricted: boolean;
+  label: string;
+  revision: number;
+  reason: string | null;
+  updatedBy: string | null;
+  updatedAt: string | null;
 }
 
 export interface PackStateResponse {
   orgId: string;
   packs: PackStateItem[];
+  /** Null when the policy could not be read — never silently "unrestricted". */
+  certificationPolicy?: PackCertificationPolicy | null;
 }
 
 export async function fetchPackStates(): Promise<PackStateResponse> {
