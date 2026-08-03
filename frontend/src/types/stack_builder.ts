@@ -249,6 +249,12 @@ export interface SetupState {
   packId?: string | null;
   /** Full ordered pack selection for combined template runs. */
   packIds?: string[];
+  /**
+   * Whether the user has used the Step 4 analysis-pack dropdown. Distinguishes a
+   * deliberate "None" from an untouched slot, so the cloud-events → Cloud Ops
+   * default (see data/analysisPacks.ts) can be turned off and stay off.
+   */
+  analysisPackTouched?: boolean;
   templatePreselectedIds: string[];
   /** Template-suggested systems the user explicitly removed in this setup. */
   templateExcludedSystemIds?: string[];
