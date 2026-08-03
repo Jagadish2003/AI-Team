@@ -12,7 +12,11 @@ running the thing it feeds.
 * Analyst decisions — accept / dismiss / defer-with-reason, from
   ``learning_feedback.py``. Evidence about a JUDGEMENT.
 * Outcome results — 2.0-A2's post-action movement measurements, from
-  ``opportunity_movement.py``. Evidence about the WORLD.
+  ``opportunity_movement.py``. Evidence about the WORLD. Normally keyed on the
+  T5 projection-validation verdict; when no projection existed to validate
+  against, the measured DIRECTION carries the signal instead, because the
+  verdict answers "was our model right?" while the direction answers "did the
+  action help?" — and ranking cares about the second.
 
 Nothing else. In particular, nothing from ``telemetry.py``: page views, dwell
 time, expand-clicks and every other engagement signal are excluded by
