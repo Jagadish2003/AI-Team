@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from . import db
 from .learning_adjustment import GroupAdjustment
 from .learning_signal_config import load_config
+from .ranking_adjustment_audit import emit_ranking_adjustment_changed
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,30 @@ def _key_part(value: Optional[str]) -> str:
 def _from_key_part(value: Any) -> Optional[str]:
     text = _clean(value).lower()
     return text or None
+
+
+def _refs(value: Any) -> List[Dict[str, Any]]:
+    if isinstance(value, (str, bytes)):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            value = []
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    return [dict(r) for r in value if isinstance(r, Mapping)]
+
+
+def _affected_opportunity_count(rows: Sequence[Mapping[str, Any]]) -> int:
+    """Distinct identities whose signals fed the active state being changed."""
+    identities = set()
+    for row in rows:
+        if not row.get("learningActive") or not float(row.get("netWeight") or 0.0):
+            continue
+        for ref in _refs(row.get("contributingRefs")):
+            identity = _clean(ref.get("opportunityIdentity"))
+            if identity:
+                identities.add(identity)
+    return len(identities)
 
 
 def ensure_ranking_adjustment_tables() -> None:
@@ -158,7 +183,7 @@ def list_adjustment_state(org_id: str) -> List[Dict[str, Any]]:
             "hasOutcomeEvidence": bool(r[6]),
             "signalCount": int(r[7] or 0),
             "learningActive": bool(r[8]),
-            "contributingRefs": r[9] if isinstance(r[9], list) else [],
+            "contributingRefs": _refs(r[9]),
             "configVersion": r[10],
             "revision": int(r[11] or 1),
             "computedAt": r[12].isoformat() if r[12] else None,
@@ -307,6 +332,19 @@ def recompute_adjustments(
                 written += 1
         con.commit()
 
+    current = _safe_state(org)
+    emit_ranking_adjustment_changed(
+        org_id=org,
+        actor_id=actor_id,
+        change_kind=CHANGE_RECOMPUTED,
+        previous_state=list(previous.values()),
+        current_state=current,
+        groups_changed=written,
+        opportunities_affected=_affected_opportunity_count(current),
+        config_version=config.config_version,
+        changed_at=when.isoformat(),
+    )
+
     return {
         "schemaVersion": ADJUSTMENT_STATE_SCHEMA_VERSION,
         "orgId": org,
@@ -316,6 +354,139 @@ def recompute_adjustments(
         "configVersion": config.config_version,
         "computedAt": when.isoformat(),
     }
+
+
+def reset_adjustments(
+    org_id: str,
+    *,
+    actor_id: str,
+    reason: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Neutralise this org's current adjustment state and append reset history.
+
+    Reset never rewrites history. The current table is the serving cache, so it
+    is safe to update in place; the reset itself is preserved as a new history
+    entry for every group that existed, or as an org-level marker when there was
+    no current state to neutralise.
+    """
+    org = _clean(org_id)
+    actor = _clean(actor_id)
+    if not org:
+        raise ValueError("org_id is required")
+    if not actor:
+        raise ValueError("actor_id is required")
+
+    config = load_config()
+    when = now or datetime.now(timezone.utc)
+    previous = _safe_state(org)
+    groups_reset = len(previous)
+    opportunities_affected = _affected_opportunity_count(previous)
+    reset_reason = _clean(reason)[:500] or None
+
+    with closing(db.connect()) as con:
+        with con.cursor() as cur:
+            if previous:
+                for row in previous:
+                    detector = _key_part(row.get("detectorId"))
+                    pack = _key_part(row.get("packId"))
+                    revision = int(row.get("revision") or 0) + 1
+                    cur.execute(
+                        "UPDATE ranking_adjustments SET"
+                        "  net_weight = 0,"
+                        "  outcome_weight = 0,"
+                        "  decision_weight = 0,"
+                        "  has_outcome_evidence = FALSE,"
+                        "  signal_count = 0,"
+                        "  learning_active = FALSE,"
+                        "  contributing_refs = %s,"
+                        "  config_version = %s,"
+                        "  revision = %s,"
+                        "  computed_at = %s,"
+                        "  updated_at = %s"
+                        " WHERE org_id = %s AND detector_id = %s AND pack_id = %s",
+                        (
+                            json.dumps([]),
+                            config.config_version,
+                            revision,
+                            when,
+                            when,
+                            org,
+                            detector,
+                            pack,
+                        ),
+                    )
+                    _append_history(
+                        cur,
+                        org_id=org,
+                        detector_id=detector,
+                        pack_id=pack,
+                        change_kind=CHANGE_RESET,
+                        previous_net_weight=row.get("netWeight"),
+                        net_weight=0.0,
+                        signal_count=0,
+                        learning_active=False,
+                        actor_id=actor,
+                        config_version=config.config_version,
+                        revision=revision,
+                        when=when,
+                        extra={
+                            "resetReason": reset_reason,
+                            "previousState": dict(row),
+                        },
+                    )
+            else:
+                _append_history(
+                    cur,
+                    org_id=org,
+                    detector_id=_UNKNOWN,
+                    pack_id=_UNKNOWN,
+                    change_kind=CHANGE_RESET,
+                    previous_net_weight=None,
+                    net_weight=0.0,
+                    signal_count=0,
+                    learning_active=False,
+                    actor_id=actor,
+                    config_version=config.config_version,
+                    revision=1,
+                    when=when,
+                    extra={
+                        "resetReason": reset_reason,
+                        "resetMarker": True,
+                        "previousState": [],
+                    },
+                )
+        con.commit()
+
+    current = _safe_state(org)
+    payload = {
+        "schemaVersion": ADJUSTMENT_STATE_SCHEMA_VERSION,
+        "orgId": org,
+        "changeKind": CHANGE_RESET,
+        "groupsReset": groups_reset,
+        "opportunitiesAffected": opportunities_affected,
+        "previousState": previous,
+        "currentState": current,
+        "configVersion": config.config_version,
+        "resetAt": when.isoformat(),
+        "actorId": actor,
+    }
+    if reset_reason:
+        payload["reason"] = reset_reason
+
+    emit_ranking_adjustment_changed(
+        org_id=org,
+        actor_id=actor,
+        change_kind=CHANGE_RESET,
+        previous_state=previous,
+        current_state=current,
+        groups_changed=groups_reset,
+        opportunities_affected=opportunities_affected,
+        config_version=config.config_version,
+        changed_at=when.isoformat(),
+        reason=reset_reason,
+    )
+    return payload
 
 
 def _safe_state(org_id: str) -> List[Dict[str, Any]]:
@@ -397,4 +568,5 @@ __all__ = [
     "get_adjustments",
     "list_adjustment_state",
     "recompute_adjustments",
+    "reset_adjustments",
 ]
