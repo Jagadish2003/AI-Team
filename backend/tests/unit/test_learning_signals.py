@@ -447,6 +447,20 @@ class TestMeasuredDirectionWhenNothingWasProjected:
         )
         assert signal.weight == 0.0
 
+    def test_the_movement_role_string_matches_what_a2_actually_writes(self):
+        """Pinned rather than imported.
+
+        Importing ``opportunity_baseline_artifact`` just for this constant would
+        widen the learning layer's permitted-import surface for one string. This
+        test gives the same protection: if A2 renames the role, this fails rather
+        than the direction quietly falling back to the first signal — which could
+        be a population count.
+        """
+        from app.opportunity_baseline_artifact import ROLE_MOVEMENT
+        from app.learning_signals import MOVEMENT_ROLE
+
+        assert MOVEMENT_ROLE == ROLE_MOVEMENT
+
     def test_the_label_describes_the_direction_not_the_missing_projection(self):
         """Destined for a customer-facing 'why'."""
         signal = outcome_signal(
