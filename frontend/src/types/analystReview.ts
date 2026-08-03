@@ -91,6 +91,72 @@ export interface OpportunityRanking {
   cappedBy?: "score_fraction" | "rank_move" | null;
   hasOutcomeEvidence?: boolean;
   signalCount?: number;
+  // 2.0-A3 T3 — why this finding moved (contract v1.19). Absent when it did not
+  // move: there is no ordering change to explain, and rendering "not adjusted
+  // because..." on every finding would bury the ones that were.
+  reason?: AdjustmentReason;
+}
+
+/** How much evidence an adjustment rests on. Served as data so the UI can style
+ *  the hedge rather than string-matching the summary sentence. */
+export type AdjustmentEvidenceStrength =
+  | "minimal"
+  | "limited"
+  | "moderate"
+  | "substantial";
+
+export interface ContributingDecisionRef {
+  kind: "decision";
+  feedbackId: string | null;
+  action: string | null;
+  opportunityIdentity: string | null;
+  reasonCode: string | null;
+  actorId: string | null;
+  recordedAt: string | null;
+  /** Resolves to GET /api/learning/feedback/entry/{feedbackId}. */
+  href: string | null;
+}
+
+export interface ContributingOutcomeRef {
+  kind: "outcome";
+  opportunityIdentity: string | null;
+  verdict: string | null;
+  currentRunId: string | null;
+  baselineRunId: string | null;
+  measuredDirection: string | null;
+  /** Carried so a caveated measurement never presents as a clean one. */
+  comparabilityVerdict: string | null;
+  measuredAt: string | null;
+  /** Resolves to GET /api/opportunity-movement/{opportunityIdentity}. */
+  href: string | null;
+}
+
+/**
+ * Structured, not prose. The `summary` is rendered from these fields by the
+ * backend so every surface shows identical wording — never compose your own,
+ * and never render this alongside confidence, corroboration or the evidence
+ * trace: the adjustment changed ORDER only, and copy placed among those would
+ * imply the learned signal contributed to the finding's credibility.
+ */
+export interface AdjustmentReason {
+  schemaVersion: string;
+  direction: "up" | "down";
+  ranksMoved: number;
+  baseRank: number;
+  adjustedRank: number;
+  decisionCount: number;
+  decisionsByAction: Record<string, number>;
+  outcomeCount: number;
+  outcomesByVerdict: Record<string, number>;
+  hasOutcomeEvidence: boolean;
+  wasCapped: boolean;
+  cappedBy: "score_fraction" | "rank_move" | null;
+  evidenceStrength: AdjustmentEvidenceStrength;
+  totalSignals: number;
+  contributingDecisions: ContributingDecisionRef[];
+  contributingOutcomes: ContributingOutcomeRef[];
+  /** The rendered sentence. Display this; do not build one from the fields. */
+  summary: string;
 }
 
 export interface ReviewAuditEvent {

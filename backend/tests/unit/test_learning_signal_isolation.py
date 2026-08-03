@@ -42,6 +42,13 @@ LEARNING_LAYER_MODULES = (
     "learning_adjustment.py",
     "learning_adjustment_state.py",
     "routes_learning_adjustment.py",
+    # 2.0-A3 T3 — the explainability copy. Added because the completeness guard
+    # below demanded it. These matter here for a reason specific to T3: the
+    # reason must never imply the learned signal contributed to a finding's
+    # credibility, so the "no writes to evidence/confidence/corroboration" check
+    # applies to the module that WRITES the customer-facing sentence.
+    "learning_reason.py",
+    "learning_reason_vocabulary.py",
 )
 
 #: The scoring and evidence fields the learning layer must never write.

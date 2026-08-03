@@ -372,7 +372,13 @@ def decision_signal(
             "feedbackId": record.get("feedbackId"),
             "opportunityIdentity": record.get("opportunityIdentity"),
             "actorId": record.get("actorId"),
+            # 2.0-A3 T3: the ACTION is what an explanation renders from — "your
+            # team accepted 4 similar findings" cannot be composed from a reason
+            # code alone. Carried on the ref rather than re-derived later, so the
+            # rendered sentence and the weight come from the same record.
+            "action": record.get("action"),
             "reasonCode": record.get("reasonCode"),
+            "recordedAt": record.get("recordedAt"),
         },
         recorded_at=str(recorded_at) if recorded_at else None,
         label=label,
