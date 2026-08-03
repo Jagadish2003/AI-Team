@@ -188,9 +188,12 @@ def test_ac5_the_org_alias_table_resolves_the_identity_and_elevates():
 
     result = _evaluate(_run_data(sn_name="Payments API", jira_name="payments-api"))
 
-    # The two names DIFFER, so no name-based claim is even made — but the alias
-    # table means the identity is genuinely resolved, which is what matters.
+    # The two names DIFFER, so resolution has to be ATTEMPTED rather than skipped:
+    # this pair is genuinely one thing because an Owner said so, and a gate that
+    # short-circuited on the differing names would refuse that very identity.
     assert result.elevated_confidence == CONFIDENCE_HIGH
+    assert result.identity_gate["identity_verified"] is True
+    assert result.identity_gate["basis"] == gate.BASIS_ALIAS_MAPPING
     assert result.identity_gate["blocked_rules"] == []
 
 
@@ -361,14 +364,15 @@ def test_the_resolver_returns_a_basis_only_for_a_real_merge():
 # ── no regression to the pre-existing basis ─────────────────────────────────
 
 
-def test_corroboration_that_makes_no_identity_claim_is_untouched():
-    """T6 gates identity claims. A ServiceNow team and a Jira process with
-    different names never claimed to be one entity, so their detector-linked
-    corroboration behaves exactly as before — and is visibly not
-    identity-verified."""
+def test_a_detector_link_alone_no_longer_elevates():
+    """The behaviour change AC5 asks for, stated as a test: before T6 a shared
+    DETECTOR was enough to reach HIGH across two systems. It no longer is — a
+    resolved entity identity is required, and these two references have none."""
     result = _evaluate(_run_data(sn_name="lending-ops", jira_name="covenant"))
 
-    assert result.elevated_confidence == CONFIDENCE_HIGH
-    assert result.identity_gate["identity_claim"] is False
+    assert result.elevated_confidence == CONFIDENCE_MEDIUM
     assert result.identity_gate["identity_verified"] is False
-    assert result.identity_gate["blocked_rules"] == []
+    assert result.identity_gate["reason"] == gate.REASON_NO_RESOLVED_IDENTITY
+    assert set(result.identity_gate["blocked_rules"]) == {"COR-01", "COR-02", "COR-03"}
+    # The evidence survives — only the elevation is refused.
+    assert "COR-01" in result.rule_ids and "COR-02" in result.rule_ids

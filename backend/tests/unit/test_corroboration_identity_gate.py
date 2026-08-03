@@ -150,25 +150,36 @@ def test_the_triple_headline_falls_with_the_pair_it_derives_from():
 # ── what counts as an identity claim ────────────────────────────────────────
 
 
-def test_plainly_different_things_make_no_identity_claim():
-    """A ServiceNow *team* and a Jira *process* with different names are not
-    asserting a shared identity, so this gate has nothing to prove or refuse —
-    that corroboration rests on the detector link, as it always has."""
+def test_unresolved_different_named_references_also_do_not_elevate():
+    """AC5's first clause: corroboration across sources REQUIRES a resolved
+    identity. A ServiceNow *team* and a Jira *process* that nothing resolved are
+    not one thing either — the names simply make that less tempting to assume."""
     run_data = _run_data([_sn("lending-ops")], [_jira("covenant")])
     result = _evaluate(run_data, _never)
 
-    assert result.elevated_confidence == CONFIDENCE_HIGH, (
-        "T6 must not silently downgrade corroboration that never made an "
-        "identity claim"
-    )
+    assert result.elevated_confidence == CONFIDENCE_MEDIUM
+    assert result.identity_gate["identity_verified"] is False
+    # Reported distinctly from the same-name case, which is the dangerous shape.
     assert result.identity_gate["identity_claim"] is False
-    assert result.identity_gate["reason"] == gate.REASON_NO_CLAIM
-    assert result.identity_gate["identity_verified"] is False, (
-        "and it must still be visible that this HIGH is not identity-verified"
-    )
+    assert result.identity_gate["reason"] == gate.REASON_NO_RESOLVED_IDENTITY
 
 
-def test_a_record_with_no_entity_reference_makes_no_claim():
+def test_a_different_named_pair_still_elevates_once_resolved():
+    """The alias-table case: "Payments API" and "payments-api" look nothing alike
+    yet are genuinely one thing. Resolution must be ATTEMPTED for such a pair —
+    short-circuiting on the differing names would refuse the very identity an
+    Owner recorded."""
+    run_data = _run_data([_sn("Payments API")], [_jira("payments-api")])
+    result = _evaluate(run_data, _resolved_by(gate.BASIS_ALIAS_MAPPING))
+
+    assert result.elevated_confidence == CONFIDENCE_HIGH
+    assert result.identity_gate["identity_verified"] is True
+    assert result.identity_gate["basis"] == gate.BASIS_ALIAS_MAPPING
+
+
+def test_a_record_with_no_entity_reference_cannot_establish_identity():
+    """No reference is the ABSENCE of the evidence the elevation requires, not a
+    licence to skip the requirement."""
     run_data = {
         "connected_systems": ["salesforce", "servicenow", "jira"],
         "servicenow": {"incidents": [{"detector_ids": [DETECTOR], "state": "Open",
@@ -178,7 +189,7 @@ def test_a_record_with_no_entity_reference_makes_no_claim():
     }
     result = _evaluate(run_data, _never)
 
-    assert result.elevated_confidence == CONFIDENCE_HIGH
+    assert result.elevated_confidence == CONFIDENCE_MEDIUM
     assert result.identity_gate["reason"] == gate.REASON_NO_REFERENCE
     assert result.identity_gate["identity_verified"] is False
 

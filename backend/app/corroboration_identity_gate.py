@@ -14,10 +14,18 @@ a shared identity.**
 
 ## What this gate does
 
-When both corroborating sides reference an entity and those references LOOK like
-the same thing (equal normalised names across different sources), the gate
-requires that identity to be **genuinely resolved** before the pairing may raise
-confidence. Genuinely resolved means one of, and only one of (strongest first):
+**A cross-source elevation requires a genuinely resolved identity — always.** When
+both cross-source rules fire, the gate asks whether the entities the two sides
+reference are the same real thing. If they are not, the pairing keeps its evidence
+and loses its elevation.
+
+That applies whether or not the names coincide. Gating only the same-name case
+would enforce AC5's second clause ("unresolved same-named entities do not raise
+confidence") while leaving its first ("corroboration across sources **requires**
+resolved identity") unenforced for the majority of real corroboration, where the
+two sides carry different names or no entity reference at all.
+
+Genuinely resolved means one of, and only one of (strongest first):
 
   * the two references are literally the same graph entity;
   * they resolve to the same APPLIED merge survivor (:mod:`app.entity_merge`),
@@ -35,19 +43,20 @@ tier is structurally incapable of producing one (``AUTO_MERGE_TIERS`` excludes
 it), while the merge path reads only rules T2 was permitted to merge on. The gate
 inherits those guarantees rather than re-implementing a weaker copy of them.
 
-## What this gate deliberately does NOT do
+## The behaviour change this represents
 
-It does not re-decide corroboration that rests on no identity claim. Where the two
-sides reference plainly different things (a ServiceNow *team* and a Jira
-*process*, say), the corroboration is detector-linked — the pre-existing, weaker
-basis — and T6 is not the ticket that changes that. Silently downgrading every
-such finding would be a large, unannounced behaviour change dressed up as a
-correctness fix.
+Before this gate, cross-source corroboration elevated on a DETECTOR link alone. It
+now also requires a resolved entity identity, so a deployment whose corroborating
+records carry no entity references — or whose entities are not yet resolved across
+sources — sees those findings settle at MEDIUM instead of HIGH until the identities
+exist. That is the point of the criterion rather than a side effect: a HIGH that
+rested on a shared word was never earned.
 
-What the gate does instead is make the distinction VISIBLE: every verdict is
-recorded on the result (``identity_verified``, the basis, and the reason), so a
-reviewer can see whether a HIGH rests on a verified shared identity or merely on
-a shared detector.
+Every verdict is recorded on the result (``identity_verified``, the basis, the
+reason, both references), so a MEDIUM caused by this gate is legible as a refusal
+with a stated cause — not as an unexplained downgrade. The route to recovering the
+HIGH is to establish the identity: publish a cross-reference, add an alias mapping,
+or confirm the match in the review surface.
 
 ## Degradation — one rule, and it fails CLOSED
 
@@ -93,11 +102,20 @@ RESOLVED_BASES: frozenset = frozenset({
     BASIS_CONFIRMED_PROPOSAL,
 })
 
-# Why a claim was not settled — recorded so the gate's answer is explainable.
+# Why an identity was not established — recorded so every refusal is explainable.
+#: The dangerous shape AC5 names: the names coincide across sources, which reads as
+#: one thing, but nothing resolved them.
 REASON_NOT_RESOLVED = "same name across sources but no resolved identity"
-REASON_NO_CLAIM = "the sources reference different things — no identity claim"
+#: No resolution and the names do not even coincide — still not a shared identity,
+#: so still not an elevation.
+REASON_NO_RESOLVED_IDENTITY = "no resolved identity between the corroborating sources"
 REASON_NO_REFERENCE = "a corroborating record carries no entity reference"
 REASON_UNVERIFIABLE = "identity could not be verified (graph unavailable)"
+
+#: Retained for readers of older records: previously reported when the gate
+#: declined to judge a pair whose names differed. AC5 requires a resolved identity
+#: regardless of the names, so nothing emits this any more.
+REASON_NO_CLAIM = "the sources reference different things — no identity claim"
 
 #: Record fields that carry an entity's STABLE id per source system, strongest
 #: first. An explicit enumeration, never a heuristic: a field is read as an
@@ -238,8 +256,17 @@ class IdentityVerdict:
 
     @property
     def blocks_elevation(self) -> bool:
-        """The AC5 condition: an identity IS claimed and is NOT resolved."""
-        return self.claim and not self.resolved
+        """AC5, in one line: **cross-source corroboration requires a resolved
+        identity.** Anything short of one — a same-name coincidence, two
+        unrelated references, a missing reference, an unverifiable graph — is not
+        that, and does not elevate.
+
+        Note what this deliberately is NOT: ``claim and not resolved``. Gating only
+        the same-name case would satisfy the criterion's second clause while
+        leaving its first ("requires resolved identity") unenforced for the
+        majority of real corroboration, where the two sides carry different names
+        or no reference at all."""
+        return not self.resolved
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -259,13 +286,16 @@ IdentityResolverFn = Callable[[str, EntityRef, EntityRef], Optional[str]]
 
 
 def _claims_same_identity(left: EntityRef, right: EntityRef) -> bool:
-    """Do the two references purport to be the same thing?
+    """Do the two references LOOK like the same thing on their names alone?
 
-    Deliberately narrow: equal normalised names from DIFFERENT source systems.
-    That is precisely the shape AC5 calls out — and it is the only shape where a
-    reader would read "corroborated across two systems" as "about one thing".
-    Two plainly different names make no identity claim, so there is nothing for
-    this gate to prove or refuse.
+    Equal normalised names from different source systems — the shape AC5 names
+    explicitly, and the most misleading one, since a reader takes "corroborated
+    across two systems" to mean "about one thing".
+
+    This is REPORTING ONLY. It does not decide whether the elevation is allowed:
+    under AC5 every cross-source elevation requires a resolved identity, whether
+    or not the names happen to coincide. It is recorded so a reviewer can tell the
+    dangerous same-name case apart from an ordinary unresolved one.
     """
     if not left.is_present or not right.is_present:
         return False
@@ -281,18 +311,29 @@ def check_identity(
     *,
     resolver: Optional[IdentityResolverFn] = None,
 ) -> IdentityVerdict:
-    """Decide whether a cross-source identity claim is genuinely resolved.
+    """Decide whether the two references are a genuinely resolved identity.
+
+    Resolution is ALWAYS attempted when both references are present — never
+    short-circuited because the names differ. That matters: a pair joined by the
+    org's alias table (``Payments API`` ↔ ``payments-api``) is genuinely resolved
+    while looking nothing alike, and skipping the resolver for it would refuse the
+    very identity an Owner recorded.
 
     Pure apart from the injected ``resolver``. Never raises, and never guesses in
-    the permissive direction: a resolver that fails or is absent yields "claimed
-    but unverifiable", which is NOT a resolved identity and therefore blocks the
+    the permissive direction: a resolver that fails or is absent yields
+    "unverifiable", which is NOT a resolved identity and therefore blocks the
     elevation, recorded with its reason (see the module docstring).
     """
     if left is None or right is None or not left.is_present or not right.is_present:
+        # No reference on one side means no identity can be established at all.
+        # Under AC5 that is not a licence to elevate — it is the absence of the
+        # evidence the elevation requires.
         return IdentityVerdict(
             left=left, right=right, claim=False, resolved=False,
             reason=REASON_NO_REFERENCE,
         )
+
+    claim = _claims_same_identity(left, right)
 
     if (
         left.record_id
@@ -305,15 +346,9 @@ def check_identity(
             basis=BASIS_SAME_ENTITY, reason="the same source record",
         )
 
-    if not _claims_same_identity(left, right):
-        return IdentityVerdict(
-            left=left, right=right, claim=False, resolved=False,
-            reason=REASON_NO_CLAIM,
-        )
-
     if resolver is None:
         return IdentityVerdict(
-            left=left, right=right, claim=True, resolved=False,
+            left=left, right=right, claim=claim, resolved=False,
             reason=REASON_UNVERIFIABLE,
         )
 
@@ -325,18 +360,18 @@ def check_identity(
             org_id, left.source_system, right.source_system, exc,
         )
         return IdentityVerdict(
-            left=left, right=right, claim=True, resolved=False,
+            left=left, right=right, claim=claim, resolved=False,
             reason=REASON_UNVERIFIABLE,
         )
 
     if basis in RESOLVED_BASES:
         return IdentityVerdict(
-            left=left, right=right, claim=True, resolved=True, basis=basis,
+            left=left, right=right, claim=claim, resolved=True, basis=basis,
             reason=f"identity resolved by {basis}",
         )
     return IdentityVerdict(
-        left=left, right=right, claim=True, resolved=False,
-        reason=REASON_NOT_RESOLVED,
+        left=left, right=right, claim=claim, resolved=False,
+        reason=REASON_NOT_RESOLVED if claim else REASON_NO_RESOLVED_IDENTITY,
     )
 
 
