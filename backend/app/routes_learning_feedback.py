@@ -232,6 +232,7 @@ def get_learning_config(_token: str = Depends(require_auth)) -> Dict[str, Any]:
     config = load_config()
     return {
         "configVersion": config.config_version,
+        "configurationScope": config.configuration_scope,
         "outcomeSignals": {
             name: {"weight": s.weight, "direction": s.direction}
             for name, s in sorted(config.outcome_signals.items())

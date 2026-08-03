@@ -97,6 +97,67 @@ def _imported_names(tree: ast.Module):
     return names
 
 
+def _without_docstrings(tree: ast.Module) -> ast.Module:
+    for node in ast.walk(tree):
+        if isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            body = getattr(node, "body", [])
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                body[0].value.value = ""
+    return tree
+
+
+def _executable_source(path: Path) -> str:
+    return ast.unparse(_without_docstrings(_tree(path)))
+
+
+def _sql_statements(path: Path):
+    tree = _tree(path)
+    consts = {
+        t.id: n.value.value
+        for n in tree.body
+        if isinstance(n, ast.Assign)
+        for t in n.targets
+        if isinstance(t, ast.Name)
+        and isinstance(n.value, ast.Constant)
+        and isinstance(n.value.value, str)
+    }
+
+    def literal(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.Name):
+            return consts.get(node.id)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left, right = literal(node.left), literal(node.right)
+            return None if left is None or right is None else left + right
+        if isinstance(node, ast.JoinedStr):
+            parts = []
+            for value in node.values:
+                parts.append(str(value.value) if isinstance(value, ast.Constant) else "?")
+            return "".join(parts)
+        return None
+
+    statements = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "execute"
+            and node.args
+        ):
+            sql = literal(node.args[0])
+            if sql:
+                statements.append(" ".join(sql.split()))
+    return statements
+
+
 # --------------------------------------------------------------------------
 # The named requirement: nothing from telemetry.
 # --------------------------------------------------------------------------
@@ -158,6 +219,55 @@ class TestTheLayerNeverReadsTelemetry:
             f"{path.name} names telemetry in executable code. Only the "
             "docstrings may discuss it — as the reason it is excluded."
         )
+
+
+# --------------------------------------------------------------------------
+# T6: learned state never leaves the deployment boundary.
+# --------------------------------------------------------------------------
+
+
+class TestTheLayerNeverLeavesTheDeploymentBoundary:
+    @pytest.mark.parametrize("path", _module_paths(), ids=LEARNING_LAYER_MODULES)
+    def test_no_learning_module_imports_the_model_gateway(self, path: Path):
+        for imported in _imported_names(_tree(path)):
+            assert "model_gateway" not in imported, (
+                f"{path.name} imports {imported!r}. Learned org state must never "
+                "be fed to a model provider; model calls stay behind the normal "
+                "gateway and the learning layer has no gateway dependency."
+            )
+
+    @pytest.mark.parametrize("path", _module_paths(), ids=LEARNING_LAYER_MODULES)
+    def test_no_learning_module_calls_provider_interfaces(self, path: Path):
+        code = _executable_source(path)
+        for smell in (
+            "GenerationRequest",
+            "get_generation_provider",
+            "get_embedding_provider",
+            "generate(",
+            "embed(",
+            "embed_with_identity",
+        ):
+            assert smell not in code, (
+                f"{path.name} references {smell!r}. Ranking feedback is customer "
+                "learning state and must not be included in prompts, embeddings, "
+                "or provider calls."
+            )
+
+    @pytest.mark.parametrize("path", _module_paths(), ids=LEARNING_LAYER_MODULES)
+    def test_no_cross_org_benchmark_surface_is_introduced(self, path: Path):
+        code = _executable_source(path).lower()
+        for smell in (
+            "benchmark",
+            "all_org",
+            "all_tenant",
+            "cross_org",
+            "global_adjustment",
+            "global_learning",
+        ):
+            assert smell not in code, (
+                f"{path.name} references {smell!r}. T6 forbids cross-org learning "
+                "aggregates and benchmarking surfaces."
+            )
 
 
 # --------------------------------------------------------------------------
@@ -324,6 +434,45 @@ class TestOrgScopingIsInTheQuery:
 
     def test_no_route_reads_an_org_id_from_the_request(self):
         source = (APP / "routes_learning_feedback.py").read_text(encoding="utf-8")
+        assert "get_current_org_id()" in source
+        for smell in ("orgId:", "org_id:", "body.orgId", "body.org_id"):
+            assert smell not in source
+
+    def test_adjustment_current_and_history_tables_are_keyed_by_org(self):
+        ddl = (
+            BACKEND / "database" / "models" / "ranking_adjustments.py"
+        ).read_text(encoding="utf-8")
+        assert "PRIMARY KEY (org_id, detector_id, pack_id)" in ddl
+        assert "history_id" in ddl and "org_id" in ddl
+        assert "ON ranking_adjustments (org_id" in ddl
+        assert "ON ranking_adjustment_history (org_id" in ddl
+
+    def test_every_adjustment_query_or_mutation_is_org_scoped(self):
+        statements = _sql_statements(APP / "learning_adjustment_state.py")
+        adjustment_sql = [
+            sql
+            for sql in statements
+            if "ranking_adjustment" in sql.lower()
+            and not sql.upper().startswith("CREATE ")
+        ]
+        assert adjustment_sql, "no adjustment SQL statements found"
+        for sql in adjustment_sql:
+            upper = sql.upper()
+            if upper.startswith("INSERT "):
+                assert "ORG_ID" in upper.split("VALUES", 1)[0], (
+                    f"adjustment INSERT does not include org_id in its key: {sql[:160]}"
+                )
+            elif upper.startswith(("SELECT ", "UPDATE ")):
+                assert "WHERE ORG_ID = %S" in upper, (
+                    f"adjustment read/update is not org-scoped in SQL: {sql[:160]}"
+                )
+            else:
+                assert not upper.startswith("DELETE "), (
+                    f"adjustment store must not delete tenant state: {sql[:160]}"
+                )
+
+    def test_adjustment_routes_never_read_org_from_the_request(self):
+        source = (APP / "routes_learning_adjustment.py").read_text(encoding="utf-8")
         assert "get_current_org_id()" in source
         for smell in ("orgId:", "org_id:", "body.orgId", "body.org_id"):
             assert smell not in source

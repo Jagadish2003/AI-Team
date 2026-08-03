@@ -5,6 +5,9 @@
     "evidence_convention": "Every weight declares `basis` as one of: 'measured' (derived from a reproducible measurement, cite it), 'operationally_justified' (a defensible default from domain reasoning, not yet measured), or 'provisional' (a first guess, expected to be wrong). Mirrors app/config/outcome_confounders.json and discovery/signals/ops_calibration.py.",
     "governing_principle": "An outcome outranks an opinion. A measured result from 2.0-A2 — the signal actually moved, or did not — is evidence about the world; an analyst decision is evidence about a judgement. Both are worth learning from, and neither is worthless, but they are not equals. This file may not be edited into a state where any decision weight meets or exceeds any outcome weight: the loader REFUSES such a config rather than silently applying it, because a config edit that inverts the principle would turn outcome-weighted learning back into click-tracking without anything in the product looking different.",
     "not_a_scoring_input": "Nothing here feeds impact, effort, tier, confidence, corroboration, or evidence. These weights inform ORDERING only (2.0-A3 T2's bounded adjustment layer). T1 produces the signal set; it applies no adjustment.",
+    "configurationScope": "deployment_wide",
+    "configuration_scope_note": "2.0-A3 T6 isolation decision: these weights and thresholds are deployment-wide product configuration, not per-org customer data. If a future release makes any value tenant-tunable, it must move into an org-scoped store and follow the same org_id key/query rules as feedback and adjustments.",
+    "deployment_boundary": "Learned org state is never sent to a model provider and no cross-org learning benchmark is computed from it. Model calls remain behind app/model_gateway; the learning layer consumes only org-scoped decisions and measured outcomes.",
     "configVersion": "1.0.0"
   },
 
