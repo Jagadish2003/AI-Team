@@ -186,6 +186,26 @@ class PackStateChangedPayload(TypedDict, total=False):
     changed_at: NotRequired[str]
 
 
+class PackCertificationReviewedPayload(TypedDict, total=False):
+    """2.0-C2 T2 (AT-832) — a pack certification review was recorded.
+
+    The ``pack_certification_reviews`` table is the domain audit trail; this event
+    places the decision in the telemetry stream so support can correlate "this pack
+    was re-signed at T" with "it was reviewed at T-1". Ids, levels, and criterion
+    ids only — never the reviewer's free-text notes.
+    """
+    org_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    pack_version: NotRequired[str]
+    revision: NotRequired[int]
+    reviewer_id: NotRequired[str]
+    proposed_level: NotRequired[str]
+    decision: NotRequired[str]
+    platform_version: NotRequired[str]
+    passed_criteria: NotRequired[list]
+    reviewed_at: NotRequired[str]
+
+
 class PackVersionPinnedPayload(TypedDict, total=False):
     """2.0-C1 T3 (AT-828) — a run executed a ROLLED-BACK pack version.
 
@@ -997,6 +1017,9 @@ register_event_type("pack.state_changed", PackStateChangedPayload)
 # be honoured (its archived artifact is gone) so a stale pin is never silent.
 register_event_type("pack.version_pinned", PackVersionPinnedPayload)
 register_event_type("pack.version_pin_unservable", PackVersionPinUnservablePayload)
+# 2.0-C2 T2 (AT-832): a checklist-driven certification review was recorded. The
+# review records a DECISION; only the AT-831 signature grants a badge.
+register_event_type("pack.certification_reviewed", PackCertificationReviewedPayload)
 # T3-S11-A Sprint 11
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
 # T3-S12-A T7 Sprint 12

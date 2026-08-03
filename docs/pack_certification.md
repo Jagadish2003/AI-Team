@@ -3,10 +3,10 @@
 Read this before adding a pack, changing certification metadata, rotating the signing
 key, or writing any code that reads a pack's certification level.
 
-This document currently covers **T1 (AT-831) — certification metadata**. The internal
-review workflow (AT-832), surfacing (AT-833), org policy control (AT-834), and
-date-based expiry (AT-835) are separate tasks that build on what is described here;
-sections will be added as they land.
+This document currently covers **T1 (AT-831) — certification metadata** and
+**T2 (AT-832) — the internal review workflow**. Surfacing (AT-833), org policy
+control (AT-834), and date-based expiry (AT-835) are separate tasks that build on
+what is described here; sections will be added as they land.
 
 ---
 
@@ -202,3 +202,131 @@ tree should be a reviewed diff, not a side effect of running a script.
   signed field (including the scope, and including copying a valid signature onto
   another pack) invalidates it. The signing tests mint an **ephemeral** key pair, so
   CI never needs the release private key.
+
+---
+
+# 10. The review workflow (T2 / AT-832)
+
+## 10.1 What a review is, and what it is not
+
+A review is the **record of a human decision**: who reviewed which pack version,
+against which criteria, how each criterion came out, on what date, against which
+platform version, and whether the outcome was approve or reject. That record is what
+2.0-C2 AC5 requires — *every certification decision is recorded with reviewer,
+criteria, and date, and is auditable*.
+
+A review does **not** grant a badge, and this is the single most important thing to
+understand about the two tasks together. If recording a review changed a pack's
+level, the reviewer's database row would become the trust root instead of the signing
+key — which is exactly the self-application hole §2 exists to close. So:
+
+```
+review (in-app, this workflow)   →  decision + criteria verdicts, recorded
+        ↓  approved_declaration()
+canonical payload                →  signed OFFLINE with the release key
+        ↓
+certification metadata (§3)      →  verified at runtime (§5)
+```
+
+`PackCertificationReview.approved_declaration()` emits the exact declaration block —
+level, certifying entity, review date, reviewed-against platform version, and a scope
+whose `criteria` are precisely the criteria that **passed** — and `canonical_payload()`
+emits the exact bytes to sign. What gets signed is therefore provably what was
+approved, rather than something retyped afterwards.
+
+A rejected review has no declaration at all: asking for one raises, and the serialised
+record omits both signing fields, so a consumer cannot accidentally build a payload
+out of a rejection.
+
+## 10.2 The checklist
+
+`discovery/packs/certification_criteria.py` holds one vocabulary read from both ends:
+a review records a verdict per criterion, and an approved pack's signed
+`scope.criteria` (§3) lists the ones that passed. One vocabulary means the two cannot
+drift, and a structural test pins that every id a shipped pack claims really exists.
+
+The four the story names are **required** — `declarative_manifest_review`,
+`evidence_discipline`, `terminology`, `calibration_sanity`. Two more ship as optional
+because they are genuinely pack-specific: `compliance_guardrails` (nCino/STRS/GitHub)
+and `aggregation_floor` (security_ops). A pack with no security-derived content should
+not have to fake a verdict on an aggregation floor.
+
+Mark a new criterion `required=True` only if EVERY pack must be judged on it — a
+required criterion with no verdict blocks approval.
+
+## 10.3 The gate
+
+A review cannot be recorded as `approved` unless every required criterion carries a
+**passing** verdict. Missing and failed are reported separately, because they are
+different mistakes: one is an incomplete review, the other is a review that found a
+problem. An approval that skipped an item is not a lighter-weight approval — it is an
+unreviewed pack wearing a badge.
+
+`not_applicable` is allowed but must carry a note, and never satisfies a *required*
+criterion. A rejection must carry notes: "rejected, no reason recorded" is not
+auditable and leaves the pack author nothing to act on.
+
+## 10.4 Append-only, and protected
+
+There is no update and no delete path in `app/pack_certification_review.py`.
+Re-reviewing writes the NEXT revision; a superseded review stays on the trail. That is
+what makes it an audit trail rather than a current-state mirror.
+
+`pack_certification_reviews` is therefore in
+`app/history_retention.PROTECTED_TABLES`, so migration `0034` REVOKEs
+`DELETE, TRUNCATE` on it exactly as 2.0-C1 T4 does for run history — a certification
+decision that can be deleted is not auditable. Note the ordering inside `0034`: the
+table is created first, then the REVOKE block is re-applied, because `0033` has
+already run on existing deployments and a table created afterwards would otherwise sit
+under `GRANT ALL PRIVILEGES` with no data-layer enforcement at all.
+
+## 10.5 Attribution
+
+Reviewer, pack version, platform version, and date are all recorded from the
+**server's** view. None is accepted from the request body — a trail the caller can
+back-date or attribute to somebody else is not an audit trail. The pack id is
+validated strictly (`PackNotFound`) rather than resolved through `get_pack()`'s
+default-pack fallback: a typo must never put a real reviewer's name against a pack
+they never looked at.
+
+Reviews are org-scoped like every other write here. Certification review is an
+internal CloudFulcrum activity performed in CloudFulcrum's own workspace; scoping it
+keeps the tenancy invariant and isolates a partner or federal deployment reviewing
+packs locally.
+
+## 10.6 API and audit
+
+| Route | Role | Purpose |
+|---|---|---|
+| `GET /api/packs/certification/criteria` | viewer+ | The checklist. |
+| `POST /api/packs/{packId}/certification/reviews` | **owner** | Record a review (201). |
+| `GET /api/packs/{packId}/certification/reviews` | analyst+ | Newest-first trail + the live badge. |
+
+Viewer can read the checklist because someone looking at a Certified badge must be
+able to see what was checked, otherwise the badge is an unfalsifiable claim. Recording
+is owner: it puts a named person's decision on a permanent trail.
+
+The trail endpoint returns the live `certification` block (§5) **alongside** the
+reviews, so an approved-but-unsigned pack reads as "approved on 2026-07-31 / effective
+level: Community" rather than as Certified.
+
+Every recorded review emits the `pack_certification_reviewed` audit event (actor, org,
+pack, version, decision, criteria) and the `pack.certification_reviewed` telemetry
+event. Free-text notes stay in the domain record and never reach telemetry.
+
+Contract: `contracts/API_CONTRACT.md` **v1.16 → v1.17**. Entirely new routes; no
+existing response shape changes.
+
+## 10.7 Tests
+
+* [`backend/tests/unit/test_pack_certification_review.py`](../backend/tests/unit/test_pack_certification_review.py)
+  (43 tests, DB-free) — the checklist vocabulary, the gate from both sides, the
+  append-only trail, org scoping, the review→signature bridge (including an
+  end-to-end sign-and-verify against §5), and the auditability properties: the table
+  is protected, the store contract exposes no delete/update, and the module contains
+  no destructive SQL.
+* [`backend/tests/contract/test_pack_certification_review_api.py`](../backend/tests/contract/test_pack_certification_review_api.py)
+  (24 tests) — the HTTP surface: RBAC, org isolation, server-side attribution,
+  400/409/404 boundaries, newest-first append-only ordering, the audit-log entry, and
+  the load-bearing negative — recording an approval does **not** change the effective
+  level.

@@ -68,6 +68,12 @@ RUNBOOK_MATCH_DECIDED = "runbook_match_decided"
 # transition in the organisation-wide audit stream. Snake_case per this module's
 # convention — the telemetry counterpart is "pack.state_changed" (app/telemetry.py).
 PACK_STATE_CHANGED = "pack_state_changed"
+# 2.0-C2 T2 (AT-832): a checklist-driven pack certification review was recorded.
+# The pack_certification_reviews table is the domain record (who reviewed what,
+# against which criteria); this event places the decision in the organisation-wide
+# audit stream, which is what makes 2.0-C2 AC5's "auditable" true from both ends.
+# Telemetry counterpart: "pack.certification_reviewed" (app/telemetry.py).
+PACK_CERTIFICATION_REVIEWED = "pack_certification_reviewed"
 
 # ---------------------------------------------------------------------------
 # Registry — every accepted event type listed here.
@@ -91,6 +97,7 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     INGESTION_CHECKPOINT_RESET,
     RUNBOOK_MATCH_DECIDED,
     PACK_STATE_CHANGED,
+    PACK_CERTIFICATION_REVIEWED,
 })
 
 # ---------------------------------------------------------------------------

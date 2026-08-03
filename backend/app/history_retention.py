@@ -80,6 +80,12 @@ PROTECTED_TABLE_REASONS: Dict[str, str] = {
         "the append-only pack lifecycle audit trail — disable/enable and "
         "rollback/restore transitions (2.0-C1 T2/T3)"
     ),
+    "pack_certification_reviews": (
+        "the append-only pack certification review trail — who reviewed which "
+        "pack version, against which criteria, with what decision (2.0-C2 T2). "
+        "A certification decision that can be deleted is not auditable, which is "
+        "what 2.0-C2 AC5 requires it to be"
+    ),
 }
 
 #: The protected tables. A DELETE or TRUNCATE against any of these is refused.

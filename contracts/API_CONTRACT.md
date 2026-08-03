@@ -1,6 +1,45 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.16
-Date: 2026-07-30
+Version: v1.17
+Date: 2026-07-31
+
+> v1.17 — 2.0-C2 T2 (Pack Certification Review Workflow): documents the internal,
+> checklist-driven certification review surface. Entirely NEW routes; no existing
+> response shape changes, so every pre-v1.17 consumer is unaffected.
+>
+> **What this surface does NOT do:** recording a review never changes a pack's
+> certification level. A pack is Certified only when a valid CloudFulcrum signature
+> over its metadata verifies (2.0-C2 T1 / AT-831). An approval returns the
+> declaration and canonical payload to be signed offline; the badge moves when that
+> signature ships.
+>
+> **New routes** (`app/routes_pack_certification.py`):
+> - `GET /api/packs/certification/criteria` (viewer+) — the review checklist:
+>   `{ platformVersion, requiredCriteria: string[], criteria: CriterionSpec[],
+>   levels: ["certified","partner"], decisions: ["approved","rejected"] }`, where
+>   `CriterionSpec` is `{ criterionId, label, description, required (boolean) }`.
+>   Viewer-readable on purpose — a reader who sees a Certified badge must be able to
+>   see what was checked.
+> - `POST /api/packs/{packId}/certification/reviews` (**owner**) — body
+>   `{ proposedLevel: "certified" | "partner", decision: "approved" | "rejected",
+>   criteria: { criterionId, outcome: "pass" | "fail" | "not_applicable",
+>   note?: string }[], scopeSummary: string, reviewerName?: string, notes?: string }`.
+>   **201** returns the recorded `CertificationReview`. The reviewer, pack version,
+>   platform version, and date are stamped SERVER-side and are not accepted from the
+>   body. **400** for a malformed checklist (unknown criterion, duplicate verdict,
+>   `not_applicable` with no note); **409** when the decision contradicts the
+>   checklist (approved with a required criterion missing or failed, or rejected with
+>   no reason); **404** for an unknown pack.
+> - `GET /api/packs/{packId}/certification/reviews` (analyst+) —
+>   `{ orgId, packId, certification, latestReview, reviews[] }`, newest-first.
+>   `certification` is the live signature-verified badge (AT-831), returned alongside
+>   the trail so an approved-but-unsigned pack cannot read as Certified.
+>
+> `CertificationReview` = `{ reviewId, orgId, packId, packVersion, revision,
+> reviewerId, reviewerName, reviewedAt, reviewedAgainstPlatformVersion,
+> proposedLevel, decision, approved (boolean), criteria[], passedCriteria: string[],
+> scopeSummary, notes, summary }`, plus `certificationDeclaration` and
+> `canonicalPayload` on an APPROVAL only (the material to be signed). The trail is
+> append-only — a later review adds a revision and never rewrites an earlier one.
 
 > v1.16 — 2.0-C1 (Pack Compatibility, Safe Disable & Rollback): documents the pack
 > LIFECYCLE surface. All fields are additive and optional; every pre-v1.16 consumer
