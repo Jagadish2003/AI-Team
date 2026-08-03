@@ -1452,6 +1452,12 @@ CREATE TABLE IF NOT EXISTS entity_match_proposals (
     tier                VARCHAR(32)  NOT NULL,
     confidence          FLOAT        NOT NULL,
     status              VARCHAR(16)  NOT NULL,
+    -- 2.0-B2 T4: the pair's STABLE source identity, independent of the entity ROW
+    -- ids above. Those ids churn (a source that starts supplying record ids makes
+    -- upsert_source_entity insert a NEW resolved row), and a decision keyed on row
+    -- ids alone would then miss its own pair and re-propose it. NULL on rows
+    -- written before T4; backfilled from evidence_payload on the next scan.
+    identity_key        VARCHAR(64),
     -- The full proposal snapshot the reviewer sees: both entities' display names
     -- and source identities, the reason, and the corroborating relationships.
     evidence_payload    TEXT         NOT NULL,
@@ -1485,6 +1491,9 @@ CREATE INDEX IF NOT EXISTS idx_entity_match_proposals_org_status
 
 CREATE INDEX IF NOT EXISTS idx_entity_match_proposal_history_org_proposal
     ON entity_match_proposal_history (org_id, proposal_id, revision DESC);
+
+CREATE INDEX IF NOT EXISTS idx_entity_match_proposals_org_identity
+    ON entity_match_proposals (org_id, identity_key, status);
 
 
 --

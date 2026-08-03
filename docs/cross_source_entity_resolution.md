@@ -247,6 +247,56 @@ original answer and its author survive. Every decision also emits the
 `entity_match_proposal_decided` audit event. The scan deliberately does not — it
 can only add or refresh pending questions, never change an answer.
 
+### Durability across runs (T4)
+
+Two things were missing for "durable **across runs**" to be true rather than
+merely intended.
+
+**1. Runs now refresh the queue.** `discovery/runner.py` calls
+`scan_for_proposals(org_id)` after relationship mapping — after, because tier 3's
+corroboration reads the observed edges the run just wrote. Non-blocking, for the
+same reason entity extraction is: a review queue is not worth failing a run over.
+Before T4 the only producer was the manual `POST …/scan`, so no run ever exercised
+the durability rule.
+
+**2. A decision is keyed on the pair's stable source identity, not its row ids.**
+`proposal_id` hashes entity **row ids**, which is right for addressing a row and
+wrong for remembering a decision, because row ids churn. The clearest case:
+
+> A connector starts supplying record ids. `upsert_source_entity` keys on
+> `(source_system, source_record_id)`, does not match the name-only row already
+> there, and inserts a **second resolved row** for the same real entity. The pair
+> now has a different `proposal_id` — so on T3's logic alone it is asked again,
+> despite having been answered.
+
+`identity_key` closes that. Per side the identity is `{source_system}|name:{canonical_name}`:
+
+| Part | In the key? | Why |
+|---|---|---|
+| source system | yes | the pair only exists because the two sides are different systems |
+| canonical name | yes | **invariant for the pairs this table can hold** — only `name_similarity` can propose, and it requires exact canonical-name equality, so the name *is* the pair's joint identity, and it is what the reviewer answered about |
+| source record id | **no** | it is the part that *churns*; keying on it would change the key exactly when durability is needed |
+
+A rename does produce a new key. That is correct rather than a gap: once the names
+diverge the tier's premise is gone and the pair is not proposed at all; if both
+sides are renamed alike, it is a genuinely new question.
+
+`decided_identity_keys(org_id)` is the read `record_proposals` consults before
+writing — confirmed *and* rejected both count, since "not the same thing" is as
+durable an answer as "the same thing".
+
+**Existing installs heal themselves.** Rows written before T4 have
+`identity_key IS NULL`, so the check above cannot see them. `backfill_identity_keys`
+recomputes the key from the row's own `evidence_payload` — T3 already stored both
+sides' source system and name for the reviewer, which is exactly what the key needs
+— and `record_proposals` calls it every pass. It only touches NULL rows, so it is a
+no-op once healed, and a row whose snapshot cannot supply an identity is left NULL
+rather than given a wrong key (a wrong key would silently suppress a *different*
+pair's question).
+
+Schema: `identity_key VARCHAR(64)` + `idx_entity_match_proposals_org_identity`,
+migration `0033`, mirrored in `provision.sql`.
+
 `SCANNABLE_ENTITY_TYPES` excludes `person` on purpose: two real people share a
 name far more often than two systems do, so those proposals would be both the
 highest-risk merge and the hardest to judge from a screen.

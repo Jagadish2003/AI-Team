@@ -85,8 +85,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _text(value: Any) -> str:
+    """A trimmed string, unwrapping the ServiceNow ``{value, display_value}``
+    envelope so an identity is never built from a dict's repr."""
+    if isinstance(value, Mapping):
+        value = value.get("value") or value.get("display_value")
+    return str(value or "").strip()
+
+
 def _required(value: Any, name: str) -> str:
-    text = str(value or "").strip()
+    text = _text(value)
     if not text:
         raise ProposalDecisionError(f"{name} is required")
     return text
@@ -129,6 +137,117 @@ def sorted_pair(left_entity_id: str, right_entity_id: str) -> Tuple[str, str]:
     return tuple(sorted((str(left_entity_id), str(right_entity_id))))  # type: ignore[return-value]
 
 
+# ── the stable identity key (2.0-B2 T4) ─────────────────────────────────────
+#
+# ``proposal_id`` hashes entity ROW ids, which is right for addressing a row but
+# wrong for remembering a DECISION: row ids churn. The clearest case is a source
+# that begins supplying record ids — ``upsert_source_entity`` keys on
+# ``(source_system, source_record_id)``, does not match the name-only row already
+# there, and INSERTS a second resolved row for the same real thing. A decision
+# keyed on row ids alone then misses its own pair and asks the question again,
+# which is exactly what AC3 forbids.
+#
+# The identity key is what the pair IS in its source systems, so it survives that.
+
+
+def entity_identity(source_system: Any, canonical_name: Any) -> str:
+    """One side's STABLE identity: its source system and canonical name.
+
+    The record id is deliberately NOT part of this, which is counter-intuitive
+    enough to be worth stating plainly: the record id is the part that CHURNS. A
+    connector that starts supplying record ids gives the same real entity a new
+    ``(system, record_id)`` pair — and a key built on that would change exactly
+    when we most need it to hold, defeating its own purpose.
+
+    The canonical name is invariant for the pairs this table can hold. Only a
+    propose-only tier reaches here, and the only one is ``name_similarity``, which
+    requires EXACT canonical-name equality across two different sources — so the
+    name is the pair's joint identity by construction, and it is what the reviewer
+    actually answered about ("ServiceNow's Payments and Jira's Payments").
+
+    A rename does produce a new key, and that is correct rather than a gap: once
+    the names diverge the tier's premise is gone and the pair is no longer
+    proposed at all; if both sides are renamed alike, it is a genuinely new
+    question about names nobody has yet been asked about.
+    """
+    return f"{_text(source_system).lower()}|name:{_canonical_name(canonical_name)}"
+
+
+def identity_key_for(entity_type: str, left_identity: str, right_identity: str) -> str:
+    """Deterministic, ORDER-INDEPENDENT key for a pair's stable identities.
+
+    Same construction as :func:`proposal_id_for` — sorted then hashed, with the
+    entity type in the digest — so the two keys agree about what "the same pair"
+    means and differ only in WHICH identity they are built from.
+    """
+    left, right = _text(left_identity), _text(right_identity)
+    if not left or not right:
+        raise ProposalDecisionError("an identity key needs two source identities")
+    if left == right:
+        raise ProposalDecisionError(
+            "a pair cannot share one source identity — that is one entity"
+        )
+    a, b = sorted((left, right))
+    digest = hashlib.sha256(
+        f"{_text(entity_type)}|{a}|{b}".encode("utf-8")
+    ).hexdigest()
+    return f"emk_{digest[:32]}"
+
+
+def _canonical_name(value: Any) -> str:
+    """The shared canonicalisation, so this layer and the entity layer cannot
+    disagree about what a name is."""
+    try:
+        from .entity_resolution import canonical_name_for
+
+        return canonical_name_for(_text(value))
+    except Exception:  # noqa: BLE001 — never let a name lookup break a scan.
+        return " ".join(_text(value).split()).lower()
+
+
+def _identity_from_view(view: Any) -> str:
+    """One side's stable identity from an evidence-snapshot view or a resolution
+    entity — whichever the caller has.
+
+    Prefers the stored ``canonical_name`` and falls back to the display name,
+    which :func:`_canonical_name` then normalises the same way the entity layer
+    does — so a snapshot that recorded only a display name still yields the same
+    identity as the live entity.
+    """
+    if isinstance(view, Mapping):
+        return entity_identity(
+            view.get("source_system"),
+            view.get("canonical_name") or view.get("display_name"),
+        )
+    return entity_identity(
+        getattr(view, "source_system", None),
+        getattr(view, "canonical_name", None) or getattr(view, "display_name", None),
+    )
+
+
+def identity_key_from_evidence(evidence: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """Recompute a stored proposal's identity key from its evidence snapshot.
+
+    This is what lets rows written before T4 be backfilled rather than abandoned:
+    the snapshot already carries both sides' ``source_system`` and
+    ``source_record_id`` (T3 stored them for the reviewer), which is precisely the
+    identity the key is built from. Returns ``None`` when the snapshot cannot
+    supply one, so an unbackfillable row is left alone rather than given a wrong key.
+    """
+    if not isinstance(evidence, Mapping):
+        return None
+    subject, target = evidence.get("subject"), evidence.get("target")
+    if not isinstance(subject, Mapping) or not isinstance(target, Mapping):
+        return None
+    entity_type = _text(subject.get("entity_type")) or _text(target.get("entity_type"))
+    try:
+        return identity_key_for(
+            entity_type, _identity_from_view(subject), _identity_from_view(target)
+        )
+    except ProposalDecisionError:
+        return None
+
+
 # ── data model ──────────────────────────────────────────────────────────────
 
 
@@ -144,6 +263,8 @@ class EntityMatchProposal:
     tier: str
     confidence: float
     status: str
+    #: 2.0-B2 T4 — the pair's stable source identity (see identity_key_for).
+    identity_key: Optional[str] = None
     evidence: Mapping[str, Any] = field(default_factory=dict)
     revision: int = 0
     decided_by: Optional[str] = None
@@ -166,6 +287,7 @@ class EntityMatchProposal:
             "tier": self.tier,
             "confidence": self.confidence,
             "status": self.status,
+            "identity_key": self.identity_key,
             "evidence": dict(self.evidence),
             "revision": self.revision,
             "decided_by": self.decided_by,
@@ -259,6 +381,7 @@ def _row_to_proposal(row: Mapping[str, Any]) -> EntityMatchProposal:
         tier=row["tier"],
         confidence=float(row["confidence"]),
         status=row["status"],
+        identity_key=row.get("identity_key"),
         evidence=_loads(row["evidence_payload"]),
         revision=int(row["revision"] or 0),
         decided_by=row.get("decided_by"),
@@ -358,11 +481,28 @@ def record_proposals(
             left, right = sorted_pair(
                 getattr(subject, "entity_id", ""), getattr(target, "entity_id", "")
             )
+            # T4: the pair's stable source identity, so a decision survives the
+            # entity row ids changing underneath it.
+            try:
+                identity_key = identity_key_for(
+                    entity_type,
+                    _identity_from_view(subject),
+                    _identity_from_view(target),
+                )
+            except ProposalDecisionError as exc:
+                # A pair whose two sides share one source identity is one entity,
+                # not a match — and a pair with no usable identity cannot be
+                # remembered durably. Neither is silently proposed.
+                logger.warning(
+                    "skipping entity match proposal with no usable identity key: %s", exc
+                )
+                continue
             prepared.append({
                 "proposal_id": pid,
                 "entity_type": entity_type,
                 "left": left,
                 "right": right,
+                "identity_key": identity_key,
                 "tier": str(getattr(match, "tier", "") or ""),
                 "confidence": float(getattr(match, "confidence", 0.0) or 0.0),
                 "evidence": json.dumps(build_proposal_evidence(subject, match)),
@@ -371,6 +511,13 @@ def record_proposals(
     if not prepared:
         return RecordOutcome()
 
+    # T4: heal any pre-T4 rows first, so a decision recorded before the identity
+    # key existed still protects its pair from here on.
+    backfill_identity_keys(org)
+    # Every pair this org has already ANSWERED, by stable identity. A pair in here
+    # is never written again, whatever its current entity row ids are.
+    decided = decided_identity_keys(org)
+
     created = 0
     refreshed = 0
     skipped = 0
@@ -378,6 +525,11 @@ def record_proposals(
     try:
         cur = con.cursor()
         for item in prepared:
+            if item["identity_key"] in decided:
+                # The row ids may be new, but the QUESTION is not: a human has
+                # answered this pair. Counted, never re-asked (AC3).
+                skipped += 1
+                continue
             # The WHERE clause is rule 2 in SQL: a decided row is not touched, so
             # a later pass can never revert an answer to "pending" or overwrite
             # the evidence the answer was given against.
@@ -385,16 +537,17 @@ def record_proposals(
                 """
                 INSERT INTO entity_match_proposals (
                     org_id, proposal_id, entity_type, left_entity_id, right_entity_id,
-                    tier, confidence, status, evidence_payload, revision,
+                    tier, confidence, status, identity_key, evidence_payload, revision,
                     decided_by, decided_at, note,
                     first_proposed_at, last_proposed_at, created_at, updated_at
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, 0,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0,
                     NULL, NULL, NULL, %s, %s, %s, %s
                 )
                 ON CONFLICT (org_id, proposal_id) DO UPDATE SET
                     tier             = EXCLUDED.tier,
                     confidence       = EXCLUDED.confidence,
+                    identity_key     = EXCLUDED.identity_key,
                     evidence_payload = EXCLUDED.evidence_payload,
                     last_proposed_at = EXCLUDED.last_proposed_at,
                     updated_at       = EXCLUDED.updated_at
@@ -404,7 +557,8 @@ def record_proposals(
                 (
                     org, item["proposal_id"], item["entity_type"], item["left"],
                     item["right"], item["tier"], item["confidence"], STATUS_PENDING,
-                    item["evidence"], stamp, stamp, stamp, stamp, STATUS_PENDING,
+                    item["identity_key"], item["evidence"],
+                    stamp, stamp, stamp, stamp, STATUS_PENDING,
                 ),
             )
             row = cur.fetchone()
@@ -432,6 +586,81 @@ def record_proposals(
 
 
 # ── reading ─────────────────────────────────────────────────────────────────
+
+
+def decided_identity_keys(org_id: str) -> set:
+    """Every pair this org has ANSWERED, by stable identity (2.0-B2 T4 / AC3).
+
+    The durability read: ``record_proposals`` consults it before writing, so a
+    confirmed or rejected pair is never re-proposed even when its entity ROW ids
+    have changed since the decision. Confirmed and rejected both count — "these
+    are not the same thing" is as durable an answer as "they are".
+    """
+    org = _required(org_id, "org_id")
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT DISTINCT identity_key FROM entity_match_proposals "
+            "WHERE org_id = %s AND identity_key IS NOT NULL AND status <> %s",
+            (org, STATUS_PENDING),
+        )
+        return {row[0] for row in cur.fetchall() if row[0]}
+    finally:
+        con.close()
+
+
+def backfill_identity_keys(org_id: str) -> int:
+    """Give pre-T4 rows their stable identity key, from their own evidence snapshot.
+
+    Rows written before T4 have ``identity_key IS NULL``, so the durability check
+    above cannot see them — a decision recorded then would be unprotected against
+    row churn forever. The snapshot T3 already stored carries both sides' source
+    system and record id, which is exactly what the key is built from, so the fix
+    needs no data migration and no re-run of the engine.
+
+    Idempotent and cheap: it touches only NULL rows, so it is a no-op once healed —
+    which is why ``record_proposals`` can call it every pass. Returns the number of
+    rows healed. A row whose snapshot cannot supply an identity is left NULL rather
+    than given a wrong key.
+    """
+    org = _required(org_id, "org_id")
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT proposal_id, evidence_payload FROM entity_match_proposals "
+            "WHERE org_id = %s AND identity_key IS NULL",
+            (org,),
+        )
+        rows = [(r[0], r[1]) for r in cur.fetchall()]
+        healed = 0
+        for proposal_id, payload in rows:
+            key = identity_key_from_evidence(_loads(payload))
+            if not key:
+                logger.debug(
+                    "entity match proposal %s cannot be backfilled — its evidence "
+                    "snapshot carries no usable source identity", proposal_id,
+                )
+                continue
+            cur.execute(
+                "UPDATE entity_match_proposals SET identity_key = %s "
+                "WHERE org_id = %s AND proposal_id = %s AND identity_key IS NULL",
+                (key, org, proposal_id),
+            )
+            healed += 1
+        if healed:
+            con.commit()
+            logger.info(
+                "2.0-B2 T4: backfilled %d entity match proposal identity key(s) for "
+                "org %s", healed, org,
+            )
+        return healed
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 def list_proposals(
@@ -725,6 +954,11 @@ __all__ = [
     "RecordOutcome",
     "proposal_id_for",
     "sorted_pair",
+    "entity_identity",
+    "identity_key_for",
+    "identity_key_from_evidence",
+    "decided_identity_keys",
+    "backfill_identity_keys",
     "build_proposal_evidence",
     "record_proposals",
     "list_proposals",
