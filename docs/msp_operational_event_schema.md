@@ -183,6 +183,53 @@ never branches on provider (T3-AC3).
 | `map_azure_monitor` | Azure Monitor common-alert-schema alert | `azure_monitor` | azure |
 | `map_azure_activity_log` | Azure Activity Log administrative record | `azure_activity` | azure |
 | `map_service_health` | Azure Service Health event (service issue / maintenance / advisory) | `azure_service_health` | azure |
+| `map_app_insights` | Application Insights operational signal — availability / application-failure / dependency-failure alert, or an application health transition (2.0-D3 T2) | `azure_app_insights` | azure |
+
+#### `map_app_insights` (2.0-D3 T2)
+
+The Application Insights adapter differs from the other Azure mappers in four ways
+worth knowing before you touch it. The classification rules it depends on live in
+`discovery/signals/app_insights_signal.py` and are shared, unchanged, with D3's
+bounded read scope (`discovery/ingest/azure_app_insights.py` re-exports them) so
+the mapper and the read path can never disagree about what an App Insights signal
+is.
+
+* **It accepts two surfaces.** An Azure Monitor alert or an Azure health event; the
+  surface is resolved from the record's own shape (`detect_surface`), so the mapper
+  stays invocable standalone like every other reference mapper.
+* **The resource is the monitored application, never the alert rule.** It is the
+  explicitly-supplied monitored-application reference when Azure gives one
+  (`monitoredApplicationResourceId` / `applicationResourceId` /
+  `monitoredResourceId`), otherwise the Application Insights component itself. Both
+  are explicit references — nothing is inferred from names. `resource_type` comes
+  from the same shared `azure_resource_type_from_id` table every other Azure mapper
+  uses, so a `microsoft.insights/components` id resolves to `monitoring` and an
+  App Service id to `compute`; D3 deliberately adds no per-surface override.
+* **`event_class` maps D3's "alarm/health" wording onto the closed B0 vocabulary.**
+  A health transition is a `state_change`; an **active** availability /
+  application-failure / dependency-failure alert is an `error`; a **resolved**
+  failure alert, or an in-scope alert whose kind cannot be established, is a
+  `state_change`. Active-vs-resolved is read from Azure's own `monitorCondition`,
+  and an absent value reads as active (an alert that does not say it is resolved is
+  the firing). Consequence: a firing and its resolution carry different classes and
+  therefore different signatures — intended, since they are different operational
+  facts, and it is what lets recurrence count firings without resolutions diluting
+  the count.
+* **`event_type` is where the App Insights signal survives.** Because the class
+  collapses to two tokens, `event_type` carries the provider-native
+  `ApplicationInsights/Availability` | `/ApplicationFailure` | `/DependencyFailure`
+  | `/HealthTransition` (or `/Signal` when unclassifiable), so the four signals stay
+  distinguishable downstream. It is the KIND rather than the customer's alert-rule
+  name because two rules both reporting "availability of app X is failing" are one
+  recurring operational fact, and folding them into one signature is what stops
+  MSP-B7 counting the same problem twice. The rule name, condition type and metric
+  are carried as bounded payload.
+
+Everything else follows the standard contract: the signature comes from
+`compute_event_signature` (never computed in the mapper), the payload is curated
+(the complete Azure record lives only in the raw-event store, §6), and golden
+fixtures pin the entire normalised output in
+`discovery/tests/fixtures/app_insights_mapping_golden.json`.
 
 ### Field-by-field mapping
 
