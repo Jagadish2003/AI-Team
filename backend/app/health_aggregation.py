@@ -557,6 +557,10 @@ def _packs_view_multi(
                 # was a deliberate rollback rather than the shipped default.
                 "pinned_version": run_pins.get(pack_id),
                 "rolled_back": pack_id in run_pins,
+                # 2.0-C2 T3 (AT-833 / AC2): the pack's certification level, shown
+                # wherever a pack is attributed. Live, for the same reason
+                # `pack_state` is.
+                **_certification_fields(pack_id),
             }
         )
 
@@ -566,6 +570,45 @@ def _packs_view_multi(
         "excluded_packs": _excluded_packs_for_run(run_id, latest),
         "pinned_pack_versions": run_pins,
     }
+
+
+def _certification_fields(pack_id: str) -> Dict[str, Any]:
+    """The three additive certification fields for a packs-panel row."""
+    badge = _pack_certification(pack_id)
+    if not badge:
+        return {}
+    return {
+        "certification_level": badge["level"],
+        "certification_label": badge["label"],
+        "certification_review_due": bool(badge.get("reviewDue")),
+    }
+
+
+def _pack_certification(pack_id: str) -> Dict[str, Any]:
+    """This pack's CURRENT certification badge (2.0-C2 T3 / AT-833 / AC2).
+
+    Read live, like ``_current_pack_state`` and unlike every immutable execution
+    field on the row: "what level is this pack" is a question about now. A badge that
+    no longer verifies must stop reading as Certified here at the same moment it does
+    on the findings — the run record's ``packCertifications`` snapshot is the audit
+    record of what it was at launch.
+
+    Fail-soft to an empty dict; the caller omits the fields rather than guessing.
+    """
+    try:
+        from discovery.packs.pack_certification import certification_badge
+        from discovery.packs.pack_config import PACK_REGISTRY
+
+        # A pack the registry no longer declares has NO badge to report. Left to
+        # `get_pack()`'s resolve-to-default rule this row would wear the default
+        # pack's badge — attributing service_cloud's certification to a pack that is
+        # gone, on a panel whose whole job is accurate attribution. Same decision as
+        # `pack_state_view`'s orphaned rows (AT-829): state what is still known.
+        if pack_id not in PACK_REGISTRY:
+            return {}
+        return certification_badge(pack_id)
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _current_pack_state(org_id: str, pack_id: str) -> str:
@@ -733,6 +776,8 @@ def packs_view(org_id: str) -> Dict[str, Any]:
                 "pack_state": _current_pack_state(org_id, pack_id),
                 "pinned_version": run_pins.get(pack_id),
                 "rolled_back": pack_id in run_pins,
+                # 2.0-C2 T3 (AT-833 / AC2) — see _pack_certification.
+                **_certification_fields(pack_id),
             }
         ],
         "excluded_packs": _excluded_packs_for_run(run_id, latest),

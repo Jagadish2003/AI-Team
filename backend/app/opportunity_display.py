@@ -32,14 +32,17 @@ LEGACY_OPPORTUNITY_TITLE_OVERRIDES = {
 
 
 def with_display_title(
-    opp: Dict[str, Any], disabled_pack_ids: Optional[Set[str]] = None
+    opp: Dict[str, Any],
+    disabled_pack_ids: Optional[Set[str]] = None,
+    certifications: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Shape one opportunity for display.
 
     ``disabled_pack_ids`` is the caller's pre-resolved set of this org's disabled
-    packs (2.0-C1 T2). Pass it when shaping a LIST so the pack state is read once
-    for the whole list instead of once per finding; omit it for a single
-    opportunity and it is resolved here.
+    packs (2.0-C1 T2) and ``certifications`` the pre-resolved certification badges
+    (2.0-C2 T3). Pass them when shaping a LIST so each is read once for the whole
+    list instead of once per finding; omit them for a single opportunity and they
+    are resolved here.
     """
     display_opp = dict(opp)
     debug = display_opp.get("_debug") or {}
@@ -51,8 +54,12 @@ def with_display_title(
     )
     if display_title:
         display_opp["title"] = display_title
-    return with_pack_state(
-        with_runbook_lifecycle(display_opp), disabled_pack_ids=disabled_pack_ids
+    return with_pack_certification(
+        with_pack_state(
+            with_runbook_lifecycle(display_opp),
+            disabled_pack_ids=disabled_pack_ids,
+        ),
+        certifications=certifications,
     )
 
 
@@ -112,6 +119,73 @@ def with_pack_states(opps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [with_pack_state(opp, disabled_pack_ids=disabled) for opp in opps]
 
 
+def _resolve_pack_certifications() -> Dict[str, Dict[str, Any]]:
+    """Every registered pack's certification badge, verified once.
+
+    Fail-soft on every axis, exactly like :func:`_resolve_disabled_pack_ids`: a
+    finding must stay retrievable and viewable even when certification cannot be
+    resolved, so the LABEL degrades before the finding does. Note the direction of
+    that degradation — no badge at all, never an unverified claim shown as Certified.
+    """
+    try:
+        from discovery.packs.pack_certification import certification_badges
+
+        return certification_badges()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def with_pack_certification(
+    opp: Dict[str, Any],
+    certifications: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Label a finding with the certification level of the pack that produced it.
+
+    2.0-C2 T3 (AT-833 / AC2) — *level is visible ... on findings the pack produced*,
+    so a board paper can say which level of pack produced a claim. Three ADDITIVE
+    fields (the ``with_pack_state`` pattern):
+
+        packCertificationLevel     : "certified" | "partner" | "community"
+        packCertificationLabel     : the display label for that level
+        packCertificationReviewDue : True when the badge is valid but due for review
+
+    The level is the **effective** one — verified live at serve time, like
+    ``packState`` and unlike the immutable ``packVersion``. That is deliberate: a
+    claim whose signature no longer verifies must stop reading as Certified
+    everywhere at once (2.0-C2 AC1), and a badge is a statement about the pack, not
+    a property frozen into a historical finding. The run record's
+    ``packCertifications`` snapshot preserves what was true at run time for audit.
+
+    Nothing else is touched. A finding with no ``packId`` (pre-R16-B1) is returned
+    unchanged rather than guessed at, and an unresolvable badge is simply absent.
+    """
+    pack_id = str(opp.get("packId") or "").strip()
+    if not pack_id:
+        return opp
+    badges = (
+        _resolve_pack_certifications() if certifications is None else certifications
+    )
+    badge = badges.get(pack_id)
+    if not badge:
+        return opp
+    result = {
+        **opp,
+        "packCertificationLevel": badge["level"],
+        "packCertificationLabel": badge["label"],
+    }
+    if badge.get("reviewDue"):
+        result["packCertificationReviewDue"] = True
+    return result
+
+
+def with_pack_certifications(opps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Apply :func:`with_pack_certification` to a list, verifying badges ONCE."""
+    certifications = _resolve_pack_certifications()
+    return [
+        with_pack_certification(opp, certifications=certifications) for opp in opps
+    ]
+
+
 def with_runbook_lifecycle(opp: Dict[str, Any]) -> Dict[str, Any]:
     """Apply one lifecycle label to finding, report, and demo opportunity data.
 
@@ -144,10 +218,17 @@ def with_runbook_lifecycle(opp: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def with_display_titles(opps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    # Pack state is read ONCE for the whole list and threaded down, so a 200-finding
-    # response costs one state read rather than 200.
+    # Pack state and certification badges are each resolved ONCE for the whole list
+    # and threaded down, so a 200-finding response costs one state read and one
+    # signature verification pass rather than 200 of each.
     disabled = _resolve_disabled_pack_ids()
-    return [with_display_title(opp, disabled_pack_ids=disabled) for opp in opps]
+    certifications = _resolve_pack_certifications()
+    return [
+        with_display_title(
+            opp, disabled_pack_ids=disabled, certifications=certifications
+        )
+        for opp in opps
+    ]
 
 
 def with_display_scores(opp: Dict[str, Any]) -> Dict[str, Any]:
@@ -175,23 +256,33 @@ def with_display_scores(opp: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def with_display(
-    opp: Dict[str, Any], disabled_pack_ids: Optional[Set[str]] = None
+    opp: Dict[str, Any],
+    disabled_pack_ids: Optional[Set[str]] = None,
+    certifications: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Full single-opportunity display shaping: title overrides + the stable matrix
-    score offset + the pack-state label. Use at every opportunity return site so
-    list/decision/override responses are coordinate-consistent.
+    score offset + the pack-state label + the pack certification badge. Use at every
+    opportunity return site so list/decision/override responses are consistent.
 
-    For a LIST of opportunities use :func:`with_display_all`, which reads pack state
-    once instead of once per finding."""
+    For a LIST of opportunities use :func:`with_display_all`, which resolves pack
+    state and certification once instead of once per finding."""
     return with_display_scores(
-        with_display_title(opp, disabled_pack_ids=disabled_pack_ids)
+        with_display_title(
+            opp,
+            disabled_pack_ids=disabled_pack_ids,
+            certifications=certifications,
+        )
     )
 
 
 def with_display_all(opps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """:func:`with_display` over a list, reading this org's pack state ONCE."""
+    """:func:`with_display` over a list, resolving pack state and certification ONCE."""
     disabled = _resolve_disabled_pack_ids()
-    return [with_display(opp, disabled_pack_ids=disabled) for opp in opps]
+    certifications = _resolve_pack_certifications()
+    return [
+        with_display(opp, disabled_pack_ids=disabled, certifications=certifications)
+        for opp in opps
+    ]
 
 
 def with_roadmap_display_titles(roadmap: Dict[str, Any]) -> Dict[str, Any]:

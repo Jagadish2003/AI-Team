@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import PackCertificationBadge from '../common/PackCertificationBadge';
 import {
   OpportunityCandidate,
   ReviewAuditEvent,
@@ -135,6 +136,15 @@ export function PackProvenanceRow({ opp }: { opp: OpportunityCandidate }) {
             v{opp.packVersion}
           </span>
         )}
+        {/* 2.0-C2 T3 (AT-833 / AC2): which LEVEL of pack produced this claim. Sits
+            BESIDE the id and version rather than replacing either — provenance and
+            assurance are different questions a reader asks at the same moment. */}
+        <PackCertificationBadge
+          level={opp.packCertificationLevel}
+          label={opp.packCertificationLabel}
+          reviewDue={opp.packCertificationReviewDue}
+          testId="pack-provenance-certification"
+        />
         {isDisabled && (
           <span
             data-testid="pack-provenance-disabled"

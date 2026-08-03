@@ -121,6 +121,12 @@ export interface PackHealthItem {
   pinned_version?: string | null;
   /** True when this run executed a rolled-back (pinned) version. */
   rolled_back?: boolean;
+  // 2.0-C2 T3 (AT-833 / AC2): the pack's certification level, read LIVE like
+  // pack_state (a badge that stops verifying stops being shown everywhere at once)
+  // rather than frozen with the run's immutable execution fields.
+  certification_level?: "certified" | "partner" | "community";
+  certification_label?: string;
+  certification_review_due?: boolean;
 }
 
 /**

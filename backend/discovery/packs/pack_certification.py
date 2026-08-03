@@ -717,6 +717,62 @@ def certify_pack_selection(
     return reports
 
 
+def certification_badge(
+    pack_id: Optional[str] = None, *, platform_version: Optional[str] = None
+) -> Dict[str, Any]:
+    """The COMPACT display shape — 2.0-C2 T3 (AT-833).
+
+    :meth:`PackCertification.to_dict` is the full audit shape (signature key ids,
+    downgrade reasons, scope). That is the right payload for a certification API and
+    the wrong one to staple onto every finding in a 200-item list, so surfacing gets
+    this five-field projection instead.
+
+    ``level`` is always the EFFECTIVE level — the badge a reader may act on. A
+    declared claim that could not be verified is reported as ``community`` here too,
+    with ``declaredLevel`` preserving what the pack asked for, because a surface must
+    never display an unproved Certified claim as Certified (AC1 carried into AC2).
+    """
+    certification = get_pack_certification(
+        pack_id, platform_version=platform_version
+    )
+    return {
+        "packId": certification.pack_id,
+        "level": certification.effective_level,
+        "label": certification.label,
+        "statusLabel": certification.status_label,
+        "declaredLevel": certification.declared_level,
+        "reviewDue": certification.review_due,
+    }
+
+
+def certification_badges(
+    pack_ids: Optional[Iterable[str]] = None,
+    *,
+    platform_version: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """``{pack_id: badge}`` for a set of packs — resolved ONCE per surface.
+
+    Every serve site that labels many rows (a findings list, the run-health packs
+    panel, the pack selection list) calls this once and threads the map down, rather
+    than verifying a signature per row.
+
+    An unknown pack id resolves through ``get_pack()`` like everywhere else, so the
+    map is keyed by the RESOLVED pack id.
+    """
+    badges: Dict[str, Dict[str, Any]] = {}
+    for pack_id in normalize_pack_ids(list(pack_ids or [])) or _all_pack_ids():
+        badge = certification_badge(pack_id, platform_version=platform_version)
+        badges[badge["packId"]] = badge
+    return badges
+
+
+def _all_pack_ids() -> List[str]:
+    """Every registered pack id — the default set when no selection is given."""
+    from .pack_config import PACK_REGISTRY
+
+    return list(PACK_REGISTRY)
+
+
 def certification_summary(
     pack_ids: Optional[Iterable[str]] = None,
     *,
@@ -770,6 +826,8 @@ __all__ = [
     "TRUSTED_KEYS_ENV_VAR",
     "canonical_payload_bytes",
     "certification_payload",
+    "certification_badge",
+    "certification_badges",
     "certification_summary",
     "certify_pack_selection",
     "get_certification_level",

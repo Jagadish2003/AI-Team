@@ -1,6 +1,41 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.17
+Version: v1.18
 Date: 2026-07-31
+
+> v1.18 — 2.0-C2 T3 (Pack Certification Surfacing): the certification LEVEL is now
+> reported wherever a pack is selected, activated, or attributed. Every field is
+> additive and optional; a pre-v1.18 consumer is unaffected, and a response served
+> before the field existed simply omits it.
+>
+> **One rule across every surface:** the reported `level` is the EFFECTIVE,
+> signature-verified level. A pack claiming Certified whose signature does not
+> verify is reported as `community` everywhere at once (2.0-C2 AC1), with
+> `declaredLevel` preserving the claim. Consumers must render `level`, never
+> `declaredLevel`.
+>
+> `PackCertification` = `{ packId, level: "certified" | "partner" | "community",
+> label, statusLabel, declaredLevel, reviewDue (boolean) }`.
+>
+> **Extended responses:**
+> - `GET /api/packs/state` — each `PackStateItem` gains `certification`
+>   (`PackCertification | null`). `null` for an ORPHANED row (a pack the registry no
+>   longer declares) or when the badge could not be resolved — never a guessed level.
+>   *Selection.*
+> - `POST /api/stack-builder/launch` — the run record and the run-scoped
+>   `pack_certifications` KV gain `packCertifications`
+>   (`Record<string, PackCertification>`), the level each activated pack held at
+>   launch. Audit record: display surfaces read the live level. *Activation.*
+> - `GET /api/run-health/packs` — each pack row gains `certification_level`,
+>   `certification_label`, and `certification_review_due`. Read LIVE, like
+>   `pack_state` and unlike the immutable execution fields. *Attribution.*
+> - `GET /api/runs/{runId}/opportunities` — `OpportunityCandidate` gains
+>   `packCertificationLevel`, `packCertificationLabel`, and
+>   `packCertificationReviewDue` (present only when due). Stamped at serve time via
+>   the shared display funnel, so it reaches list, decision, override, roadmap,
+>   executive-report, and blueprint alike. *Findings.*
+> - `GET /api/runs/{runId}/executive-report` — gains `packCertifications`
+>   (`PackCertification[]`), one entry per pack that contributed a finding, in order
+>   of first appearance. Frozen into the artifact at generation time. *Exports.*
 
 > v1.17 — 2.0-C2 T2 (Pack Certification Review Workflow): documents the internal,
 > checklist-driven certification review surface. Entirely NEW routes; no existing

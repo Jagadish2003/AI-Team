@@ -3,10 +3,10 @@
 Read this before adding a pack, changing certification metadata, rotating the signing
 key, or writing any code that reads a pack's certification level.
 
-This document currently covers **T1 (AT-831) — certification metadata** and
-**T2 (AT-832) — the internal review workflow**. Surfacing (AT-833), org policy
-control (AT-834), and date-based expiry (AT-835) are separate tasks that build on
-what is described here; sections will be added as they land.
+This document currently covers **T1 (AT-831) — certification metadata**,
+**T2 (AT-832) — the internal review workflow**, and **T3 (AT-833) — surfacing**.
+Org policy control (AT-834) and date-based expiry (AT-835) are separate tasks that
+build on what is described here; sections will be added as they land.
 
 ---
 
@@ -330,3 +330,105 @@ existing response shape changes.
   400/409/404 boundaries, newest-first append-only ordering, the audit-log entry, and
   the load-bearing negative — recording an approval does **not** change the effective
   level.
+
+---
+
+# 11. Surfacing (T3 / AT-833)
+
+## 11.1 The one rule
+
+2.0-C2 AC2 asks for the level *at selection, at activation, on findings, and in
+exports*. Four surfaces, one rule:
+
+> **Every surface displays the EFFECTIVE, signature-verified level.**
+
+A pack claiming Certified whose signature does not verify reads as **Community** at
+selection, at activation, on its findings, and in an export — all at once. That is
+§2/§5 carried through to the UI, and it is what makes the badge worth anything: if
+one surface rendered the *declared* level, a pack author would only need to find
+that surface.
+
+So the backend never ships a bare claim to a renderer. `certification_badge()` is a
+five-field projection — `level` (effective), `label`, `statusLabel`, `declaredLevel`,
+`reviewDue` — and every consumer renders `level`. `declaredLevel` is carried for
+diagnosis ("claims Certified, could not be verified"), never for display. The React
+component takes `level` and has no code path that could render `declaredLevel`; a
+test pins that an unrecognised level renders **nothing** rather than falling back to
+something reassuring.
+
+## 11.2 The four surfaces
+
+| Surface | Where | Shape |
+|---|---|---|
+| **Selection** | `GET /api/packs/state`; Discovery Plan pack picker | `certification` on each `PackStateItem` |
+| **Activation** | run record + `pack_certifications` KV at launch; run-health packs panel | `packCertifications` (snapshot); `certification_level`/`_label`/`_review_due` (live) |
+| **Findings** | every opportunity serve site | `packCertificationLevel` / `packCertificationLabel` / `packCertificationReviewDue` |
+| **Exports** | executive report artifact + the PDF | `packCertifications[]` |
+
+Findings are stamped in `opportunity_display`'s shared display funnel — the same
+funnel `packState` uses — so one wiring covers list, decision, override, roadmap,
+executive report, and blueprint. Badges are resolved **once per list** and threaded
+down: a 200-finding response costs one verification pass, not 200. A test pins the
+call count, because that is the kind of regression that is invisible until a large
+run is slow.
+
+## 11.3 Live level, snapshotted record
+
+The two are deliberately different, and the split is the interesting decision:
+
+* **Displayed everywhere: the LIVE level.** A badge is a statement about the pack,
+  not a property frozen into a historical finding. If a signature stops verifying —
+  metadata edited, key rotated out, trust anchor removed — the pack must stop reading
+  as Certified *everywhere at the same moment*. Freezing the level onto findings
+  would leave revoked badges scattered across historical output with no way to
+  correct them.
+* **Recorded at launch: `packCertifications`.** The run record and KV keep what each
+  pack held when the run was launched, so an audit of an old run can say what was
+  true then. It is an audit record, not a display source.
+
+The executive report sits between the two by design: the level is resolved when the
+report is **generated** and frozen into the artifact. That is the honest reading for
+an export — a board paper states what was verifiable when it was produced, and a
+document already printed cannot be retroactively corrected anyway.
+
+## 11.4 Additive, and orthogonal to lifecycle
+
+Certification is a third fact alongside 2.0-C1's state and version, not a
+replacement for either. A pack can be disabled *and* certified — it was certified
+when it produced the findings you are reading — so the finding row shows the pack id,
+the version, the disabled label, and the certification badge together, and the
+run-health panel gets a third pill rather than a merged one. The 2.0-C1 T5
+`packLifecycleLabel()` helper is untouched, and a test pins that adding assurance did
+not change state or version wording.
+
+Every field is additive and optional. A pre-2.0-C2 response omits them; a finding
+with no `packId` (pre-R16-B1) is returned unchanged rather than guessed at; and an
+unresolvable badge is **absent**, never defaulted to Community — the backend decides
+what Community means, and inventing it in a renderer would be a claim we cannot
+support.
+
+## 11.5 Fail-soft, in the safe direction
+
+Every resolution path degrades to *no badge*: the pack picker still lists packs, the
+findings still serve, the report still generates. Note the direction — the failure
+mode is a missing badge, never an unverified claim rendered as Certified. The
+activation snapshot is fail-soft for the same reason: a launch must not fail because
+a label could not be resolved.
+
+## 11.6 Contract
+
+`contracts/API_CONTRACT.md` **v1.17 → v1.18**, per the repo rule that a
+`frontend/src/types/*.ts` change requires a bump. Everything is additive:
+`analystReview.ts`, `runHealth.ts`, `executiveReport.ts`, and the new shared
+`packCertification.ts`.
+
+## 11.7 Tests
+
+* [`backend/tests/unit/test_pack_certification_surfacing.py`](../backend/tests/unit/test_pack_certification_surfacing.py)
+  (27 tests) — each of the four surfaces, each tested twice: once with a genuine
+  badge and once against a seeded **unsigned Certified claim** that must read as
+  Community. Plus the additive/fail-soft properties and the resolve-once call count.
+* [`frontend/src/__tests__/PackCertificationSurfacing.test.tsx`](../frontend/src/__tests__/PackCertificationSurfacing.test.tsx)
+  (13 tests) — the shared badge component (including that an unknown level renders
+  nothing), the finding provenance row, the disabled-AND-certified case, the
+  run-health lifecycle regression, and the selection mapping.

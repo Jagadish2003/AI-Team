@@ -1,4 +1,8 @@
 import React from 'react';
+import { useEffect, useState } from 'react';
+import PackCertificationBadge from '../components/common/PackCertificationBadge';
+import { certificationsByPackId, fetchPackStates } from '../api/packStateApi';
+import type { PackCertification } from '../types/packCertification';
 import {
   ArrowLeft,
   Clock3,
@@ -272,6 +276,27 @@ export default function DiscoveryPlanPage({
 }: Props) {
   const { state, confidence } = setupState;
 
+  // 2.0-C2 T3 (AT-833 / AC2): certification levels for the packs this run may
+  // activate, so the level is visible AT SELECTION rather than only after a run.
+  // Fail-soft: a failed read leaves the badges absent — a pack picker must still
+  // work, and an unresolved badge is never rendered as a level.
+  const [packCertifications, setPackCertifications] = useState<
+    Record<string, PackCertification>
+  >({});
+  useEffect(() => {
+    let cancelled = false;
+    fetchPackStates()
+      .then(response => {
+        if (!cancelled) setPackCertifications(certificationsByPackId(response));
+      })
+      .catch(() => {
+        if (!cancelled) setPackCertifications({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const qualityRows = calcQualityRows(
     state.selectedSystemIds,
     state.weightings,
@@ -364,10 +389,23 @@ export default function DiscoveryPlanPage({
               value={templateLabel}
             />
             {salesforcePacks.length > 0 && (
-              <SummaryRow
-                label="Salesforce packs"
-                value={salesforcePackLabel}
-              />
+              <>
+                <SummaryRow
+                  label="Salesforce packs"
+                  value={salesforcePackLabel}
+                />
+                <div data-testid="salesforce-pack-certifications" className="flex flex-wrap justify-end gap-1.5 pb-2">
+                  {salesforcePacks.map(packId => (
+                    <PackCertificationBadge
+                      key={packId}
+                      level={packCertifications[packId]?.level}
+                      label={packCertifications[packId]?.label}
+                      reviewDue={packCertifications[packId]?.reviewDue}
+                      testId={`selection-pack-certification-${packId}`}
+                    />
+                  ))}
+                </div>
+              </>
             )}
             {/* Analysis pack — chosen per run (non-Salesforce). SINGLE-select
                 dropdown, defaulting to None. */}
@@ -391,9 +429,17 @@ export default function DiscoveryPlanPage({
                 </select>
               </div>
               {selectedAnalysisPack && (
-                <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
-                  {selectedAnalysisPack.description}
-                </p>
+                <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[11px] leading-relaxed text-muted">
+                    {selectedAnalysisPack.description}
+                  </p>
+                  <PackCertificationBadge
+                    level={packCertifications[selectedAnalysisPack.id]?.level}
+                    label={packCertifications[selectedAnalysisPack.id]?.label}
+                    reviewDue={packCertifications[selectedAnalysisPack.id]?.reviewDue}
+                    testId={`selection-pack-certification-${selectedAnalysisPack.id}`}
+                  />
+                </div>
               )}
             </div>
             <SummaryRow

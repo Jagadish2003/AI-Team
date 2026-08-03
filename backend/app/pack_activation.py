@@ -108,6 +108,34 @@ def compatibility_snapshot(
     return {report.pack_id: report.to_dict() for report in reports}
 
 
+def certification_snapshot(
+    pack_ids: Iterable[str],
+) -> Dict[str, Dict[str, Any]]:
+    """The run-scoped certification snapshot, keyed by pack id (2.0-C2 T3 / AT-833).
+
+    Captured at ACTIVATION for the same reason as the compatibility snapshot: it
+    records the level each pack held when the run was launched, so an audit of an old
+    run can say what was true then rather than what is true now.
+
+    It is deliberately NOT what the display surfaces read. A badge that no longer
+    verifies must stop reading as Certified everywhere at once (2.0-C2 AC1), so
+    findings, the packs panel, and the selection list all show the LIVE verified
+    level; this snapshot is the audit record beside them.
+
+    Fail-soft: certification is a label, and failing to resolve one must never fail
+    a launch.
+    """
+    try:
+        from discovery.packs.pack_certification import certification_badges
+
+        return certification_badges(list(pack_ids))
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Could not snapshot pack certification at activation", exc_info=True
+        )
+        return {}
+
+
 # ── 2.0-C1 T2 (AT-827) — disabled packs are excluded from future runs ─────────
 
 
