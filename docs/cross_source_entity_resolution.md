@@ -437,9 +437,100 @@ CI catches, logged with the consequence named.
 Blocking removes the **elevation**, not the evidence: COR-01/COR-02 stay on the
 result and the card still explains what each system found.
 
+## Unmerge and re-evaluation (T5 / AC4)
+
+Any resolution is reversible. Restoring costs almost nothing, because the merge
+never deleted anything: reversing one removes the survivor's claim on the
+constituent and the constituent's `merged_into` pointer, and the row is immediately
+an independent entity again with its identity, edges and status untouched. What the
+row gains is `unmerged_from` — history, not state, since resolution follows
+`merged_into` and nothing else.
+
+Three things about it are worth reading before changing any of it.
+
+### A reversal the next run undoes is not a reversal
+
+The merge appliers are idempotent and re-run continuously. After an unmerge the
+ServiceNow record still carries its cross-reference, and a confirmed proposal is
+still confirmed — T4 made that answer durable on purpose. So a reversal that only
+removes the marks lasts until the next pass, and the operator watches the merge
+reappear with no explanation.
+
+Every unmerge therefore records a **block**, and `apply_merge` consults it and
+returns the new outcome `blocked` with a named reason. `blocked` is deliberately
+distinct from `skipped`: skipped means "this applier had no authority here", blocked
+means "a person reversed this and the reversal stands". The check sits inside
+`apply_merge` rather than in its callers, so every path into a merge is covered by
+construction, and it applies to **every** rule — exempting the auto-merge tiers
+would defeat the reversal on the very next run, since the cross-reference that
+caused the merge is exactly what has not changed.
+
+The block is recorded under **two** keys, because the two ways to name a pair fail
+in opposite directions:
+
+| Key | Covers | Fails when |
+|---|---|---|
+| `rows:` the two entity row ids | the case where two genuinely different entities share a name | the entity rows churn (T4's lesson: a source that starts supplying record ids inserts new rows) |
+| `ident:` each side's `source_system` + canonical name | that churn | a side is renamed |
+
+Either one matching blocks the merge. The residual gap is stated rather than hidden:
+if the row ids *and* a name change together, the pair is no longer recognisable as
+the one that was unmerged — it is a new pair by every identity the platform has.
+
+Releasing a block is separate, deliberate, and **Owner-only**, because it re-permits
+automatic merging of a pair somebody corrected — one person undoing another's
+correction. Nothing is deleted: the row keeps its unmerge record and gains who
+released it and why.
+
+### A chain comes apart at one joint
+
+`A → B → C` is stored *flat* on C's constituent list, but the tree survives in the
+pointers, because only the entity being absorbed ever has its pointer written. So
+detaching B from C hands back B **with A still merged into it** — that sub-merge is
+not the one being reversed — and C loses exactly B and B's subtree. `detached_subtree`
+derives this from the pointers, iterating to a fixed point so a child listed before
+its parent is still found.
+
+Such a chain is not hypothetical: it arises whenever two entities that are *both*
+already survivors are merged and the tie-break (stable record id, then earliest
+`created_at`) picks one, which is why the contract test builds it through
+`apply_merge` alone rather than writing the state by hand.
+
+### "Flags dependent findings" made checkable
+
+A finding depends on the merge if it referenced the survivor (whose meaning just
+narrowed — it no longer speaks for the detached source) or the detached entity (a
+separate thing again). Findings are matched through their own entity references, read
+in the shapes the enrichment layer already understands.
+
+A finding carrying **no** entity references cannot be shown to depend on the merge.
+It is therefore not flagged, and it is **counted** (`unlinkedFindings`): flagging
+everything would be as useless as flagging nothing, and quietly flagging nothing is
+worse than both. The sweep is bounded to the org's recent runs, because entity
+references live in run-scoped storage, and the bound reports what it left unread.
+
+Flags live in `finding_reevaluation_flags`, keyed on `(org_id, opportunity_identity)`
+— the same reasoning as 2.0-A2's lifecycle store: the need for re-evaluation is a
+property of the *problem*, not of the run that observed it, and "on the next run" is
+a cross-run question. (`opportunity_identity` derives from detector and signal
+source, not from entity row ids, so an unmerge never moves the key its own flags are
+filed under.)
+
+**"Re-evaluated" is a fact, not a status word.** A flag is cleared in
+`materialize_t2` by the run that re-observed and re-scored the finding, and that
+run's id is written onto the flag. A finding that stops appearing keeps its flag
+rather than being quietly considered handled, and clearing only touches `pending`
+rows so a later run never rewrites which run did the work. Re-flagging moves the
+trigger but **not** `flagged_at` — a finding that has waited through several runs
+must not look freshly raised.
+
+Schema: `entity_unmerges` + `finding_reevaluation_flags` (DDL in
+`database/models/entity_unmerges.py`, migration `0034`, mirrored in `provision.sql`).
+Both `entity_unmerged` and `entity_merge_block_released` are audit events.
+
 ## What is still to come
 
-**Unmerge** (restore constituents, flag dependent findings for re-evaluation) is
-the remaining 2.0-B2 task. `merged_constituents()` and the `merged_into` pointer
-are what it will read. An Owner-facing editor for the alias table is also still
-open — `put_alias_mappings` is the validated seam it will write through.
+An Owner-facing editor for the alias table — `put_alias_mappings` is the validated
+seam it will write through. The re-evaluation flags are stored and served
+(`GET /api/findings/reevaluation-flags`) but have no dedicated UI surface yet; the
+Entity Matches page is where one would naturally live.

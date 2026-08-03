@@ -94,6 +94,19 @@ ENTITY_MATCH_PROPOSAL_DECIDED = "entity_match_proposal_decided"
 # constituent/source-system counts.
 ENTITY_MERGED = "entity_merged"
 
+# 2.0-B2 T5 (AC4): a merge was REVERSED. Audit-relevant for the mirror of the
+# reason above — an unmerge changes what every finding built on that entity is
+# about — and because it is the act that narrows a customer's graph back down.
+# The event carries the pair, the rule whose merge was undone, how many entities
+# were handed back, and how many findings were flagged for re-evaluation.
+ENTITY_UNMERGED = "entity_unmerged"
+
+# 2.0-B2 T5: someone RE-PERMITTED automatic merging of a pair that had been
+# unmerged. Separate from the unmerge itself because it is the more consequential
+# half: it is one person undoing another's correction, after which the ordinary
+# merge appliers may join the pair again on any later run.
+ENTITY_MERGE_BLOCK_RELEASED = "entity_merge_block_released"
+
 # ---------------------------------------------------------------------------
 # Registry — every accepted event type listed here.
 # log_event() accepts any string; this registry is for documentation and
@@ -118,6 +131,8 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     OPPORTUNITY_LIFECYCLE_TRANSITIONED,
     ENTITY_MATCH_PROPOSAL_DECIDED,
     ENTITY_MERGED,
+    ENTITY_UNMERGED,
+    ENTITY_MERGE_BLOCK_RELEASED,
 })
 
 # ---------------------------------------------------------------------------

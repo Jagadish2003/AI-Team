@@ -527,9 +527,10 @@ def test_an_audit_failure_never_fails_the_merge(monkeypatch):
 
 
 def test_the_applier_never_deletes_an_entity_or_an_edge():
-    """Deleting a constituent would destroy the very evidence AC2 requires and
-    make T4's unmerge impossible. A grep-level guard, because the damage is
-    silent."""
+    """Deleting a constituent would destroy the very evidence AC2 requires and make
+    the AC4 unmerge impossible — T5 relies on exactly this: reversing a merge is
+    removing two metadata marks, because the row itself never went anywhere. A
+    grep-level guard, because the damage is silent."""
     import inspect
 
     source = inspect.getsource(em)
