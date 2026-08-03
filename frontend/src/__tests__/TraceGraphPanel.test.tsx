@@ -12,6 +12,9 @@
  */
 import React from 'react';
 import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DataCacheProvider } from '../lib/dataCache';
 import type { TraceGraphResponse, TraceHop } from '../types/traceGraph';
@@ -251,5 +254,87 @@ describe('TraceGraphPanel', () => {
     );
     renderPanel();
     await waitFor(() => expect(screen.getByText(/This chain is large/)).toBeInTheDocument());
+  });
+
+  // 2.0-B1 AC1: a chain that stops above the source records is SHOWN — it is the
+  // one a reviewer most needs to interrogate — but it has to say so, or a short
+  // chain is indistinguishable from a complete one.
+  it('still renders an incomplete chain, and says why it stops', async () => {
+    fetchTraceGraphMock.mockResolvedValue(
+      makeTraceGraph({
+        hops: [
+          hop({ hop_id: 'finding:opp_1', hop_type: 'finding', label: 'Automate repetitive flows' }),
+          hop({
+            hop_id: 'evidence:ev_1',
+            hop_type: 'evidence',
+            label: 'Multiple low-complexity flows on a high-volume object',
+            from_hop_id: 'finding:opp_1',
+          }),
+        ],
+        complete: false,
+        incompleteReason: 'no_source_record',
+        available: true,
+      })
+    );
+    renderPanel();
+
+    // The chain is not hidden behind the empty state.
+    await waitFor(() =>
+      expect(screen.getByText('Automate repetitive flows')).toBeInTheDocument()
+    );
+    expect(screen.queryByTestId('trace-graph-empty')).not.toBeInTheDocument();
+    // And the shortfall is stated rather than left to be inferred from hop count.
+    expect(screen.getByTestId('trace-graph-incomplete')).toHaveTextContent(
+      /stops at the evidence layer/
+    );
+  });
+
+  it('shows no incompleteness note once the chain reaches a source record', async () => {
+    fetchTraceGraphMock.mockResolvedValue(
+      makeTraceGraph({
+        hops: [
+          hop({ hop_id: 'finding:opp_1', hop_type: 'finding', label: 'f' }),
+          hop({ hop_id: 'source_record:sf:rec:0', hop_type: 'source_record', label: 'rec',
+                from_hop_id: 'finding:opp_1' }),
+        ],
+        complete: true,
+        incompleteReason: null,
+      })
+    );
+    renderPanel();
+    await waitFor(() => expect(screen.getByText('rec')).toBeInTheDocument());
+    expect(screen.queryByTestId('trace-graph-incomplete')).not.toBeInTheDocument();
+  });
+  // 2.0-B1 story item 3 (Interrogation UI) — the WIRING, not the panel.
+  //
+  // Kept in this file deliberately rather than a new one: the panel tests above
+  // could not catch what actually shipped — OpportunityDetail rendered
+  // <TraceGraphPanel /> while never importing it, so React received `undefined`
+  // as an element type and every test that rendered the Opportunity Review detail
+  // crashed (40 of them). Testing the panel in isolation says nothing about
+  // whether the page meant to host it can mount.
+  describe('OpportunityDetail wiring', () => {
+    const detailSource = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)),
+              '../components/analyst_review/OpportunityDetail.tsx'),
+      'utf8'
+    );
+
+    it('imports the source-trace panel it renders', () => {
+      // Both halves: rendering without importing is the defect, and importing
+      // without rendering would silently drop the interrogation surface.
+      expect(detailSource).toMatch(/<TraceGraphPanel\s/);
+      expect(detailSource).toMatch(
+        /import\s+TraceGraphPanel\s+from\s+["']\.\/TraceGraphPanel["']/
+      );
+    });
+
+    it('passes the run and opportunity the panel needs to fetch a trace', () => {
+      // A panel mounted without both ids renders nothing, which looks identical to
+      // "this finding has no trace".
+      const usage = detailSource.match(/<TraceGraphPanel[^/>]*/)?.[0] ?? '';
+      expect(usage).toMatch(/runId=/);
+      expect(usage).toMatch(/oppId=/);
+    });
   });
 });

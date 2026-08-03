@@ -58,7 +58,11 @@ export interface TraceGraphResponse {
   oppId: string;
   hops: TraceHop[];
   joins: JoinTrace[];
+  // True only when the chain terminates in source records (2.0-B1 AC1).
   complete: boolean;
+  // Why it stops short, when it does: 'no_source_record' (evidence attached but
+  // nothing resolves to an originating record) or 'no_chain'. Null when complete.
+  incompleteReason?: string | null;
   truncated: boolean;
   retrieval_candidates: RetrievalCandidate[];
   retrieval_candidates_used_count: number;

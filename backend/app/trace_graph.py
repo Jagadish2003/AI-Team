@@ -54,6 +54,18 @@ HOP_SOURCE_RECORD = "source_record"
 
 ORIGIN_OBSERVED = "observed"
 ORIGIN_INFERRED = "inferred"
+
+# Why a chain stops short of AC1's "terminating in source records". Enumerated
+# rather than free text so a surface can branch on it, and so the difference
+# between "this finding has nothing" and "this finding's provenance was never
+# recorded" is not lost in prose — they need different remedies.
+#: No hops at all: the opportunity carries no evidence and no source trace.
+REASON_NO_TRACE = "no_chain"
+#: Evidence is attached, but nothing resolves to an originating record — no
+#: evidence pointers were stored for the run and the finding contract carries no
+#: source_trace artifacts. The usual cause is a run materialized before pointer
+#: storage was in place; re-running the discovery pipeline populates it.
+REASON_NO_SOURCE_RECORD = "no_source_record"
 _VALID_ORIGINS = (ORIGIN_OBSERVED, ORIGIN_INFERRED)
 
 # A generous ceiling on hops per trace — matches graph_query.py's node-cap
@@ -213,6 +225,24 @@ class FindingTrace:
     complete: bool
     truncated: bool = False
     retrieval_candidates: List[RetrievalCandidateTrace] = field(default_factory=list)
+    #: Why the chain stops short of a source record, when it does. Present
+    #: precisely when ``complete`` is False, so a reviewer looking at a short
+    #: chain is told whether provenance is MISSING or the finding is simply thin
+    #: — rather than being left to guess from the hop count.
+    incomplete_reason: Optional[str] = None
+
+    @property
+    def has_chain(self) -> bool:
+        """True when there is something to interrogate below the finding itself.
+
+        Deliberately NOT the same question as :attr:`complete`. This one answers
+        "is there a panel to render?"; ``complete`` answers AC1's much stricter
+        "does the chain terminate in source records?". Conflating them hides a
+        real chain whenever its provenance is incomplete — which is exactly the
+        wrong direction, since an incomplete chain is the one a reviewer most
+        needs to see.
+        """
+        return len(self.hops) > 1
 
     def to_dict(self) -> Dict[str, Any]:
         used = sum(1 for c in self.retrieval_candidates if c.used)
@@ -224,6 +254,8 @@ class FindingTrace:
             "hop_count": len(self.hops),
             "join_count": len(self.joins),
             "complete": self.complete,
+            "incomplete_reason": self.incomplete_reason,
+            "has_chain": self.has_chain,
             "truncated": self.truncated,
             "retrieval_candidates": [c.to_dict() for c in self.retrieval_candidates],
             "retrieval_candidates_used_count": used,
@@ -243,6 +275,7 @@ def _empty_trace(opportunity: Any, run_id: Any) -> FindingTrace:
         complete=False,
         truncated=False,
         retrieval_candidates=[],
+        incomplete_reason=REASON_NO_TRACE,
     )
 
 
@@ -598,14 +631,28 @@ def _build_finding_trace(
     if truncated:
         hops = hops[:_MAX_HOPS]
 
+    # AC1 is "a complete chain TERMINATING IN SOURCE RECORDS", so that is what
+    # `complete` measures. It used to be `len(hops) > 1`, which reported a
+    # finding->evidence chain as complete even though it never reached an
+    # originating record — the reviewer then had no way to tell a missing
+    # provenance tier from a genuinely thin finding. Whatever falls short says so.
+    reached_source_record = any(h.hop_type == HOP_SOURCE_RECORD for h in hops)
+    if reached_source_record:
+        incomplete_reason = None
+    elif len(hops) > 1:
+        incomplete_reason = REASON_NO_SOURCE_RECORD
+    else:
+        incomplete_reason = REASON_NO_TRACE
+
     return FindingTrace(
         opportunity_id=opp_id,
         run_id=run_id,
         hops=hops,
         joins=joins,
-        complete=len(hops) > 1,
+        complete=reached_source_record,
         truncated=truncated,
         retrieval_candidates=_retrieval_candidate_traces(retrieval_candidates),
+        incomplete_reason=incomplete_reason,
     )
 
 

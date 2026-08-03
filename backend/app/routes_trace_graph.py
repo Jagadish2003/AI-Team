@@ -82,11 +82,18 @@ class TraceGraphResponse(BaseModel):
     oppId: str
     hops: List[TraceHopSummary] = Field(default_factory=list)
     joins: List[JoinTraceSummary] = Field(default_factory=list)
+    # True only when the chain TERMINATES IN SOURCE RECORDS (AC1's wording).
     complete: bool = False
+    # Why it does not, when it does not: 'no_source_record' (evidence is attached
+    # but nothing resolves to an originating record) or 'no_chain' (nothing below
+    # the finding at all). Null when complete.
+    incompleteReason: Optional[str] = None
     truncated: bool = False
     retrieval_candidates: List[RetrievalCandidateSummary] = Field(default_factory=list)
     retrieval_candidates_used_count: int = 0
     retrieval_candidates_unused_count: int = 0
+    # "Is there a chain to render?" — deliberately NOT `complete`. An incomplete
+    # chain is the one a reviewer most needs to see, so it must not be hidden.
     available: bool = False
 
 
@@ -194,11 +201,12 @@ def register_trace_graph_routes(app) -> None:
             hops=[TraceHopSummary(**hop.to_dict()) for hop in trace.hops],
             joins=[JoinTraceSummary(**join.to_dict()) for join in trace.joins],
             complete=trace.complete,
+            incompleteReason=trace.incomplete_reason,
             truncated=trace.truncated,
             retrieval_candidates=[
                 RetrievalCandidateSummary(**c.to_dict()) for c in trace.retrieval_candidates
             ],
             retrieval_candidates_used_count=used_count,
             retrieval_candidates_unused_count=len(trace.retrieval_candidates) - used_count,
-            available=trace.complete,
+            available=trace.has_chain,
         )

@@ -214,7 +214,61 @@ def test_ac1_a_thin_finding_degrades_instead_of_pretending_to_be_complete():
     trace says so (``complete=False``) rather than fabricating hops."""
     trace = tg.build_finding_trace({"id": "opp_thin"}, RUN_ID)
     assert trace.complete is False
+    assert trace.incomplete_reason == tg.REASON_NO_TRACE
+    assert trace.has_chain is False
     assert [h.hop_type for h in trace.hops] == [tg.HOP_FINDING]
+
+
+def test_ac1_a_chain_that_stops_at_evidence_is_not_reported_complete():
+    """The case this AC turns on, and the one the original check missed.
+
+    AC1 is "a complete chain TERMINATING IN SOURCE RECORDS". A finding whose
+    evidence resolves to no originating record — no stored evidence pointers and
+    no source_trace artifacts, which is what a run materialized before pointer
+    storage produces — is a two-hop chain. ``complete`` used to be
+    ``len(hops) > 1``, so that reported as complete and a reviewer had no way to
+    tell missing provenance from a genuinely thin finding.
+    """
+    opp = {"id": "opp_2hop", "evidenceIds": ["ev_1"]}
+    evidence = [{
+        "id": "ev_1", "title": "Multiple low-complexity flows on a high-volume object",
+        "source": "salesforce", "tsLabel": "29 Jul 2026, 15:44",
+        "provenanceType": "observed",
+    }]
+    trace = tg.build_finding_trace(opp, RUN_ID, evidence_items=evidence, pointers=[])
+
+    assert [h.hop_type for h in trace.hops] == [tg.HOP_FINDING, tg.HOP_EVIDENCE]
+    assert trace.complete is False, "a chain that never reaches a source record is not complete"
+    assert trace.incomplete_reason == tg.REASON_NO_SOURCE_RECORD
+
+
+def test_ac1_an_incomplete_chain_is_still_shown_not_hidden():
+    """``has_chain`` and ``complete`` answer different questions, and conflating
+    them hides the chain a reviewer most needs to interrogate.
+
+    The route serves ``available`` from ``has_chain``, so a two-hop chain still
+    renders — with its incompleteness stated — rather than collapsing to
+    "No source trace available yet".
+    """
+    opp = {"id": "opp_2hop", "evidenceIds": ["ev_1"]}
+    evidence = [{"id": "ev_1", "title": "x", "source": "salesforce",
+                 "tsLabel": "29 Jul 2026, 15:44"}]
+    trace = tg.build_finding_trace(opp, RUN_ID, evidence_items=evidence, pointers=[])
+
+    assert trace.has_chain is True
+    assert trace.complete is False
+    payload = trace.to_dict()
+    assert payload["has_chain"] is True
+    assert payload["incomplete_reason"] == tg.REASON_NO_SOURCE_RECORD
+
+
+def test_ac1_a_chain_reaching_a_source_record_is_complete_with_no_reason():
+    """The positive case: once provenance is recorded the chain terminates in a
+    source record, and nothing is flagged."""
+    trace = _build_trace()
+    assert trace.complete is True
+    assert trace.incomplete_reason is None
+    assert trace.to_dict()["incomplete_reason"] is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

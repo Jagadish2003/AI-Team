@@ -13,6 +13,7 @@ import {
 } from "../../api/enrichmentApi";
 import { useRunContext } from "../../context/RunContext";
 import BaselineContextPanel from "./BaselineContextPanel";
+import TraceGraphPanel from "./TraceGraphPanel";
 import ProjectionAssumptionLedger from "../projection/ProjectionAssumptionLedger";
 import ProjectionBandPanel from "../projection/ProjectionBand";
 import ProjectionBasisPanel from "../projection/ProjectionBasis";

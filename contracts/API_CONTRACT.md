@@ -1,6 +1,38 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.17
-Date: 2026-07-31
+Version: v1.18
+Date: 2026-08-04
+
+> v1.18 - 2.0-B1 (Full Evidence Trace & Export): added three authenticated
+> endpoints that make a finding interrogable and exportable.
+> `GET /api/runs/{runId}/opportunities/{oppId}/trace-graph` (**viewer+**) returns the
+> provenance chain: `hops[]` from finding -> evidence -> source record, each hop
+> carrying `hop_type`, `label`, `origin` (`observed` | `inferred`), `connector`,
+> `run_id`, `timestamp`, `from_hop_id` and a free-form `detail`; `joins[]` carrying
+> the join type and the correlation window used; and `retrieval_candidates[]` with
+> `retrieval_candidates_used_count` / `_unused_count`, so a caller sees what assembly
+> did AND did not use. **`complete` is true only when the chain terminates in a
+> source record** (AC1's wording). A chain that stops at the evidence layer reports
+> `complete: false` with `incompleteReason` of `no_source_record` (evidence attached
+> but nothing resolves to an originating record - typically a run materialized before
+> evidence-pointer storage) or `no_chain` (nothing below the finding at all).
+> `available` answers a DIFFERENT question - "is there a chain to render?" - and is
+> true for an incomplete chain, which is shown rather than hidden because it is the
+> one a reviewer most needs to interrogate. `truncated` is true when the hop cap
+> applied.
+> `GET /api/runs/{runId}/opportunities/{oppId}/evidence-export` and
+> `GET /api/runs/{runId}/evidence-export` (both **analyst+**) return the signed bundle
+> for one finding or for the whole report; `?download=1` serves it as an attachment.
+> A bundle carries the trace, the evidence records referenced, run and pack versions,
+> and an HMAC signature over a canonical content root - altering any byte fails
+> verification, and `backend/scripts/verify_evidence_export.py` verifies one offline
+> with no platform access. Exports carry redacted content exactly as indexed and hold
+> the 1.9 security aggregation floor. Every export generation writes an audit event
+> (`evidence_export_generated`, and `usage_report_exported` for the signed usage
+> report) naming the acting user, the export scope and an ISO-8601 UTC timestamp;
+> refused (400) and denied (403) requests export nothing and record nothing.
+> Org-scoped throughout: a run in another org returns a not-available response rather
+> than another org's chain. New frontend type `src/types/traceGraph.ts`. Additive - no
+> previously documented shape changed.
 
 > v1.17 - 2.0-A2 T7 (No outcome without action): outcome measurement writes
 > now require a current customer-recorded action on the opportunity lifecycle.

@@ -306,6 +306,19 @@ export default function TraceGraphPanel({
                 This chain is large — showing the first {data.hops.length} hops.
               </div>
             )}
+            {!data.complete && (
+              // A chain that stops above the source records is shown, not hidden —
+              // it is the one a reviewer most needs to see. But it must say so,
+              // otherwise a short chain is indistinguishable from a complete one.
+              <div
+                className="mt-2 text-[11px] leading-relaxed text-muted"
+                data-testid="trace-graph-incomplete"
+              >
+                {data.incompleteReason === 'no_source_record'
+                  ? 'This chain stops at the evidence layer — no originating source records were recorded for this run. Re-running discovery populates them.'
+                  : 'This chain does not yet reach its source records.'}
+              </div>
+            )}
             <RetrievalCandidatesSection
               candidates={data.retrieval_candidates}
               usedCount={data.retrieval_candidates_used_count}
