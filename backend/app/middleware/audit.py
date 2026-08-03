@@ -18,6 +18,8 @@ Event type payload schemas (locked — do not change field names):
     schema_discovered:     org_id, connector_id, schema_count, table_count, timestamp
     runbook_match_decided: org_id, user_id, recurrence_id, action,
                            previous_state, resulting_state, revision
+    entity_merged:         org_id, user_id, survivor_entity_id, merged_entity_id,
+                           rule, constituent_count, source_systems, timestamp
     entity_match_proposal_decided: org_id, user_id, proposal_id, entity_type,
                            left_entity_id, right_entity_id, action,
                            previous_status, resulting_status, revision, tier,
@@ -82,6 +84,15 @@ OPPORTUNITY_LIFECYCLE_TRANSITIONED = "opportunity_lifecycle_transitioned"
 # the pair, and the transition. The recompute ("scan") is deliberately NOT audited —
 # it can only add or refresh pending questions, never change an answer.
 ENTITY_MATCH_PROPOSAL_DECIDED = "entity_match_proposal_decided"
+# 2.0-B2 T2: two entities were merged into one graph node. The most
+# destructive-by-accident operation in the platform — a wrongly merged entity
+# corrupts every finding built on it, invisibly — so WHO merged WHAT, under
+# WHICH RULE, is audit-relevant even when the merger was a rule rather than a
+# person (`user_id` is then the `system` actor). The survivor's own metadata
+# carries the full constituent provenance; this event places the act in the
+# organisation-wide stream with the pair, the rule, and the resulting
+# constituent/source-system counts.
+ENTITY_MERGED = "entity_merged"
 
 # ---------------------------------------------------------------------------
 # Registry — every accepted event type listed here.
@@ -106,6 +117,7 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     RUNBOOK_MATCH_DECIDED,
     OPPORTUNITY_LIFECYCLE_TRANSITIONED,
     ENTITY_MATCH_PROPOSAL_DECIDED,
+    ENTITY_MERGED,
 })
 
 # ---------------------------------------------------------------------------

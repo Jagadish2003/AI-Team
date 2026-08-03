@@ -251,10 +251,78 @@ can only add or refresh pending questions, never change an answer.
 name far more often than two systems do, so those proposals would be both the
 highest-risk merge and the hardest to judge from a screen.
 
+## Applying a merge, with provenance (T2)
+
+`backend/app/entity_merge.py` is the **only** place a decision becomes a change to
+the graph. T1 decides and writes nothing; T3 records a human answer and writes
+nothing to the graph; a merge happens here or not at all.
+
+| | |
+|---|---|
+| One entity's provenance | `GET /api/entities/{entity_id}/provenance` |
+| Many at once (the finding-view seam) | `POST /api/entities/provenance` |
+| Apply what T1/T3 authorised | `POST /api/entity-merges/apply` |
+| Role | `analyst` or above |
+
+### What a merge writes
+
+On the **survivor**, `metadata.merge_provenance`:
+
+```json
+{
+  "version": 1,
+  "entity_id": "e1",
+  "constituents": [
+    { "entity_id": "e1", "source_system": "servicenow", "source_record_id": "sn-1",
+      "is_origin": true,  "rule": null },
+    { "entity_id": "e2", "source_system": "jira", "source_record_id": "PAY",
+      "is_origin": false, "rule": "explicit_reference",
+      "merged_at": "…", "merged_by": "system", "confidence": 1.0 }
+  ],
+  "rules": ["explicit_reference"],
+  "source_systems": ["jira", "servicenow"],
+  "is_merged": true
+}
+```
+
+On the **constituent**, `metadata.merged_into` — a pointer, not a deletion.
+
+Three properties that block specific ways provenance goes wrong:
+
+* **The list is complete.** The survivor's own identity is a constituent
+  (`is_origin: true`). Without it the node cannot honestly say which systems it
+  speaks for — the exact fact the corroboration uplift (T5) has to trust.
+* **The rule is per constituent.** A node merged from three sources may have been
+  merged by three rules, on three days, by three actors. One rule field would have
+  to lie about two of them. An earlier rule is never rewritten by a later merge.
+* **A human confirmation is its own rule** (`confirmed_proposal`), never the tier
+  that proposed it. A name match cannot authorise a merge; the person who
+  confirmed it did, and the provenance says so.
+
+### What a merge deliberately does NOT do
+
+* **Delete anything.** The constituent row, its identity, and its edges survive.
+  Deleting would destroy the evidence AC2 requires and make unmerge impossible.
+* **Change `resolution_status`.** That records how the *standing* engine resolved
+  the row — a different fact from "this was merged".
+* **Hide the constituent** from any list. Display consolidation is a separate
+  concern; nothing should vanish from a customer's graph because a rule fired.
+
+Merges are **deterministic** (`choose_survivor`: existing survivor → stable
+`source_record_id` → oldest → lowest id, a total order), **transitive** (both sides
+resolve to their current survivor first, cycle-guarded), and **idempotent**
+(re-applying reports `already_merged` and writes nothing). Every applied merge
+emits the `entity_merged` audit event.
+
+Applying is a deliberate, explicit step — it is not wired into the discovery run.
+That is an operational decision, and a merge is irreversible until unmerge ships.
+
 ## What is still to come
 
-**T1 decides; T3 records a human answer. Neither merges.** Applying a confirmed
-identity to the graph with its provenance, unmerge, and the corroboration uplift
-are the remaining 2.0-B2 tasks. An Owner-facing editor for the alias table is
-also still open — `put_alias_mappings` is the validated seam it will write
-through.
+**Unmerge** (restore constituents, flag dependent findings for re-evaluation) and
+the **corroboration uplift** (cross-source corroboration counting only across
+resolved identities) are the remaining 2.0-B2 tasks. `merged_constituents()` and
+the `merged_into` pointer are what unmerge will read; `source_systems` on the
+provenance block is what the uplift will count. An Owner-facing editor for the
+alias table is also still open — `put_alias_mappings` is the validated seam it
+will write through.
