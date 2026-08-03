@@ -294,3 +294,60 @@ describe('certification policy surfacing (AT-834)', () => {
     expect(certificationsByPackId(response).cloud_ops).toBeDefined();
   });
 });
+
+
+describe('certification expiry surfacing (AT-835)', () => {
+  it('shows the review-due qualifier without changing the level', () => {
+    render(
+      <PackCertificationBadge
+        level="certified"
+        label="CloudFulcrum Certified"
+        reviewDue
+        reviewDueDetail="Review due: it was last reviewed on 2026-07-31 and was due for review on 2027-07-31."
+      />,
+    );
+    const badge = screen.getByTestId('pack-certification-certified');
+    // Flags, never revokes — the badge is still Certified.
+    expect(badge).toHaveAttribute('data-level', 'certified');
+    expect(badge).toHaveTextContent('CloudFulcrum Certified');
+    expect(screen.getByTestId('pack-certification-review-due')).toBeInTheDocument();
+  });
+
+  it('uses the backend reason as the tooltip so the operator knows what to do', () => {
+    const detail =
+      'Review due: it was reviewed against platform version 2.0.0, and this platform is 2.1.0.';
+    render(
+      <PackCertificationBadge level="certified" label="CloudFulcrum Certified" reviewDue reviewDueDetail={detail} />,
+    );
+    expect(screen.getByTestId('pack-certification-certified')).toHaveAttribute('title', detail);
+  });
+
+  it('falls back to a generic tooltip when no reason was supplied', () => {
+    render(<PackCertificationBadge level="partner" label="Partner" reviewDue />);
+    expect(screen.getByTestId('pack-certification-partner')).toHaveAttribute(
+      'title',
+      'This certification is due for review',
+    );
+  });
+
+  it('carries no tooltip while the certification is current', () => {
+    render(<PackCertificationBadge level="certified" label="CloudFulcrum Certified" />);
+    expect(screen.getByTestId('pack-certification-certified')).not.toHaveAttribute('title');
+    expect(screen.queryByTestId('pack-certification-review-due')).not.toBeInTheDocument();
+  });
+
+  it('a review-due finding still renders its certification badge', () => {
+    render(
+      <PackProvenanceRow
+        opp={opp({
+          packCertificationLevel: 'certified',
+          packCertificationLabel: 'CloudFulcrum Certified',
+          packCertificationReviewDue: true,
+        })}
+      />,
+    );
+    const badge = screen.getByTestId('pack-provenance-certification');
+    expect(badge).toHaveAttribute('data-level', 'certified');
+    expect(screen.getByTestId('pack-certification-review-due')).toBeInTheDocument();
+  });
+});

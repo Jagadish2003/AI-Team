@@ -127,6 +127,9 @@ export interface PackHealthItem {
   certification_level?: "certified" | "partner" | "community";
   certification_label?: string;
   certification_review_due?: boolean;
+  // 2.0-C2 T5 (AT-835): why it is due, and the date it falls due.
+  certification_review_due_detail?: string | null;
+  certification_review_due_on?: string | null;
 }
 
 /**

@@ -5,8 +5,8 @@ key, or writing any code that reads a pack's certification level.
 
 This document currently covers **T1 (AT-831) — certification metadata**,
 **T2 (AT-832) — the internal review workflow**, **T3 (AT-833) — surfacing**, and
-**T4 (AT-834) — policy control**. Date-based expiry (AT-835) is a separate task that
-builds on what is described here; its section will be added when it lands.
+**T4 (AT-834) — policy control**, and **T5 (AT-835) — expiry**. With T5 the 2.0-C2
+story is complete: all five acceptance criteria are discharged.
 
 ---
 
@@ -141,8 +141,8 @@ A `community` pack is never "review due" — it was never reviewed, and saying o
 would imply a badge it does not have. A pack whose claim was *downgraded* is community
 for the same reason.
 
-Date-based expiry is 2.0-C2 T5's concern; this layer supplies the `reviewDate` it will
-read.
+Date-based expiry landed in T5 — see **§13**, which supersedes this section's
+single-rule description.
 
 ## 7. Trust anchors and rotation
 
@@ -551,3 +551,94 @@ the new 409/503 on both activation edges.
   (18 tests) — the API, RBAC, org isolation, the audit entry, and AC3 end to end at
   the real launch edge: restricted org + uncertified pack → 409 naming the pack, the
   level it holds, and the level required; lifting the policy restores activation.
+
+---
+
+# 13. Expiry (T5 / AT-835)
+
+## 13.1 Two rules, one flag
+
+A certification carries both a **review date** and a **platform-version scope**, and
+either can make it due for review:
+
+| Rule | Fires when | Reason code |
+|---|---|---|
+| Platform scope | the running platform has moved past the reviewed-against version at MAJOR.MINOR | `reviewed_against_older_platform` |
+| Review age | the review is older than the configured interval (default 365 days) | `review_date_older_than_interval` |
+| — | the reviewed-against version is missing/unreadable | `reviewed_against_platform_version_undeclared` |
+| — | the review date is missing/unreadable | `review_date_unreadable` |
+
+Patch-level platform movement deliberately does **not** fire: a patch does not change
+the capability surface a pack was reviewed against, and a flag that fires on every
+patch is a flag reviewers learn to ignore.
+
+A certification can trip **both** rules at once — a pack reviewed two years ago
+against an older platform is doubly stale — so `reviewDueReasons` is a list and
+`reviewDueDetail` names which fired. A bare "review due" tells an operator to act
+without telling them what to do, and "re-review against a newer platform" and
+"re-issue an aged certification" are different jobs.
+
+## 13.2 Flags, never revokes
+
+This is the story's own wording — *shows as `review due` **rather than** silently
+retaining its badge* — and the emphasis cuts both ways. A due certification:
+
+* keeps its verified level and still displays it;
+* still activates, **including under a T4 "Certified only" policy** (a dedicated test
+  pins this);
+* is additionally marked, everywhere the badge appears.
+
+Auto-revoking on a date would take working packs offline without a human deciding to,
+which is a far worse failure than a stale badge that says it is stale. The two
+mechanisms are also different in kind: an unverifiable signature means *this claim was
+never true*, while an aged review means *this claim needs re-checking*. Only the first
+downgrades.
+
+Consistently, a pack that is **already** Community — self-declared, or downgraded
+because its claim could not be verified — is never "due". It holds no badge to
+re-review, and flagging it would imply one.
+
+## 13.3 Warning before the flag flips
+
+`reviewDueOn` reports the date the review falls due, and the summary reads
+"Next review due 2027-07-31" while the certification is still current. Expiry that
+only becomes visible on the day it bites is a governance signal that arrives too late
+to act on.
+
+## 13.4 The interval is configurable
+
+`PACK_CERTIFICATION_REVIEW_INTERVAL_DAYS` overrides the 365-day default; `0` disables
+the date rule entirely (the platform-version rule still applies), which is the honest
+way to opt out rather than setting an absurd number. A negative or unparseable value
+falls back to the default and logs — *"I mistyped the interval"* must never turn
+expiry off.
+
+## 13.5 Why the tests inject `as_of`
+
+Every date-dependent assertion passes an explicit evaluation date. A test reading the
+wall clock would pass today and fail on a date nobody chose — precisely the CI
+time-bomb this feature would otherwise introduce, and the reason T1 deferred the date
+rule rather than half-building it.
+
+The structural test over shipped packs is therefore anchored to each pack's **own**
+review date ("a certification is current the day it is made") and asserts only that
+every shipped review date is *readable*, so expiry is knowable. When a shipped
+certification genuinely does fall due, the badge says so at runtime and
+`python scripts/sign_pack_certifications.py --check` reports it — which is the
+operator's signal, not a red CI build on an unrelated PR.
+
+## 13.6 Contract
+
+`contracts/API_CONTRACT.md` **v1.19 → v1.20**: `reviewDueDetail` / `reviewDueOn` on
+every `PackCertification` surface, `certification_review_due_detail` /
+`_on` on run-health pack rows, `reviewDueOn` on the certification summary. All
+additive.
+
+## 13.7 Tests
+
+[`backend/tests/unit/test_pack_certification_expiry.py`](../backend/tests/unit/test_pack_certification_expiry.py)
+(36 tests) — the interval and its misconfiguration fallbacks, date parsing, both
+rules independently and together, the boundary day, the flags-never-revokes
+properties (including activation under a Certified-only policy), the
+warn-before-due date, the surfaced reason on badge and run health, and the two
+time-bomb-free structural tests over the shipped packs.

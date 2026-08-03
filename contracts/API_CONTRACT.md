@@ -1,6 +1,31 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.19
-Date: 2026-07-31
+Version: v1.20
+Date: 2026-08-03
+
+> v1.20 — 2.0-C2 T5 (Certification Expiry): a certification now expires on TWO
+> rules — the platform-version scope it was reviewed against, and the age of the
+> review itself. All fields are additive and optional.
+>
+> **Review-due FLAGS, it never revokes.** A due certification keeps its verified
+> `level`, still displays it, and still activates (including under a T4
+> "Certified only" policy). Consumers must not treat `reviewDue` as a downgrade.
+>
+> **Extended shapes:**
+> - `PackCertification` (every surface: `GET /api/packs/state`,
+>   `packCertifications` on the run record and executive report,
+>   `GET /api/packs/{packId}/certification/reviews`) gains `reviewDueDetail`
+>   (string | null — one sentence naming WHICH rule fired) and `reviewDueOn`
+>   (`YYYY-MM-DD` | null — when it falls due, so a surface can warn BEFORE the flag
+>   flips). The full verdict shape additionally carries `reviewDueReasons`
+>   (string[]; a certification can trip both rules at once).
+> - `GET /api/run-health/packs` — each pack row gains
+>   `certification_review_due_detail` and `certification_review_due_on`.
+> - `GET /api/packs/{packId}/certification/reviews` and the certification summary
+>   gain `reviewDueOn` (`Record<packId, YYYY-MM-DD>`).
+>
+> Review-due reason values: `reviewed_against_older_platform`,
+> `review_date_older_than_interval`, `reviewed_against_platform_version_undeclared`,
+> `review_date_unreadable`.
 
 > v1.19 — 2.0-C2 T4 (Pack Certification Policy Control): an org can restrict which
 > certification levels may be activated, Owner-controlled and enforced at activation.

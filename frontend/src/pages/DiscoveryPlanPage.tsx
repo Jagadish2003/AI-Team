@@ -469,6 +469,7 @@ export default function DiscoveryPlanPage({
                     level={packCertifications[selectedAnalysisPack.id]?.level}
                     label={packCertifications[selectedAnalysisPack.id]?.label}
                     reviewDue={packCertifications[selectedAnalysisPack.id]?.reviewDue}
+                    reviewDueDetail={packCertifications[selectedAnalysisPack.id]?.reviewDueDetail}
                     testId={`selection-pack-certification-${selectedAnalysisPack.id}`}
                   />
                 </div>

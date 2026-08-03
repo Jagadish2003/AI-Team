@@ -294,6 +294,7 @@ export default function ExecutiveReportPage() {
                     level={item.level}
                     label={item.label}
                     reviewDue={item.reviewDue}
+                    reviewDueDetail={item.reviewDueDetail}
                     testId={`report-pack-certification-${item.packId}`}
                   />
                 </span>

@@ -95,9 +95,15 @@ def _check() -> int:
             f"{status:>6}  {pack_id:<20} declared={certification.declared_level:<10} "
             f"effective={certification.effective_level:<10} "
             f"reviewDue={certification.review_due}"
+            + (f"  due={certification.review_due_on}" if certification.review_due_on else "")
         )
         if certification.downgraded:
             print(f"          {certification.downgrade_detail}")
+        # 2.0-C2 T5: review-due is NOT a failure — the badge is still valid, it just
+        # needs re-reviewing. Reported, never exit-code-failing, so a certification
+        # ageing out cannot turn into a red CI build on an unrelated change.
+        if certification.review_due:
+            print(f"          {certification.review_due_detail}")
     return 1 if failures else 0
 
 

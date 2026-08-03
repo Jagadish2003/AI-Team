@@ -40,15 +40,35 @@ maintenance into a re-issuance ceremony, which in practice trains people to
 disable the check. Version-scoped review lands where it belongs: on the review
 date and the reviewed-against platform version (see "Review due" below).
 
-Review due
-----------
-A certification carries the platform version it was reviewed against.
-:attr:`PackCertification.review_due` reports when the running platform has moved
-past it at MAJOR.MINOR granularity — the pack keeps its (validly signed) badge and
-is additionally flagged as due for review, rather than silently retaining a badge
-earned against a platform that no longer exists. Patch-level platform movement does
-not trigger it. Date-based expiry is 2.0-C2 T5's concern; this module supplies the
-``review_date`` it will read.
+Review due (2.0-C2 T5 / AT-835)
+-------------------------------
+A certification carries BOTH a review date and a platform-version scope, and two
+independent rules flag it as due for review:
+
+* **Platform scope** — the running platform has moved past the version the pack was
+  reviewed against, at MAJOR.MINOR granularity. Patch-level movement does not
+  trigger it: a patch does not change the capability surface a pack was reviewed
+  against, so flagging it would make the signal noise.
+* **Review age** — the review is older than :func:`review_interval_days` (default
+  365, overridable per deployment). A certification with no expiry slowly becomes a
+  claim about software that no longer exists.
+
+A certification can trip both at once, so :attr:`PackCertification.review_due_reasons`
+is a LIST and :attr:`~PackCertification.review_due_detail` names which rule(s) fired —
+"re-review against a newer platform" and "re-issue an aged certification" are
+different jobs, and a bare "review due" gives an operator neither.
+
+Crucially, review-due **flags, it never revokes**: the signature is still valid, the
+level is still reported, and the pack still activates (including under a T4
+"Certified only" policy). That is the story's own wording — *shows as review due
+rather than silently retaining its badge* — and the distinction matters, because
+auto-revoking on a date would take working packs offline without a human decision.
+:attr:`~PackCertification.review_due_on` reports the date it becomes due, so a
+surface can warn BEFORE the flag flips.
+
+Never due: a ``community`` pack (never reviewed against anything) and a pack whose
+claim was DOWNGRADED (it is Community now, and flagging it would imply a badge it
+does not hold).
 
 Deliberately dependency-free of ``app``
 ---------------------------------------
@@ -77,7 +97,8 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from .pack_config import (
     get_pack,
@@ -177,6 +198,22 @@ REASON_SIGNATURE_BACKEND_UNAVAILABLE = "signature_backend_unavailable"
 #: Review-due kinds.
 REVIEW_DUE_PLATFORM_MOVED = "reviewed_against_older_platform"
 REVIEW_DUE_UNDECLARED = "reviewed_against_platform_version_undeclared"
+#: 2.0-C2 T5 (AT-835): the review itself has aged past the validity interval.
+REVIEW_DUE_REVIEW_AGED = "review_date_older_than_interval"
+#: The review date is missing or not a parseable ISO date, so its age is unknowable.
+REVIEW_DUE_DATE_UNREADABLE = "review_date_unreadable"
+
+#: How long a certification review stays current, in days. A certification is a
+#: statement about a pack AS REVIEWED; both the pack and the platform around it move,
+#: so a review with no expiry slowly becomes a claim about software that no longer
+#: exists. One year is the usual audit cadence for this kind of attestation.
+#:
+#: Set :data:`REVIEW_INTERVAL_ENV_VAR` to override it per deployment — a federal
+#: boundary may want a shorter cycle. ``0`` disables the date rule entirely (the
+#: platform-version rule still applies), which is the honest way to opt out rather
+#: than setting an absurdly large number.
+DEFAULT_REVIEW_INTERVAL_DAYS = 365
+REVIEW_INTERVAL_ENV_VAR = "PACK_CERTIFICATION_REVIEW_INTERVAL_DAYS"
 
 
 class PackCertificationError(ValueError):
@@ -450,7 +487,25 @@ class PackCertification:
     signature_algorithm: str = ""
     downgrade_reason: Optional[str] = None
     downgrade_detail: Optional[str] = None
-    review_due_reason: Optional[str] = None
+    #: 2.0-C2 T5 (AT-835): EVERY reason the certification is due for review. A
+    #: certification can trip both rules at once (aged AND reviewed against an older
+    #: platform), and reporting only the first would understate how stale it is.
+    review_due_reasons: List[str] = field(default_factory=list)
+    #: One human sentence naming which rule(s) fired.
+    review_due_detail: Optional[str] = None
+    #: The date the review becomes due (``YYYY-MM-DD``), so a surface can warn
+    #: BEFORE the flag flips. ``None`` when the date rule is disabled or the review
+    #: date is unreadable.
+    review_due_on: Optional[str] = None
+
+    @property
+    def review_due_reason(self) -> Optional[str]:
+        """The PRIMARY review-due reason, or ``None``.
+
+        Kept as a scalar because that is what surfacing consumes and what AT-833
+        shipped against; ``review_due_reasons`` carries the full set.
+        """
+        return self.review_due_reasons[0] if self.review_due_reasons else None
 
     @property
     def downgraded(self) -> bool:
@@ -459,8 +514,9 @@ class PackCertification:
 
     @property
     def review_due(self) -> bool:
-        """True when this certification's platform scope no longer covers the platform."""
-        return self.review_due_reason is not None
+        """True when the certification is due for review — by platform scope, by the
+        age of the review itself, or both (2.0-C2 AC4)."""
+        return bool(self.review_due_reasons)
 
     @property
     def label(self) -> str:
@@ -498,10 +554,11 @@ class PackCertification:
             f"version {self.reviewed_against_platform_version}."
         )
         if self.review_due:
-            return (
-                f"{base} This platform is version {self.platform_version}, so the "
-                f"certification is due for review."
-            )
+            # Name the rule that fired: "re-review against a newer platform" and
+            # "re-issue an aged certification" are different jobs.
+            return f"{base} {self.review_due_detail}"
+        if self.review_due_on:
+            return f"{base} Next review due {self.review_due_on}."
         return base
 
     def to_dict(self) -> Dict[str, Any]:
@@ -531,6 +588,9 @@ class PackCertification:
             "downgradeDetail": self.downgrade_detail,
             "reviewDue": self.review_due,
             "reviewDueReason": self.review_due_reason,
+            "reviewDueReasons": list(self.review_due_reasons),
+            "reviewDueDetail": self.review_due_detail,
+            "reviewDueOn": self.review_due_on,
             "summary": self.summary,
         }
 
@@ -539,12 +599,18 @@ def get_pack_certification(
     pack_id: Optional[str] = None,
     *,
     platform_version: Optional[str] = None,
+    as_of: Optional[date] = None,
+    review_interval_days_override: Optional[int] = None,
 ) -> PackCertification:
     """Verify one pack's certification metadata. Never raises.
 
     ``pack_id`` resolves through ``get_pack()``, so an unknown id reports the
     default pack's certification exactly as it reports its detectors — an unknown id
     is not a certification failure.
+
+    ``as_of`` and ``review_interval_days_override`` exist for the 2.0-C2 T5 date
+    rule. Both default to "now" and the configured interval; injecting them keeps
+    expiry tests deterministic instead of time-bombing a year after they are written.
     """
     pack = get_pack(pack_id)
     resolved_id = pack["packId"]
@@ -618,8 +684,25 @@ def get_pack_certification(
             LEVEL_COMMUNITY,
         )
 
-    review_due_reason = _review_due_reason(
-        effective_level, reviewed_against, effective_platform
+    review_due_reasons = _review_due_reasons(
+        effective_level,
+        reviewed_against,
+        effective_platform,
+        review_date,
+        as_of,
+        review_interval_days_override,
+    )
+    due_on = (
+        review_due_on(review_date, interval_days=review_interval_days_override)
+        if effective_level in SIGNATURE_REQUIRED_LEVELS
+        else None
+    )
+    review_due_detail = _review_due_detail(
+        review_due_reasons,
+        reviewed_against=reviewed_against,
+        platform_version=effective_platform,
+        review_date=review_date,
+        due_on=due_on,
     )
 
     return PackCertification(
@@ -639,31 +722,166 @@ def get_pack_certification(
         signature_algorithm=verification.algorithm,
         downgrade_reason=downgrade_reason,
         downgrade_detail=downgrade_detail,
-        review_due_reason=review_due_reason,
+        review_due_reasons=review_due_reasons,
+        review_due_detail=review_due_detail,
+        review_due_on=due_on,
     )
 
 
-def _review_due_reason(
-    effective_level: str, reviewed_against: str, platform_version: str
+def review_interval_days() -> int:
+    """The configured review validity period in days; ``0`` disables the date rule.
+
+    Read live so a deployment can shorten the cycle without a code change. A
+    negative or unparseable value falls back to the default rather than silently
+    disabling expiry — "I mistyped the interval" must not turn the rule off.
+    """
+    raw = os.environ.get(REVIEW_INTERVAL_ENV_VAR, "").strip()
+    if not raw:
+        return DEFAULT_REVIEW_INTERVAL_DAYS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "%s is not an integer (%r); using the default %s-day review interval",
+            REVIEW_INTERVAL_ENV_VAR,
+            raw,
+            DEFAULT_REVIEW_INTERVAL_DAYS,
+        )
+        return DEFAULT_REVIEW_INTERVAL_DAYS
+    if value < 0:
+        logger.warning(
+            "%s is negative (%s); using the default %s-day review interval",
+            REVIEW_INTERVAL_ENV_VAR,
+            value,
+            DEFAULT_REVIEW_INTERVAL_DAYS,
+        )
+        return DEFAULT_REVIEW_INTERVAL_DAYS
+    return value
+
+
+def parse_review_date(value: Optional[str]) -> Optional[date]:
+    """Parse a certification review date (``YYYY-MM-DD``), or ``None``.
+
+    Deliberately strict about the shape — the review date is inside the SIGNED
+    payload, so it is written by release tooling, not typed by a user. A tolerant
+    parser here would only ever succeed in hiding a malformed signed field.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def review_due_on(
+    review_date: str, *, interval_days: Optional[int] = None
 ) -> Optional[str]:
-    """Why this certification is due for review, or ``None``.
+    """The date this certification's review becomes due, as ``YYYY-MM-DD``.
+
+    ``None`` when the date rule is disabled or the review date is unreadable. This
+    is what lets a surface say "review due 2027-07-31" BEFORE the flag flips, which
+    is the difference between a governance signal and an unwelcome surprise.
+    """
+    interval = review_interval_days() if interval_days is None else interval_days
+    if interval <= 0:
+        return None
+    reviewed_on = parse_review_date(review_date)
+    if reviewed_on is None:
+        return None
+    return (reviewed_on + timedelta(days=interval)).isoformat()
+
+
+def _review_due_reasons(
+    effective_level: str,
+    reviewed_against: str,
+    platform_version: str,
+    review_date: str,
+    as_of: Optional[date],
+    interval_days: Optional[int],
+) -> List[str]:
+    """Every reason this certification is due for review, in reporting order.
+
+    Two independent rules, and a certification can trip BOTH — a pack reviewed two
+    years ago against an older platform is doubly stale, and reporting only the
+    first would understate it:
+
+    * **Platform scope** (T1): the running platform has moved past the version the
+      pack was reviewed against, at MAJOR.MINOR granularity. A patch release does
+      not change the capability surface, so treating it as expiry would make the
+      flag noise and train reviewers to ignore it.
+    * **Review age** (T5): the review itself is older than the configured interval.
+      A certification with no expiry slowly becomes a claim about software that no
+      longer exists.
 
     Only meaningful for a level that was actually reviewed — a community pack was
-    never certified against any platform version, so it is never "due".
-
-    MAJOR.MINOR granularity: a patch-level platform release does not change the
-    capability surface a pack was reviewed against, so treating it as expiry would
-    make the flag noise and train reviewers to ignore it.
+    never certified against anything, so it is never "due". Neither is a pack whose
+    claim was DOWNGRADED: it is Community now, and flagging it for review would
+    imply a badge it does not hold.
     """
     if effective_level not in SIGNATURE_REQUIRED_LEVELS:
-        return None
+        return []
+
+    reasons: List[str] = []
+
     reviewed = parse_version(reviewed_against)
     current = parse_version(platform_version)
     if reviewed is None or current is None:
-        return REVIEW_DUE_UNDECLARED
-    if current[:2] > reviewed[:2]:
-        return REVIEW_DUE_PLATFORM_MOVED
-    return None
+        reasons.append(REVIEW_DUE_UNDECLARED)
+    elif current[:2] > reviewed[:2]:
+        reasons.append(REVIEW_DUE_PLATFORM_MOVED)
+
+    interval = review_interval_days() if interval_days is None else interval_days
+    if interval > 0:
+        reviewed_on = parse_review_date(review_date)
+        if reviewed_on is None:
+            # A signature-required level with an unreadable review date: its age
+            # cannot be checked, so it is reported due rather than assumed current.
+            reasons.append(REVIEW_DUE_DATE_UNREADABLE)
+        else:
+            today = as_of or datetime.now(timezone.utc).date()
+            if today > reviewed_on + timedelta(days=interval):
+                reasons.append(REVIEW_DUE_REVIEW_AGED)
+
+    return reasons
+
+
+def _review_due_detail(
+    reasons: Sequence[str],
+    *,
+    reviewed_against: str,
+    platform_version: str,
+    review_date: str,
+    due_on: Optional[str],
+) -> Optional[str]:
+    """One human sentence naming WHICH rule made this certification due.
+
+    "Review due" with no reason gives an operator nothing to act on: re-review
+    against a newer platform and re-issue an aged certification are different jobs.
+    """
+    if not reasons:
+        return None
+    clauses: List[str] = []
+    for reason in reasons:
+        if reason == REVIEW_DUE_PLATFORM_MOVED:
+            clauses.append(
+                f"it was reviewed against platform version {reviewed_against}, "
+                f"and this platform is {platform_version}"
+            )
+        elif reason == REVIEW_DUE_UNDECLARED:
+            clauses.append(
+                "the platform version it was reviewed against is missing or "
+                "unreadable"
+            )
+        elif reason == REVIEW_DUE_REVIEW_AGED:
+            clauses.append(
+                f"it was last reviewed on {review_date}"
+                + (f" and was due for review on {due_on}" if due_on else "")
+            )
+        elif reason == REVIEW_DUE_DATE_UNREADABLE:
+            clauses.append("its review date is missing or unreadable")
+    return "Review due: " + "; ".join(clauses) + "."
 
 
 # ── Selection-level helpers ───────────────────────────────────────────────────
@@ -718,7 +936,10 @@ def certify_pack_selection(
 
 
 def certification_badge(
-    pack_id: Optional[str] = None, *, platform_version: Optional[str] = None
+    pack_id: Optional[str] = None,
+    *,
+    platform_version: Optional[str] = None,
+    as_of: Optional[date] = None,
 ) -> Dict[str, Any]:
     """The COMPACT display shape — 2.0-C2 T3 (AT-833).
 
@@ -733,7 +954,7 @@ def certification_badge(
     never display an unproved Certified claim as Certified (AC1 carried into AC2).
     """
     certification = get_pack_certification(
-        pack_id, platform_version=platform_version
+        pack_id, platform_version=platform_version, as_of=as_of
     )
     return {
         "packId": certification.pack_id,
@@ -742,6 +963,10 @@ def certification_badge(
         "statusLabel": certification.status_label,
         "declaredLevel": certification.declared_level,
         "reviewDue": certification.review_due,
+        # 2.0-C2 T5 (AT-835): WHY it is due, and when it becomes due. A bare boolean
+        # tells an operator to act without telling them what to do.
+        "reviewDueDetail": certification.review_due_detail,
+        "reviewDueOn": certification.review_due_on,
     }
 
 
@@ -749,6 +974,7 @@ def certification_badges(
     pack_ids: Optional[Iterable[str]] = None,
     *,
     platform_version: Optional[str] = None,
+    as_of: Optional[date] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """``{pack_id: badge}`` for a set of packs — resolved ONCE per surface.
 
@@ -761,7 +987,9 @@ def certification_badges(
     """
     badges: Dict[str, Dict[str, Any]] = {}
     for pack_id in normalize_pack_ids(list(pack_ids or [])) or _all_pack_ids():
-        badge = certification_badge(pack_id, platform_version=platform_version)
+        badge = certification_badge(
+            pack_id, platform_version=platform_version, as_of=as_of
+        )
         badges[badge["packId"]] = badge
     return badges
 
@@ -794,6 +1022,13 @@ def certification_summary(
         "reviewDue": [
             report.pack_id for report in reports if report.review_due
         ],
+        # 2.0-C2 T5: when each pack's review falls due, so an operator can plan the
+        # re-review rather than discover it on the day.
+        "reviewDueOn": {
+            report.pack_id: report.review_due_on
+            for report in reports
+            if report.review_due_on
+        },
         "packs": [report.to_dict() for report in reports],
     }
 
@@ -818,8 +1053,15 @@ __all__ = [
     "REASON_SIGNATURE_MISSING",
     "REASON_SIGNATURE_UNKNOWN_KEY",
     "REASON_SIGNATURE_UNSUPPORTED_ALGORITHM",
+    "DEFAULT_REVIEW_INTERVAL_DAYS",
+    "REVIEW_DUE_DATE_UNREADABLE",
     "REVIEW_DUE_PLATFORM_MOVED",
+    "REVIEW_DUE_REVIEW_AGED",
     "REVIEW_DUE_UNDECLARED",
+    "REVIEW_INTERVAL_ENV_VAR",
+    "parse_review_date",
+    "review_due_on",
+    "review_interval_days",
     "SIGNATURE_PAYLOAD_VERSION",
     "SIGNATURE_REQUIRED_LEVELS",
     "SignatureVerification",

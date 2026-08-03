@@ -95,6 +95,10 @@ def _opp(pack_id=PACK, **overrides):
 
 def test_badge_is_the_compact_display_shape():
     badge = certification_badge(PACK)
+    # Kept as an EXACT set: the point of the compact projection is that the full
+    # audit shape (signature key ids, downgrade reasons, scope) never leaks onto
+    # every row of a 200-finding list. `reviewDueDetail`/`reviewDueOn` are the
+    # 2.0-C2 T5 additions.
     assert set(badge) == {
         "packId",
         "level",
@@ -102,6 +106,8 @@ def test_badge_is_the_compact_display_shape():
         "statusLabel",
         "declaredLevel",
         "reviewDue",
+        "reviewDueDetail",
+        "reviewDueOn",
     }
     assert badge["level"] == LEVEL_CERTIFIED
     assert badge["label"] == LEVEL_LABELS[LEVEL_CERTIFIED]
@@ -194,10 +200,16 @@ def test_run_health_row_reports_the_level():
     from app.health_aggregation import _certification_fields
 
     fields = _certification_fields(PACK)
-    assert fields == {
-        "certification_level": LEVEL_CERTIFIED,
-        "certification_label": LEVEL_LABELS[LEVEL_CERTIFIED],
-        "certification_review_due": False,
+    assert fields["certification_level"] == LEVEL_CERTIFIED
+    assert fields["certification_label"] == LEVEL_LABELS[LEVEL_CERTIFIED]
+    assert fields["certification_review_due"] is False
+    # 2.0-C2 T5 (AT-835): the row also carries WHY it is due and WHEN it falls due.
+    assert set(fields) == {
+        "certification_level",
+        "certification_label",
+        "certification_review_due",
+        "certification_review_due_detail",
+        "certification_review_due_on",
     }
 
 

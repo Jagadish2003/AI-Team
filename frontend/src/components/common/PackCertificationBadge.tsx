@@ -36,12 +36,19 @@ export default function PackCertificationBadge({
   level,
   label,
   reviewDue = false,
+  reviewDueDetail,
   testId,
 }: {
   level?: PackCertificationLevel | string | null;
   /** Backend-supplied label. Falls back to the canonical wording for the level. */
   label?: string | null;
   reviewDue?: boolean;
+  /**
+   * 2.0-C2 T5: why the review is due. Surfaced as the tooltip so the pill stays
+   * compact while still telling an operator what to do — "re-review against a newer
+   * platform" and "re-issue an aged certification" are different jobs.
+   */
+  reviewDueDetail?: string | null;
   testId?: string;
 }) {
   // An absent or unrecognised level renders NOTHING rather than guessing. A pack
@@ -56,7 +63,7 @@ export default function PackCertificationBadge({
       data-level={known}
       title={
         reviewDue
-          ? 'Certified against an earlier platform version — review due'
+          ? reviewDueDetail ?? 'This certification is due for review'
           : undefined
       }
       className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium leading-none ${TONE[known]}`}

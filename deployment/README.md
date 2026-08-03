@@ -332,6 +332,7 @@ repository, or a `.env` file.
 
 | Variable | Required | Purpose |
 |---|---|---|
+| `PACK_CERTIFICATION_REVIEW_INTERVAL_DAYS` | No | How long a certification review stays current, in days (default `365`). A deployment with a stricter audit cadence can shorten it; `0` disables the date rule entirely (the platform-version rule still applies). A negative or unparseable value falls back to the default and logs — a mistyped interval must not silently switch expiry off. Review-due **flags** a certification, it never revokes it: the pack keeps its level and still activates. |
 | `PACK_CERTIFICATION_TRUSTED_KEYS` | No | JSON object of **additional** trust anchors, `{"keyId": "<base64 raw ed25519 public key>"}`. Public keys only. Used for a signing-key rotation that must land without a code deploy, and by pack authors trusting their own development key locally. A built-in CloudFulcrum key id can never be overridden from the environment — the entry is ignored with a warning. |
 
 Verify a deployment's packs at any time (exit code is non-zero if any badge fails):

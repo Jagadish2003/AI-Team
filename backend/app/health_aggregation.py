@@ -581,6 +581,10 @@ def _certification_fields(pack_id: str) -> Dict[str, Any]:
         "certification_level": badge["level"],
         "certification_label": badge["label"],
         "certification_review_due": bool(badge.get("reviewDue")),
+        # 2.0-C2 T5 (AT-835): WHY the review is due, and the date it falls due — so
+        # the panel can say what to do about it, and can warn before it happens.
+        "certification_review_due_detail": badge.get("reviewDueDetail"),
+        "certification_review_due_on": badge.get("reviewDueOn"),
     }
 
 
