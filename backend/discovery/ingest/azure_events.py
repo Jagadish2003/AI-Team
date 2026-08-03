@@ -689,6 +689,10 @@ class AzureEventIngestor(ChangeBasedIngestor):
         # no database and no configured estate.
         self._associations = association_resolver
         self._associations_loaded = association_resolver is not None
+        # 2.0-D3 T4: every poll the per-run event budget cut short, accumulated for
+        # the ingestor's lifetime. See `deferral_report` for why the budget report
+        # alone is not enough.
+        self._deferrals: List[Dict[str, Any]] = []
 
     # ── subscription access (the pinned-set discipline — AC4) ───────────────────
 
@@ -735,6 +739,44 @@ class AzureEventIngestor(ChangeBasedIngestor):
             return []
         token = await self.acquire_token()
         return list(await arm_lister(token, self.config))
+
+    # ── Budget deferrals (D3 T4) ────────────────────────────────────────────────
+
+    def _note_deferral(self, stream: str, subscription: str, *, fetched: bool) -> None:
+        """Record one poll the per-run event budget cut short."""
+        self._deferrals.append({
+            "stream": stream,
+            "subscription": subscription,
+            "reason": "run_event_budget_exhausted",
+            # False when the budget stopped the run before it even asked the
+            # provider for the page — the desired behaviour, and the case the
+            # budget counters cannot see.
+            "fetched": fetched,
+        })
+
+    def deferral_report(self) -> Dict[str, Any]:
+        """What the per-run event budget cut short, and whether the poll completed.
+
+        The MSP-B7 budget's own report counts DEFERRED EVENTS, which it can only do
+        for events it actually saw. That leaves a reporting hole precisely where the
+        budget behaves best: when capacity is exhausted the connector stops
+        REQUESTING further pages (it must — otherwise the budget would bound the
+        data but not the work), so those subscriptions contribute no deferred-event
+        count and ``BudgetReport.breached`` stays False. A run that skipped whole
+        subscriptions would then report a clean budget.
+
+        This closes that hole the same way the AWS connector's ``poll_report`` does:
+        ``complete`` is False whenever anything was cut short, and every affected
+        (stream, subscription) is named. The runner merges it into the run's
+        ``azureEvents`` health block and degrades the reported status, so a partial
+        ingest is never reported as a complete one.
+        """
+        return {
+            "complete": not self._deferrals,
+            "deferred_polls": len(self._deferrals),
+            "deferred": list(self._deferrals),
+            **({"reason": "run_event_budget_exhausted"} if self._deferrals else {}),
+        }
 
     # ── App Insights association (D3 T3) ────────────────────────────────────────
 
@@ -957,6 +999,7 @@ class AzureEventIngestor(ChangeBasedIngestor):
                     "emitted": 0,
                     "checkpoint_advanced": False,
                 }
+                self._note_deferral(stream, sub, fetched=False)
                 continue
             try:
                 fetched, attempts = self._fetch_with_retry(
@@ -1055,6 +1098,7 @@ class AzureEventIngestor(ChangeBasedIngestor):
                         "preserved, resumes next run",
                         stream, sub, self.org_id, emitted,
                     )
+                    self._note_deferral(stream, sub, fetched=True)
                 status[sub] = {
                     "status": "deferred" if deferred else "ok",
                     "polled": len(fetched),

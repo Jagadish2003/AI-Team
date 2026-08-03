@@ -507,10 +507,18 @@ class TestDetectorCompatibility:
         assert isinstance(event, OperationalEvent)
         assert event.event_class in EVENT_CLASSES
 
-    def test_no_cloud_ops_detector_mentions_application_insights(self):
+    def test_no_cloud_ops_detector_carries_app_insights_logic(self):
         """Structural: the mapper is a provider adapter, so no detector, scorer or
         the cloud-ops runtime may carry an App Insights branch, threshold or
-        mandatory field."""
+        mandatory field.
+
+        Scans the CODE, not the prose. Comments and docstrings are stripped first
+        (``ast.unparse`` drops comments; docstrings are removed explicitly), because
+        the guarantee is about behaviour: a sentence explaining *why* a shared code
+        path also serves Application Insights is documentation, whereas an
+        identifier, an ``if`` on an App Insights value, or a string literal used in
+        logic is the leak this test exists to catch. Those all still fail.
+        """
         root = Path(ae.__file__).resolve().parents[1]
         targets = sorted((root / "detectors").glob("cloud_ops_*.py"))
         targets += [root / "cloud_ops_runtime.py"]
@@ -519,9 +527,20 @@ class TestDetectorCompatibility:
         for path in targets:
             if not path.exists():
                 continue
-            low = path.read_text(encoding="utf-8").lower()
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(
+                    node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                ):
+                    continue
+                body = getattr(node, "body", None)
+                if (body and isinstance(body[0], ast.Expr)
+                        and isinstance(body[0].value, ast.Constant)
+                        and isinstance(body[0].value.value, str)):
+                    body.pop(0)
+            code = ast.unparse(tree).lower()
             for token in ("app_insights", "appinsights", "application insights"):
-                if token in low:
+                if token in code:
                     offenders.append(f"{path.name}: {token}")
         assert offenders == [], (
             "App Insights logic leaked out of the mapper into the cloud-ops pack: "

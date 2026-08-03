@@ -842,6 +842,18 @@ def _ingest_azure_events(org_id: str, run_id: str) -> Dict[str, Any]:
         if budget.get("breached"):
             health["status"] = "degraded"
             health.setdefault("reason", "run_event_budget_exhausted")
+    # 2.0-D3 T4: the budget's own counters can only report events it SAW, so a poll
+    # the budget stopped before it fetched anything leaves `breached` False — which
+    # would report a run that skipped whole subscriptions as a clean one. The
+    # connector's deferral report names those polls; mirrors the AWS `poll` block.
+    try:
+        deferrals = ingestor.deferral_report()
+    except Exception:  # noqa: BLE001 — health reporting is never run-critical
+        deferrals = {}
+    if deferrals and not deferrals.get("complete", True):
+        health["deferrals"] = dict(deferrals)
+        health["status"] = "degraded"
+        health.setdefault("reason", deferrals.get("reason", "run_event_budget_exhausted"))
     # 2.0-D3 T1: the Application Insights picture for this poll. Derived from the
     # emitted records (each in-scope record carries its scope on the WRAPPER), so no
     # extra plumbing is needed and run health states what the bounded App Insights
