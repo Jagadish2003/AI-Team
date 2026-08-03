@@ -32,6 +32,7 @@ from .learning_adjustment_state import (
     list_adjustment_state,
     recompute_adjustments,
 )
+from .learning_reason import describe_adjustment
 from .learning_signal_config import load_config
 from .learning_signals import collect_learning_signals
 from .middleware.tenancy import get_current_org_id
@@ -131,6 +132,63 @@ def preview_adjustment(
     payload["learningActive"] = signal_set.is_active
     payload["inactiveReason"] = signal_set.inactive_reason
     return payload
+
+
+@router.get(
+    "/explain/{run_id}/{opportunity_id}",
+    dependencies=[Depends(require_role("analyst"))],
+)
+def explain_adjustment(
+    run_id: str,
+    opportunity_id: str,
+    _token: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """AC2 — why ONE finding moved, with links to every contributing signal.
+
+    Returns the STRUCTURED reason (counts, verdicts, direction, magnitude, cap)
+    plus a resolvable reference for each contributing decision and outcome. The
+    human sentence is rendered from those same fields and travels as ``summary``,
+    so a client never composes its own wording.
+
+    A finding that did not move answers 404: there is no ordering change to
+    explain, and returning an empty explanation would invite a UI to render
+    "this was not adjusted because..." on every unadjusted finding.
+    """
+    from .db import run_kv_get
+    from .run_store import read_run
+
+    try:
+        read_run(run_id)
+    except KeyError:
+        raise HTTPException(404, "run not found")
+
+    opps = run_kv_get("opps", run_id, None) or []
+    org_id = get_current_org_id()
+    signal_set = collect_learning_signals(org_id)
+    result = adjust_ranking(
+        opps,
+        get_adjustments(org_id),
+        is_active=signal_set.is_active,
+        inactive_reason=signal_set.inactive_reason,
+    )
+
+    record = result.by_opportunity_id().get(opportunity_id)
+    if record is None or not record.moved:
+        raise HTTPException(404, "no ranking adjustment for this opportunity")
+
+    return {
+        "runId": run_id,
+        "opportunityId": opportunity_id,
+        "opportunityIdentity": record.opportunity_identity,
+        "baseRank": record.base_rank,
+        "adjustedRank": record.adjusted_rank,
+        "baseImpact": round(record.base_impact, 4),
+        "caps": {
+            "maxScoreFraction": result.policy.max_score_fraction if result.policy else None,
+            "maxRankMove": result.policy.max_rank_move if result.policy else None,
+        },
+        "reason": describe_adjustment(record),
+    }
 
 
 @router.get("/base-order/{run_id}", dependencies=[Depends(require_role("analyst"))])

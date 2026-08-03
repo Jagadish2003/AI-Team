@@ -1,7 +1,19 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.18
+Version: v1.19
 Date: 2026-07-31
 
+> v1.19 - 2.0-A3 T3 (Adjustment explainability): a rank-adjusted opportunity's
+> `_ranking` object now carries `reason` — STRUCTURED data (direction,
+> ranksMoved, decisionCount, decisionsByAction, outcomeCount,
+> outcomesByVerdict, wasCapped, cappedBy, evidenceStrength) plus
+> `contributingDecisions` and `contributingOutcomes`, each with a resolvable
+> `href`, and a rendered `summary` sentence. A finding that did not move
+> carries no `reason`. New route GET /api/learning/adjustment/explain/
+> {runId}/{opportunityId} (analyst+; 404 for an unadjusted finding). The
+> reason is namespaced under `_ranking` and never appears inside or beside
+> confidence, corroboration or the evidence trace. Additive; pre-v1.19
+> consumers are unaffected.
+>
 > v1.18 - 2.0-A3 T2 (Bounded ranking adjustment): opportunities returned by
 > GET /api/runs/{runId}/opportunities and the roadmap stages now carry an
 > additive `_ranking` object: `baseRank`, `baseImpact`, `adjustedRank`,

@@ -170,7 +170,20 @@ class OpportunityAdjustment:
             "wasCapped": self.was_capped,
             "cappedBy": self.capped_by,
             "contributingRefs": [dict(r) for r in self.contributing_refs],
+            # 2.0-A3 T3 — the structured reason travels with the record, so the
+            # inspection surfaces and the served finding render identical
+            # wording rather than each composing their own.
+            "reason": self._reason_dict(),
         }
+
+    def _reason_dict(self) -> Optional[Dict[str, Any]]:
+        try:
+            from .learning_reason import describe_adjustment
+
+            return describe_adjustment(self)
+        except Exception as exc:  # noqa: BLE001 - a reason is never fatal
+            logger.warning("Could not build adjustment reason: %s", exc)
+            return None
 
 
 @dataclass(frozen=True)
@@ -474,6 +487,25 @@ def _annotate(
                 "signalCount": record.signal_count,
             }
         )
+        # 2.0-A3 T3 — the structured reason, namespaced UNDER _ranking so it
+        # explains the ordering and nothing else. It must never sit beside
+        # confidence, corroboration or the evidence trace: AC3 forbids the
+        # adjustment touching those, and copy placed among them would imply the
+        # learned signal contributed to the finding's credibility, violating the
+        # spirit of that criterion while passing its letter.
+        #
+        # Built here, from the record, rather than composed as prose at the point
+        # of adjustment — so it can be counted, filtered and re-rendered (A2 T4's
+        # confounder pattern). Never fatal: an unexplainable move is a defect,
+        # but a serve failure would be worse.
+        try:
+            from .learning_reason import describe_adjustment
+
+            reason = describe_adjustment(record)
+            if reason is not None:
+                ranking["reason"] = reason
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not build adjustment reason: %s", exc)
     else:
         ranking["adjustedRank"] = base_rank
         ranking["moved"] = 0
