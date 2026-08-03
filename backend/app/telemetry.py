@@ -1125,6 +1125,10 @@ register_event_type("billing.run_completed", BillingRunCompletedPayload)
 # unregistered type, so registration must precede the first emission.
 register_event_type("billing.system_connected", BillingSystemLedgerPayload)
 register_event_type("billing.system_disconnected", BillingSystemLedgerPayload)
+# 2.0-B1 / T4 (AC4) — a signed evidence-export bundle was generated. Emitted by
+# app.routes_evidence_export once per issued bundle; record_event() raises
+# ValueError for an unregistered type, so registration must precede emission.
+register_event_type("export.evidence_generated", EvidenceExportGeneratedPayload)
 # 2.0-A2 T1 — opportunity lifecycle transitions. Registered before the first
 # emission site exists: record_event() raises for an unregistered event_type.
 register_event_type(

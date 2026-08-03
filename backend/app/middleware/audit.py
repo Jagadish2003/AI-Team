@@ -69,6 +69,22 @@ INGESTION_CHECKPOINT_RESET = "ingestion_checkpoint_reset"
 # match. The dedicated decision-history table is the domain record; this event
 # also places the action in the organisation-wide audit stream.
 RUNBOOK_MATCH_DECIDED = "runbook_match_decided"
+# 2.0-B1 T4: a signed evidence-export bundle was generated. The bundle leaves the
+# deployment (auditors/regulators/board packs), so WHO exported WHAT and WHEN is
+# itself audit-relevant. There is no request-logging middleware in this app — a
+# GET is not auto-audited — so routes_evidence_export.py calls log_event()
+# explicitly. The payload carries the bundle FINGERPRINT only (scope, ids, record
+# count, content root, signature prefix), never bundle content.
+# 2.0-B1 T6 (AC6) routes this — and every other export surface — through the
+# shared app/export_audit.py write point, which guarantees the payload names the
+# acting user, the export scope, and an ISO-8601 UTC timestamp.
+EVIDENCE_EXPORT_GENERATED = "evidence_export_generated"
+# 2.0-B1 T6 (AC6): the R-1.9.1-L2 signed usage report is an export generation on
+# the same trust model (same license report_key, same distributable posture), and
+# it previously emitted no audit record at all. Same payload discipline as
+# EVIDENCE_EXPORT_GENERATED: period + counts + signature prefix, never report
+# content and never the whole MAC.
+USAGE_REPORT_EXPORTED = "usage_report_exported"
 # 2.0-A2 T1: an opportunity's lifecycle state changed (open -> actioned ->
 # monitoring -> measured, plus dismissed/stalled). The dedicated append-only
 # opportunity_lifecycle_history table is the domain record; this event places the
@@ -98,6 +114,8 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     SCHEMA_DISCOVERED,
     INGESTION_CHECKPOINT_RESET,
     RUNBOOK_MATCH_DECIDED,
+    EVIDENCE_EXPORT_GENERATED,
+    USAGE_REPORT_EXPORTED,
     OPPORTUNITY_LIFECYCLE_TRANSITIONED,
 })
 
