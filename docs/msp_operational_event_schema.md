@@ -313,6 +313,38 @@ persist an already-mapped event, use `store_raw_event(store, org_id, event, raw)
 
 ---
 
+### Application Insights volume discipline (2.0-D3 T4)
+
+Application Insights adds **no** volume-management code. Its events ride the four
+MSP-B7 disciplines exactly as every other cloud source does:
+
+| Discipline | Where | App Insights behaviour |
+|------------|-------|------------------------|
+| Dedup at admission | `OpsEventStream` owned by the Azure connector | re-fires fold on `(org, signature, resource, active period)` with an occurrence count and a first/last-seen span; an exact provider redelivery is idempotent |
+| Noise floors | shared `apply_noise_floors` in `cloud_ops_runtime` | an ACTIVE failure is `error`, a **protected** class absent from the floor map, so it is never suppressed; a health transition is `state_change` and takes the shared floor. Suppression is counted and reported, never silent |
+| Per-run budget | shared `CALIBRATED_RUN_EVENT_BUDGET` | one budget for the whole connector (not per surface); capacity is checked **between polls** so an exhausted budget stops the run *requesting* more, not merely discarding what it already fetched |
+| Correlation windows | shared `join_within_window` / `gate_operational_corroboration` | an event↔incident join is valid only inside the window; the trace records join type, window, delta and verdict on success **and** rejection, and an out-of-window agreement elevates nothing |
+
+Two reporting details worth knowing, both about not overstating a clean run:
+
+* **`deferral_report()` (Azure connector).** The budget's own report counts deferred
+  *events*, which it can only do for events it saw. When capacity is exhausted the
+  connector stops requesting further pages — the desired behaviour — so those polls
+  contribute no deferred-event count and `BudgetReport.breached` stays `False`. A run
+  that skipped whole subscriptions would then report a clean budget. `deferral_report`
+  closes that hole the way the AWS connector's `poll_report` does: `complete` is
+  `False` whenever anything was cut short and every affected `(stream, subscription)`
+  is named. `runner._ingest_azure_events` merges it as `health["deferrals"]` and
+  degrades the reported status.
+* **`transport` on an event-signature row is DERIVED.** It previously read
+  `event_history_bridge` unconditionally, which was already false for every natively
+  ingested Azure and AWS event. It is now resolved per folded firing from each
+  member's evidence pointer (`bridge:<provider>` ⇒ bridged, otherwise native), so the
+  row reports `transports` as a list and the scalar reads `mixed` rather than silently
+  picking one. Note an exact bridged twin shares its provider event id and is deduped
+  as a redelivery, so `mixed` arises only when two *distinct* firings of one condition
+  arrive by different routes.
+
 ### Application Insights association (2.0-D3 T3)
 
 `discovery/ingest/app_insights_association.py` answers "which application

@@ -352,3 +352,56 @@ class TestAppInsightsScopeInRunHealth:
 
         assert data["health"]["records"] == 1          # the plain B2 alert still flows
         assert "app_insights" not in data["health"]
+
+
+# ── 2.0-D3 T4 — a budget-cut poll must never report a clean run ──────────────────
+
+
+class TestBudgetDeferralInRunHealth:
+    """The gap this closes: the MSP-B7 budget counts deferred EVENTS, which it can
+    only do for events it actually saw. When capacity is exhausted the connector
+    stops REQUESTING further pages (the desired behaviour), so those polls
+    contribute no deferred-event count and `BudgetReport.breached` stays False — and
+    the run would report a clean budget while having skipped whole subscriptions."""
+
+    def _ingestor(self, org, *, budget):
+        return ae.AzureEventIngestor(
+            org,
+            cfg.AzureEventConfig(
+                environment=cfg.resolve_environment(cfg.AZURE_CLOUD),
+                mode=cfg.MODE_LIGHTHOUSE,
+                subscriptions=[SUB],
+            ),
+            vault_reader=_sp_record,
+            token_fn=_fake_token_fn,
+            alerts_client=_RecordingAlerts([_AI_AVAILABILITY_ALERT]),
+            activity_log_client=_RecordingStream([_AZURE_ACTIVITY]),
+            service_health_client=_RecordingStream([_SERVICE_HEALTH]),
+            budget=budget,
+        )
+
+    def test_a_skipped_poll_degrades_the_reported_status(self, client, monkeypatch):
+        org = "org_az_d3t4_deferred"
+        ingestor = self._ingestor(org, budget=1)
+        monkeypatch.setattr(ae, "build_ingestor", lambda org_id, **kw: ingestor)
+
+        data = runner._ingest_azure_events(org, "run_azure_d3t4_1")
+
+        health = data["health"]
+        # The budget alone would have reported nothing wrong...
+        assert health.get("budget", {}).get("breached") in (False, None)
+        # ...so the deferral block is what keeps it honest.
+        assert health["status"] == "degraded"
+        assert health["reason"] == "run_event_budget_exhausted"
+        assert health["deferrals"]["complete"] is False
+        assert health["deferrals"]["deferred_polls"] >= 1
+
+    def test_a_complete_poll_reports_ok_with_no_deferral_block(self, client, monkeypatch):
+        org = "org_az_d3t4_complete"
+        ingestor = self._ingestor(org, budget=None)
+        monkeypatch.setattr(ae, "build_ingestor", lambda org_id, **kw: ingestor)
+
+        data = runner._ingest_azure_events(org, "run_azure_d3t4_2")
+
+        assert data["health"]["status"] == "ok"
+        assert "deferrals" not in data["health"]
