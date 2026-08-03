@@ -17,12 +17,15 @@
  * customer picks. Saving an empty selection clears it (back to that default).
  * Viewers get a read-only picker (PATCH is analyst+).
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '../common/Toast';
-import { ApiError, apiGet, apiPatch } from '../../lib/apiClient';
+import { ApiError, apiPatch } from '../../lib/apiClient';
 import { useAuthOptional } from '../../context/AuthContext';
 import { isViewerRole } from '../../utils/roles';
+import { useDataCache } from '../../lib/dataCache';
+import { cacheKeys } from '../../lib/cacheKeys';
 import PickerSkeleton from './PickerSkeleton';
+import { usePickerResource } from './usePickerResource';
 
 interface JiraProject {
   key: string;
@@ -55,28 +58,32 @@ export default function JiraProjectPicker({ onSaved }: Props) {
   const auth = useAuthOptional();
   const isViewer = isViewerRole(auth?.user?.role);
 
-  const [available, setAvailable] = useState<JiraProject[]>([]);
+  const cache = useDataCache();
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // True once the user has changed the selection without saving it — a background
+  // refresh must never overwrite an edit in progress.
+  const dirtyRef = useRef(false);
 
-  // Load selectable projects + current selection on mount.
+  // Projects on the SHARED cache: skeleton on the FIRST load only, so a re-render,
+  // a remount, or a background refresh keeps the current list on screen (see
+  // usePickerResource).
+  const { data, firstLoad } = usePickerResource<JiraProjectsResponse>(
+    cacheKeys.connectorJiraProjects,
+    '/api/connectors/jira/projects',
+  );
+  const available: JiraProject[] = data?.available ?? [];
+
+  // Only a saved selection pre-selects; unconfigured leaves it blank (the ingestor
+  // uses the JIRA_PROJECT_KEY default until the customer chooses).
   useEffect(() => {
-    setLoading(true);
-    apiGet<JiraProjectsResponse>('/api/connectors/jira/projects')
-      .then((data) => {
-        setAvailable(data?.available ?? []);
-        // Only a saved selection pre-selects; unconfigured leaves it blank (the
-        // ingestor uses the JIRA_PROJECT_KEY default until the customer chooses).
-        setSelected(data?.configured ? new Set(data.selected ?? []) : new Set());
-      })
-      .catch(() => {
-        // Silent failure — an empty picker is a safe default.
-      })
-      .finally(() => setLoading(false));
-  }, []);
+    if (dirtyRef.current) return;
+    if (!data) return;
+    setSelected(data.configured ? new Set(data.selected ?? []) : new Set());
+  }, [data]);
 
   function toggleProject(key: string) {
+    dirtyRef.current = true;
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -93,6 +100,11 @@ export default function JiraProjectPicker({ onSaved }: Props) {
         { projects: [...selected] },
       );
       setSelected(new Set(data.selected));
+      // The saved response is written into the cache rather than invalidating the
+      // key: an invalidate refetches in the FOREGROUND, which would blank the
+      // picker into its skeleton right after a successful save.
+      dirtyRef.current = false;
+      cache.setData(cacheKeys.connectorJiraProjects, data);
       push(
         data.selected.length > 0
           ? `Scoping discovery to ${data.selected.length} Jira project${data.selected.length > 1 ? 's' : ''}.`
@@ -104,9 +116,9 @@ export default function JiraProjectPicker({ onSaved }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [selected, push, onSaved]);
+  }, [selected, push, onSaved, cache]);
 
-  if (loading) {
+  if (firstLoad) {
     return <PickerSkeleton label="Loading Jira projects" />;
   }
 

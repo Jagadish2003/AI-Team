@@ -235,6 +235,7 @@ const INITIAL: SetupState = {
   templatePreselectedIds: [],
   templateExcludedSystemIds: [],
   templateContributions: {},
+  connectedDefaultsApplied: false,
 };
 
 export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
@@ -486,6 +487,56 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
     });
   }, []);
 
+  /**
+   * Pre-select the workspace's already-connected systems (Screen 2's default).
+   *
+   * A system the workspace has connected is one the user has already decided to
+   * give AgentIQ, so arriving at Screen 2 with every one of them unticked made the
+   * common case a manual re-selection of work already done. Each seeded system
+   * gets the same `defaultWeighting` a manual toggle would give it, so Screen 3's
+   * role/priority logic and the step-2 "has a primary" gate behave identically to
+   * a hand-made selection.
+   *
+   * Three rules:
+   *   - ONE-TIME. Guarded by `connectedDefaultsApplied`, because the catalog is
+   *     refreshed in the background: re-seeding would re-tick a system the user
+   *     deliberately unticked, and their choice has to win.
+   *   - ADDITIVE. Merged with whatever is already selected (a template applied on
+   *     Screen 1 contributes its own systems), never a replacement.
+   *   - CONNECTED ONLY. The caller passes connected system ids; a system that
+   *     still needs auth is a decision the user has not made yet, so it stays off.
+   */
+  const applyConnectedSystemDefaults = useCallback((connectedSystemIds: string[]) => {
+    setState(s => {
+      if (s.connectedDefaultsApplied) return s;
+      const ids = (connectedSystemIds ?? []).filter(Boolean);
+      // Still mark it applied for an empty catalog: the seed has had its one
+      // chance, so a later background refresh cannot retroactively tick systems
+      // once the user has started making choices.
+      if (ids.length === 0) return { ...s, connectedDefaultsApplied: true };
+
+      // A system the user already removed from a template's suggestions stays
+      // removed — the seed must not resurrect an explicit exclusion.
+      const excluded = new Set(s.templateExcludedSystemIds ?? []);
+      const additions = ids.filter(
+        id => !excluded.has(id) && !s.selectedSystemIds.includes(id),
+      );
+      if (additions.length === 0) return { ...s, connectedDefaultsApplied: true };
+
+      const weightings = { ...s.weightings };
+      additions.forEach(id => {
+        if (!weightings[id]) weightings[id] = defaultWeighting(id);
+      });
+
+      return {
+        ...s,
+        selectedSystemIds: [...s.selectedSystemIds, ...additions],
+        weightings,
+        connectedDefaultsApplied: true,
+      };
+    });
+  }, []);
+
   const toggleSalesforceCloud = useCallback((cloudId: string) => {
     setState(s => {
       const isSel = s.selectedSalesforceClouds.includes(cloudId);
@@ -565,6 +616,16 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
       const restored = { ...saved };
       delete restored.selectedSalesforceClouds;
 
+      // A restored session that holds NO systems has made no system choice yet, so
+      // the connected-systems default gets another chance (this restore may have
+      // landed after the seed already ran and replaced its selection with an empty
+      // saved one). A restore that DOES carry systems is the user's own prior
+      // choice and is left exactly as saved — re-seeding would re-add a system
+      // they had removed in an earlier session.
+      if (!saved.selectedSystemIds || saved.selectedSystemIds.length === 0) {
+        restored.connectedDefaultsApplied = false;
+      }
+
       if (catalog && saved.selectedSystemIds) {
         const catalogIds = new Set(getCatalogSystemIds(catalog));
         const templateIds = new Set(saved.templatePreselectedIds ?? []);
@@ -636,6 +697,7 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
     applyTemplate,
     applyIndustryDefaults,
     toggleSystem,
+    applyConnectedSystemDefaults,
     toggleSalesforceCloud,
     setSalesforceClouds,
     updateWeighting,

@@ -482,6 +482,23 @@ def _ingest_ops_event_bridge(org_id: str, run_id: str) -> Dict[str, Any]:
     return {"records": collected, "health": health}
 
 
+def _cloud_event_step_ok(result: Dict[str, Any]) -> bool:
+    """Whether a native cloud-event ingest counts as a SUCCESSFUL discovery step.
+
+    The two native cloud connectors report a health ``status`` rather than raising
+    (both are non-blocking), so the Discovery Progress step outcome is derived from
+    it: ``ok``/``degraded`` are successes — degraded means partial data was ingested
+    and the reason is already carried in the run's ``cloudOpsRuntime`` health block,
+    so a red "failed" row would overstate it. ``unavailable`` (import/config/ingest
+    failure) and ``not_configured`` (selected for the run but no pinned
+    accounts/subscriptions) are failures: the connector delivered nothing, and a
+    green check on a source that produced no events is exactly the dishonest
+    reporting the progress list exists to prevent.
+    """
+    status = str((result.get("health") or {}).get("status") or "").strip().lower()
+    return status in {"ok", "degraded"}
+
+
 def _ingest_aws_events(org_id: str, run_id: str) -> Dict[str, Any]:
     """Drive the native MSP-B1 AWS Event Connector on the shared checkpoint path.
 
@@ -1844,7 +1861,13 @@ def run(
     # OpsEventStream folds duplicate signatures — so native + bridge never
     # double-count. Non-blocking, exactly like the bridge.
     if _any_cloud_ops and "azure_events" in _systems:
+        update_run_step(run_id, "azure_events")
         azure_events_data = _ingest_azure_events(org_id, run_id)
+        update_run_step(
+            run_id,
+            "azure_events",
+            ok=_cloud_event_step_ok(azure_events_data),
+        )
 
     # MSP-B1: the NATIVE AWS Event Connector — the AWS half of the B1/B2 pair, and
     # the live counterpart of the B8 bridge for AWS. Identical gating and posture
@@ -1854,7 +1877,13 @@ def run(
     # assembly seam — where the OpsEventStream folds duplicate signatures, so a
     # native event and its bridged twin never double-count. Non-blocking.
     if _any_cloud_ops and "aws_events" in _systems:
+        update_run_step(run_id, "aws_events")
         aws_events_data = _ingest_aws_events(org_id, run_id)
+        update_run_step(
+            run_id,
+            "aws_events",
+            ok=_cloud_event_step_ok(aws_events_data),
+        )
 
     # Single-ingest: materialization now hands the runner ALL connected systems
     # (not just the ones a probe pre-pass confirmed had data), so guard against

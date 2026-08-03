@@ -7,7 +7,10 @@
  */
 
 import '@testing-library/jest-dom/vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { screen, waitFor, cleanup } from '@testing-library/react';
+// The DB scope pickers read through the shared data cache (see usePickerResource),
+// which the app provides at its root — so these tests mount a provider too.
+import { renderWithCache as render, withCache } from '../test-utils/renderWithCache';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -106,7 +109,9 @@ describe('T2-S12-A T6 Oracle/PostgreSQL scope picker wiring', () => {
     expect(screen.queryByText('Oracle DB scope')).not.toBeInTheDocument();
 
     rerender(
-      <ConnectorDetailPanel connector={connector('postgresql', 'disconnected')} onConfigure={vi.fn()} />,
+      withCache(
+        <ConnectorDetailPanel connector={connector('postgresql', 'disconnected')} onConfigure={vi.fn()} />,
+      ),
     );
     expect(screen.queryByText('PostgreSQL scope')).not.toBeInTheDocument();
   });
