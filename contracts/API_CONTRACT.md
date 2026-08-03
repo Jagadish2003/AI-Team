@@ -1,6 +1,22 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.15
-Date: 2026-07-27
+Version: v1.16
+Date: 2026-08-03
+
+> v1.16 — 2.0-B2 T3 (Cross-Source Entity Enrichment — confirmation review):
+> added authenticated Analyst+ endpoints for the PROPOSED cross-source entity
+> matches the resolution engine refuses to merge on its own:
+> `GET /api/entity-match-proposals[?status=&limit=]`,
+> `GET /api/entity-match-proposals/{proposalId}`,
+> `POST /api/entity-match-proposals/{proposalId}/decision`, and
+> `POST /api/entity-match-proposals/scan`. Only propose-only tiers appear — a pair
+> resolved by an explicit cross-reference or the org alias table auto-merges and is
+> never queued. `action` is one of `confirm | reject`; `changed=false` means the
+> same decision was already current and no history row was added. A decision is
+> RECORDED, not applied: nothing in these endpoints merges the graph. Answered
+> pairs are never re-proposed — a re-scan reports them as
+> `skipped_already_decided` rather than reopening them. Organization-scoped: a
+> proposal id from another org returns 404, indistinguishable from an unknown id.
+> Additive; existing consumers are unaffected.
 
 > v1.15 — MSP-B13 (Cloud Connector Onboarding): added the multi-scope cloud
 > connector routes for `aws_events` / `azure_events` (T3 / AT-745 — create with
@@ -470,6 +486,106 @@ Purpose: return the append-only analyst decision history, newest first.
 Requires: authenticated Analyst or Owner. Each item includes `revision`,
 `action`, `previous_action`, `previous_state`, `resulting_state`, `actor_id`, and
 `decided_at`.
+
+#### GET /api/entity-match-proposals
+Purpose: the organization's review queue of PROPOSED cross-source entity matches
+(2.0-B2 T3). Only propose-only tiers appear here: a pair resolved by an explicit
+cross-reference or by the org alias table auto-merges and is never queued.
+Requires: authenticated Analyst or Owner. The organization comes only from the
+authenticated request.
+
+Query: `status` (optional — `pending | confirmed | rejected`; an unrecognised
+value is a 400), `limit` (optional, 1–1000, default 200).
+
+Response:
+```json
+{
+  "proposals": [
+    {
+      "org_id": "org_001",
+      "proposal_id": "emp_9f2c…",
+      "entity_type": "system",
+      "left_entity_id": "e1",
+      "right_entity_id": "e2",
+      "tier": "name_similarity",
+      "confidence": 0.7,
+      "status": "pending",
+      "evidence": {
+        "subject": {
+          "entity_id": "e1", "display_name": "Billing",
+          "canonical_name": "billing", "entity_type": "system",
+          "source_system": "servicenow", "source_record_id": "sn-2"
+        },
+        "target": {
+          "entity_id": "e2", "display_name": "billing",
+          "canonical_name": "billing", "entity_type": "system",
+          "source_system": "git", "source_record_id": "repo-1"
+        },
+        "tier": "name_similarity",
+        "confidence": 0.7,
+        "reason": "exact normalised name match across sources with a corroborating observed relationship",
+        "corroborating_relationships": [
+          { "relationship_type": "depends_on", "entity_id": "e9" }
+        ]
+      },
+      "revision": 0,
+      "decided_by": null,
+      "decided_at": null,
+      "note": null,
+      "first_proposed_at": "2026-08-03T10:00:00+00:00",
+      "last_proposed_at": "2026-08-03T10:00:00+00:00"
+    }
+  ],
+  "counts": { "pending": 1, "confirmed": 0, "rejected": 0 },
+  "status": "pending"
+}
+```
+
+`counts` always carries all three statuses (zero-filled).
+
+#### GET /api/entity-match-proposals/{proposalId}
+Purpose: one proposal plus its append-only decision history, newest first.
+Requires: authenticated Analyst or Owner. A proposal id belonging to another
+organization returns 404 — indistinguishable from an unknown id.
+
+Response: `{ "proposal": <as above>, "history": [ { "revision", "action",
+"previous_status", "resulting_status", "actor_id", "note", "decided_at" } ] }`
+
+#### POST /api/entity-match-proposals/{proposalId}/decision
+Purpose: confirm or reject one proposed match.
+Requires: authenticated Analyst or Owner.
+
+Request:
+```json
+{ "action": "confirm", "note": "same service, different system of record" }
+```
+
+`action` is one of `confirm | reject` (there is no `defer` — a proposal nobody
+has answered is already `pending`). `changed=false` means the same decision was
+already current and no history row was added. Reversing a decision is allowed and
+APPENDS a new forward row; history is never rewritten.
+
+**A decision is recorded, not applied.** Confirming records a durable,
+attributable statement that two entities are the same thing and stops the pair
+being re-proposed; it does not merge the graph. Applying a confirmed identity
+with its provenance is a separate step.
+
+Response: `{ "proposal", "action", "previous_status", "resulting_status",
+"revision", "changed", "actor_id", "decided_at" }`
+
+#### POST /api/entity-match-proposals/scan
+Purpose: recompute the organization's proposals from the ranked resolution
+engine. Writes nothing to the graph.
+Requires: authenticated Analyst or Owner.
+
+Response:
+```json
+{ "created": 1, "refreshed": 0, "skipped_already_decided": 2,
+  "entity_types": ["system", "team", "project", "object"] }
+```
+
+`skipped_already_decided` counts pairs the engine proposed again that a human has
+already answered — reported rather than hidden, since those never reopen.
 
 ---
 

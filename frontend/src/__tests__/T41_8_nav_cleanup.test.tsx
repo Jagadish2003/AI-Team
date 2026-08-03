@@ -151,7 +151,12 @@ describe("AC1 — Source Intake absent from TopNav", () => {
       "Opportunity Review",
       "Agent Blueprint",
       "Executive Report",
+      // 2.0-B2 T3 — Entity Matches is workspace maintenance (org-scoped, not part
+      // of a run), so it sits AFTER the discovery flow. The invariant this test
+      // is named for is unaffected: Run Health still follows Discovery Run.
+      "Entity Matches",
     ]);
+    expect(labels.indexOf("Run Health")).toBe(labels.indexOf("Discovery Run") + 1);
   });
 });
 

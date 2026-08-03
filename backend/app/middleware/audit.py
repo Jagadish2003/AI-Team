@@ -18,6 +18,10 @@ Event type payload schemas (locked — do not change field names):
     schema_discovered:     org_id, connector_id, schema_count, table_count, timestamp
     runbook_match_decided: org_id, user_id, recurrence_id, action,
                            previous_state, resulting_state, revision
+    entity_match_proposal_decided: org_id, user_id, proposal_id, entity_type,
+                           left_entity_id, right_entity_id, action,
+                           previous_status, resulting_status, revision, tier,
+                           timestamp
 
 Behaviour difference — schema_discovered vs connector_queried:
     schema_discovered  — connector read system catalogues only (no customer data touched).
@@ -70,6 +74,14 @@ RUNBOOK_MATCH_DECIDED = "runbook_match_decided"
 # timestamp. Emitted for SYSTEM transitions too, so a state change never appears
 # in the portfolio without a corresponding audit row.
 OPPORTUNITY_LIFECYCLE_TRANSITIONED = "opportunity_lifecycle_transitioned"
+# 2.0-B2 T3: an Owner/Analyst confirmed or rejected a PROPOSED cross-source entity
+# match. Only propose-only tiers reach the review surface, so this event records a
+# human answering an identity question the platform refused to answer itself. The
+# dedicated append-only entity_match_proposal_history table is the domain record;
+# this places the decision in the organisation-wide audit stream with actor, org,
+# the pair, and the transition. The recompute ("scan") is deliberately NOT audited —
+# it can only add or refresh pending questions, never change an answer.
+ENTITY_MATCH_PROPOSAL_DECIDED = "entity_match_proposal_decided"
 
 # ---------------------------------------------------------------------------
 # Registry — every accepted event type listed here.
@@ -93,6 +105,7 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     INGESTION_CHECKPOINT_RESET,
     RUNBOOK_MATCH_DECIDED,
     OPPORTUNITY_LIFECYCLE_TRANSITIONED,
+    ENTITY_MATCH_PROPOSAL_DECIDED,
 })
 
 # ---------------------------------------------------------------------------

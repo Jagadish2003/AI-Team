@@ -211,10 +211,50 @@ PostgreSQL. `load_resolution_entities` / `load_relationship_index` /
 SQL so a candidate pool cannot contain another tenant's entity in the first
 place.
 
-## What T1 does NOT do
+## The review surface (T3)
 
-**T1 decides; it never writes.** Applying a merge with its provenance, the
-proposal review/confirmation workflow, unmerge, and the corroboration uplift are
-the later 2.0-B2 tasks that consume these decisions. An Owner-facing surface for
-editing the alias table is likewise out of scope here — `put_alias_mappings` is
-the validated seam it will write through.
+Tier 3 produces questions, not answers. `backend/app/entity_match_proposals.py`
+is where those questions are parked so an Owner/Analyst can answer them, and
+where the answer is kept.
+
+| | |
+|---|---|
+| Queue + counts | `GET /api/entity-match-proposals[?status=pending\|confirmed\|rejected]` |
+| One proposal + history | `GET /api/entity-match-proposals/{proposal_id}` |
+| Confirm / reject | `POST /api/entity-match-proposals/{proposal_id}/decision` |
+| Recompute proposals | `POST /api/entity-match-proposals/scan` |
+| Role | `analyst` or above (the story's Owner/Analyst surface; a viewer has nothing actionable) |
+| UI | **Entity Matches** (`/entity-matches`) |
+
+Three rules shape the store:
+
+1. **One question per pair, not one per direction.** The engine resolves each
+   entity independently, so a proposed pair arrives twice (A→B and B→A).
+   `proposal_id_for` derives a deterministic id from the *order-independent* pair,
+   so the two collapse into one row an analyst answers once — and a later scan
+   upserts that row instead of growing a duplicate queue.
+2. **An answered question is never asked again.** The `ON CONFLICT` update is
+   gated on `status = 'pending'`, so a later scan cannot revert an answer or
+   overwrite the evidence it was given against. The count of pairs left alone is
+   *reported* (`skipped_already_decided`), not hidden.
+3. **Recording a decision is not applying one.** Confirming records a durable,
+   attributable statement that two entities are the same thing.
+   `confirmed_pairs(org_id)` is the read a merge applier consumes; this module
+   never writes to `entities` or `entity_relationships`, and a test greps for that.
+
+History is append-only: reversing a decision appends a new forward row, so the
+original answer and its author survive. Every decision also emits the
+`entity_match_proposal_decided` audit event. The scan deliberately does not — it
+can only add or refresh pending questions, never change an answer.
+
+`SCANNABLE_ENTITY_TYPES` excludes `person` on purpose: two real people share a
+name far more often than two systems do, so those proposals would be both the
+highest-risk merge and the hardest to judge from a screen.
+
+## What is still to come
+
+**T1 decides; T3 records a human answer. Neither merges.** Applying a confirmed
+identity to the graph with its provenance, unmerge, and the corroboration uplift
+are the remaining 2.0-B2 tasks. An Owner-facing editor for the alias table is
+also still open — `put_alias_mappings` is the validated seam it will write
+through.

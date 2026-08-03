@@ -1427,6 +1427,67 @@ CREATE INDEX IF NOT EXISTS idx_runbook_match_feedback_org_created
 
 
 --
+-- 2.0-B2 T3 — proposed cross-source entity matches + append-only decision
+-- history (migration 0032).
+--
+-- SOURCE OF TRUTH: database/models/entity_match_proposals.py
+-- (ALL_ENTITY_MATCH_PROPOSAL_DDL), applied by migration 0032. Copied VERBATIM
+-- below — keep identical when the model changes.
+--
+-- These two tables have NO runtime ensure_* helper: app/entity_match_proposals.py
+-- only reads and writes them. Provisioning is therefore the only thing that can
+-- create them, and without them the Entity Match review API fails with
+-- 'relation "entity_match_proposals" does not exist'.
+--
+
+CREATE TABLE IF NOT EXISTS entity_match_proposals (
+    org_id              VARCHAR(64)  NOT NULL,
+    proposal_id         VARCHAR(64)  NOT NULL,
+    entity_type         VARCHAR(32)  NOT NULL,
+    -- The pair, stored in sorted order so (A,B) and (B,A) are ONE row.
+    left_entity_id      VARCHAR(36)  NOT NULL,
+    right_entity_id     VARCHAR(36)  NOT NULL,
+    -- Which resolution tier proposed it (always a propose-only tier — an
+    -- auto-merge tier never reaches this table).
+    tier                VARCHAR(32)  NOT NULL,
+    confidence          FLOAT        NOT NULL,
+    status              VARCHAR(16)  NOT NULL,
+    -- The full proposal snapshot the reviewer sees: both entities' display names
+    -- and source identities, the reason, and the corroborating relationships.
+    evidence_payload    TEXT         NOT NULL,
+    revision            INTEGER      NOT NULL DEFAULT 0,
+    decided_by          VARCHAR(128),
+    decided_at          TIMESTAMPTZ,
+    note                TEXT,
+    first_proposed_at   TIMESTAMPTZ  NOT NULL,
+    last_proposed_at    TIMESTAMPTZ  NOT NULL,
+    created_at          TIMESTAMPTZ  NOT NULL,
+    updated_at          TIMESTAMPTZ  NOT NULL,
+    PRIMARY KEY (org_id, proposal_id)
+);
+
+CREATE TABLE IF NOT EXISTS entity_match_proposal_history (
+    id                  VARCHAR(64)  PRIMARY KEY,
+    org_id              VARCHAR(64)  NOT NULL,
+    proposal_id         VARCHAR(64)  NOT NULL,
+    revision            INTEGER      NOT NULL,
+    action              VARCHAR(16)  NOT NULL,
+    previous_status     VARCHAR(16)  NOT NULL,
+    resulting_status    VARCHAR(16)  NOT NULL,
+    actor_id            VARCHAR(128) NOT NULL,
+    note                TEXT,
+    decided_at          TIMESTAMPTZ  NOT NULL,
+    UNIQUE (org_id, proposal_id, revision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_match_proposals_org_status
+    ON entity_match_proposals (org_id, status, last_proposed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_entity_match_proposal_history_org_proposal
+    ON entity_match_proposal_history (org_id, proposal_id, revision DESC);
+
+
+--
 -- PostgreSQL database dump complete
 --
 
