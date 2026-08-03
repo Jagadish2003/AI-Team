@@ -1,0 +1,321 @@
+{
+  "_meta": {
+    "story": "2.0-D3 T1 — bounded Application Insights read scope",
+    "purpose": "Deterministic offline fixtures for the D3 read scope. The POSITIVE set is the four operational signal kinds D3 ingests; the NEGATIVE set is the raw telemetry and analytics output D3 must never ingest (AC2 is proved by seeding these, not by asserting a docstring).",
+    "surfaces": "Every positive record is shaped as it arrives on a surface MSP-B2 ALREADY reads: Microsoft.AlertsManagement/alerts (alerts) or Microsoft.ResourceHealth/events (health). D3 adds no surface.",
+    "status": "STRUCTURAL SCAFFOLD — shapes follow the Azure common alert schema and the ResourceHealth event shape, and are sufficient to pin classification and scope defence. They are not evidence that a live Application Insights tenant emits these exact field values.",
+    "component": "The monitored application is the Application Insights component /subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/prod/providers/microsoft.insights/components/prod-checkout-api"
+  },
+
+  "positive_alerts": [
+    {
+      "_case": "availability — web/ping test failing from multiple locations",
+      "_expected_signal_kind": "availability",
+      "schemaId": "azureMonitorCommonAlertSchema",
+      "data": {
+        "essentials": {
+          "alertId": "/subscriptions/11111111-2222-3333-4444-555555555555/providers/Microsoft.AlertsManagement/alerts/ai-avail-0001",
+          "alertRule": "prod-checkout-api-availability",
+          "severity": "Sev1",
+          "signalType": "Metric",
+          "monitorCondition": "Fired",
+          "monitoringService": "Platform",
+          "alertTargetIDs": [
+            "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/prod/providers/microsoft.insights/components/prod-checkout-api"
+          ],
+          "firedDateTime": "2026-06-03T09:15:00.000Z",
+          "description": "Availability test failed from 3 of 5 locations"
+        },
+        "alertContext": {
+          "conditionType": "WebtestLocationAvailabilityCriteria",
+          "condition": {
+            "allOf": [
+              {
+                "metricName": "availabilityResults/availabilityPercentage",
+                "operator": "LessThan",
+                "threshold": "90",
+                "metricValue": 40.0
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "_case": "application failure — Smart Detection failure anomaly",
+      "_expected_signal_kind": "application_failure",
+      "schemaId": "azureMonitorCommonAlertSchema",
+      "data": {
+        "essentials": {
+          "alertId": "/subscriptions/11111111-2222-3333-4444-555555555555/providers/Microsoft.AlertsManagement/alerts/ai-appfail-0002",
+          "alertRule": "failureAnomalies",
+          "severity": "Sev2",
+          "signalType": "Log",
+          "monitorCondition": "Fired",
+          "monitoringService": "Smart Detector",
+          "alertTargetIDs": [
+            "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/prod/providers/microsoft.insights/components/prod-checkout-api"
+          ],
+          "firedDateTime": "2026-06-03T10:02:00.000Z",
+          "description": "Abnormal rise in the rate of failed requests"
+        },
+        "alertContext": {
+          "conditionType": "FailureAnomaliesCriteria"
+        }
+      }
+    },
+    {
+      "_case": "dependency failure — outbound dependency call failure rate",
+      "_expected_signal_kind": "dependency_failure",
+      "schemaId": "azureMonitorCommonAlertSchema",
+      "data": {
+        "essentials": {
+          "alertId": "/subscriptions/11111111-2222-3333-4444-555555555555/providers/Microsoft.AlertsManagement/alerts/ai-depfail-0003",
+          "alertRule": "prod-checkout-api-dependency-failures",
+          "severity": "Sev2",
+          "signalType": "Metric",
+          "monitorCondition": "Fired",
+          "monitoringService": "Platform",
+          "alertTargetIDs": [
+            "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/prod/providers/microsoft.insights/components/prod-checkout-api"
+          ],
+          "firedDateTime": "2026-06-03T11:30:00.000Z",
+          "description": "Dependency call failure count exceeded threshold"
+        },
+        "alertContext": {
+          "conditionType": "SingleResourceMultipleMetricCriteria",
+          "condition": {
+            "allOf": [
+              {
+                "metricName": "dependencies/failed",
+                "operator": "GreaterThan",
+                "threshold": "10",
+                "metricValue": 148.0
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "_case": "in scope but UNCLASSIFIABLE — references the component, declares no recognised kind. Must stay signal_kind=null rather than being forced into a bucket.",
+      "_expected_signal_kind": null,
+      "schemaId": "azureMonitorCommonAlertSchema",
+      "data": {
+        "essentials": {
+          "alertId": "/subscriptions/11111111-2222-3333-4444-555555555555/providers/Microsoft.AlertsManagement/alerts/ai-unclassified-0004",
+          "alertRule": "custom-rule-7",
+          "severity": "Sev3",
+          "signalType": "Metric",
+          "monitorCondition": "Fired",
+          "monitoringService": "Platform",
+          "alertTargetIDs": [
+            "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/prod/providers/microsoft.insights/components/prod-checkout-api"
+          ],
+          "firedDateTime": "2026-06-03T12:00:00.000Z",
+          "description": "threshold crossed"
+        },
+        "alertContext": {}
+      }
+    },
+    {
+      "_case": "OUT of App Insights scope — a genuine MSP-B2 alert on a Web App, not an App Insights component. Must remain exactly as B2 handles it (no app_insights annotation), proving D3 does not narrow or re-classify B2.",
+      "_expected_signal_kind": null,
+      "_expected_in_scope": false,
+      "schemaId": "azureMonitorCommonAlertSchema",
+      "data": {
+        "essentials": {
+          "alertId": "/subscriptions/11111111-2222-3333-4444-555555555555/providers/Microsoft.AlertsManagement/alerts/web-0005",
+          "alertRule": "prod-api-latency-high",
+          "severity": "Sev2",
+          "signalType": "Metric",
+          "monitorCondition": "Fired",
+          "monitoringService": "Platform",
+          "alertTargetIDs": [
+            "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/prod/providers/Microsoft.Web/sites/prod-api"
+          ],
+          "firedDateTime": "2026-06-03T12:30:00.000Z",
+          "description": "Average response time exceeded 2000ms"
+        },
+        "alertContext": {}
+      }
+    },
+    {
+      "_case": "OUT of App Insights scope — an alert RULE resource under microsoft.insights, which is NOT a components resource. Guards the resource-type match against a loose 'microsoft.insights' substring test.",
+      "_expected_in_scope": false,
+      "schemaId": "azureMonitorCommonAlertSchema",
+      "data": {
+        "essentials": {
+          "alertId": "/subscriptions/11111111-2222-3333-4444-555555555555/providers/Microsoft.AlertsManagement/alerts/rule-0006",
+          "alertRule": "metric-rule-availability",
+          "severity": "Sev3",
+          "signalType": "Metric",
+          "monitorCondition": "Fired",
+          "monitoringService": "Platform",
+          "alertTargetIDs": [
+            "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/prod/providers/microsoft.insights/metricalerts/rule-a"
+          ],
+          "firedDateTime": "2026-06-03T12:45:00.000Z",
+          "description": "availability rule fired"
+        },
+        "alertContext": {}
+      }
+    }
+  ],
+
+  "positive_health_events": [
+    {
+      "_case": "health transition — the monitored application's health state moved to Degraded",
+      "_expected_signal_kind": "health_transition",
+      "eventDataId": "ai-health-0001",
+      "correlationId": "ai-health-corr-0001",
+      "eventTimestamp": "2026-06-03T13:00:00.0000000Z",
+      "subscriptionId": "11111111-2222-3333-4444-555555555555",
+      "level": "Warning",
+      "operationName": { "value": "Microsoft.ResourceHealth/healthevent/action" },
+      "category": { "value": "ResourceHealth" },
+      "status": { "value": "Active" },
+      "properties": {
+        "title": "Application health degraded",
+        "currentHealthStatus": "Degraded",
+        "previousHealthStatus": "Available",
+        "impactStartTime": "2026-06-03T12:55:00.0000000Z",
+        "impactedResources": [
+          {
+            "resourceId": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/prod/providers/microsoft.insights/components/prod-checkout-api"
+          }
+        ]
+      }
+    },
+    {
+      "_case": "OUT of App Insights scope — a platform Service Health event naming no App Insights component. A genuine MSP-B2 record that must pass through untouched.",
+      "_expected_in_scope": false,
+      "eventDataId": "sh-0002",
+      "correlationId": "sh-corr-0002",
+      "eventTimestamp": "2026-06-03T13:30:00.0000000Z",
+      "subscriptionId": "11111111-2222-3333-4444-555555555555",
+      "level": "Warning",
+      "operationName": { "value": "Microsoft.ResourceHealth/healthevent/action" },
+      "category": { "value": "ServiceHealth" },
+      "status": { "value": "Active" },
+      "properties": {
+        "title": "Networking degradation in East US",
+        "service": "Virtual Machines",
+        "region": "East US",
+        "incidentType": "Incident",
+        "stage": "Active",
+        "trackingId": "SH-ABC-123"
+      }
+    }
+  ],
+
+  "negative_excluded_telemetry": [
+    {
+      "_case": "raw metric samples — an ARM/App Insights metric series. Excluded: metric samples are telemetry.",
+      "_exclusion": "metrics",
+      "value": [
+        {
+          "id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/prod/providers/microsoft.insights/components/prod-checkout-api/providers/Microsoft.Insights/metrics/requests%2Fduration",
+          "name": { "value": "requests/duration" },
+          "unit": "MilliSeconds",
+          "timeseries": [
+            {
+              "data": [
+                { "timeStamp": "2026-06-03T13:00:00Z", "average": 412.7 },
+                { "timeStamp": "2026-06-03T13:01:00Z", "average": 508.1 }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_case": "raw request telemetry — one HTTP request record. Excluded.",
+      "_exclusion": "requests",
+      "name": "Microsoft.ApplicationInsights.dev.Request",
+      "time": "2026-06-03T13:02:11.4410000Z",
+      "iKey": "00000000-0000-0000-0000-000000000000",
+      "data": {
+        "baseType": "RequestData",
+        "baseData": {
+          "id": "|req-1.",
+          "name": "POST /api/checkout",
+          "duration": "00:00:00.4120000",
+          "responseCode": "500",
+          "success": false,
+          "url": "https://prod-checkout-api.example.com/api/checkout"
+        }
+      }
+    },
+    {
+      "_case": "raw trace telemetry — an application log line. Excluded.",
+      "_exclusion": "traces",
+      "itemType": "trace",
+      "timestamp": "2026-06-03T13:02:12.0000000Z",
+      "message": "Retrying payment gateway call, attempt 2",
+      "severityLevel": 2,
+      "operation_Id": "req-1"
+    },
+    {
+      "_case": "raw page-view telemetry — browser navigation. Excluded.",
+      "_exclusion": "pageViews",
+      "itemType": "pageView",
+      "timestamp": "2026-06-03T13:03:00.0000000Z",
+      "name": "Checkout",
+      "url": "https://shop.example.com/checkout",
+      "duration": 1830
+    },
+    {
+      "_case": "raw exception telemetry — a server exception record. Excluded.",
+      "_exclusion": "exceptions",
+      "itemType": "exception",
+      "timestamp": "2026-06-03T13:02:13.0000000Z",
+      "problemId": "System.TimeoutException at PaymentClient.Charge",
+      "outerMessage": "The operation has timed out",
+      "severityLevel": 3
+    },
+    {
+      "_case": "Log Analytics / KQL analytics RESULT — a query response. Excluded: D3 must not call Log Analytics or execute KQL.",
+      "_exclusion": "analytics_query_result",
+      "tables": [
+        {
+          "name": "PrimaryResult",
+          "columns": [
+            { "name": "timestamp", "type": "datetime" },
+            { "name": "name", "type": "string" },
+            { "name": "resultCode", "type": "string" }
+          ],
+          "rows": [
+            ["2026-06-03T13:02:11.441Z", "POST /api/checkout", "500"],
+            ["2026-06-03T13:04:02.118Z", "POST /api/checkout", "500"]
+          ]
+        }
+      ]
+    },
+    {
+      "_case": "SUCCESSFUL dependency telemetry — an individual outbound call that worked. Excluded even though it is dependency-shaped: a dependency-failure ALERT is in scope, individual dependency CALLS are telemetry.",
+      "_exclusion": "successful_dependency_telemetry",
+      "name": "Microsoft.ApplicationInsights.dev.RemoteDependency",
+      "time": "2026-06-03T13:02:10.9000000Z",
+      "data": {
+        "baseType": "RemoteDependencyData",
+        "baseData": {
+          "name": "POST /v1/charges",
+          "target": "payments.example.com",
+          "type": "HTTP",
+          "duration": "00:00:00.0940000",
+          "resultCode": "200",
+          "success": true
+        }
+      }
+    },
+    {
+      "_case": "transaction / profiler style record. Excluded.",
+      "_exclusion": "transactions",
+      "itemType": "transaction",
+      "timestamp": "2026-06-03T13:05:00.0000000Z",
+      "operation_Id": "req-9",
+      "spans": 14
+    }
+  ]
+}

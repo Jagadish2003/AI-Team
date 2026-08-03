@@ -842,6 +842,30 @@ def _ingest_azure_events(org_id: str, run_id: str) -> Dict[str, Any]:
         if budget.get("breached"):
             health["status"] = "degraded"
             health.setdefault("reason", "run_event_budget_exhausted")
+    # 2.0-D3 T1: the Application Insights picture for this poll. Derived from the
+    # emitted records (each in-scope record carries its scope on the WRAPPER), so no
+    # extra plumbing is needed and run health states what the bounded App Insights
+    # read actually produced rather than leaving it implicit inside the connector.
+    # Omitted entirely when the poll met no App Insights signal, so a run with no
+    # App Insights estate reports exactly the health block it reported before D3.
+    app_insights_records = [r for r in collected if r.get("app_insights")]
+    if app_insights_records:
+        by_kind: Dict[str, int] = {}
+        components: set = set()
+        for record in app_insights_records:
+            scope = record.get("app_insights") or {}
+            # An in-scope record whose kind could not be established is counted as
+            # 'unclassified' rather than folded into a real kind — the same honesty
+            # the classifier itself applies (see azure_app_insights.py).
+            kind = scope.get("signal_kind") or "unclassified"
+            by_kind[kind] = by_kind.get(kind, 0) + 1
+            if scope.get("component_id"):
+                components.add(str(scope["component_id"]))
+        health["app_insights"] = {
+            "records": len(app_insights_records),
+            "components": sorted(components),
+            "by_signal_kind": dict(sorted(by_kind.items())),
+        }
     if result.error is not None:
         health["reason"] = type(result.error).__name__
         logger.warning(

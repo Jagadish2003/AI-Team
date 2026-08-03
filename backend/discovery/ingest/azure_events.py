@@ -109,6 +109,16 @@ except ModuleNotFoundError:  # pragma: no cover - import shim
 #: native paths key their evidence pointers identically.
 from .cloud_event_connector import CLOUD_EVENT_ARTIFACT_TYPE
 
+#: 2.0-D3 T1 — the bounded Application Insights read scope. A pure classification
+#: + scope-defence layer over the surfaces this connector ALREADY reads; it adds no
+#: client, credential, or ARM path of its own (see azure_app_insights.py).
+from .azure_app_insights import (
+    SURFACE_AZURE_MONITOR,
+    SURFACE_AZURE_SERVICE_HEALTH,
+    app_insights_scope,
+    is_excluded_telemetry,
+)
+
 logger = logging.getLogger(__name__)
 
 #: The transport provider tag stamped on emitted records (not a detector field —
@@ -768,6 +778,7 @@ class AzureEventIngestor(ChangeBasedIngestor):
         stream: str,
         surface: str,
         admission: Optional[Admission] = None,
+        app_insights: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Wrap a normalised OperationalEvent as a pipeline delta record.
 
@@ -785,6 +796,13 @@ class AzureEventIngestor(ChangeBasedIngestor):
 
         ``artifact_id`` keeps the surface in the key so two streams can never
         collide on a shared provider event id.
+
+        ``app_insights`` (2.0-D3 T1) is present ONLY when the record explicitly
+        referenced an Application Insights component. Like ``account_scope`` and
+        ``surface`` it lives on the WRAPPER, never on the event, so D3 invents no
+        provider-specific detector field — turning it into event-level
+        normalisation is T2's B0 mapper. Absent when out of scope, so a
+        non-App-Insights record is byte-identical to what B2 emitted before D3.
         """
         return {
             "artifact_id": f"{PROVIDER_AZURE}:{surface}:{provider_event_id}",
@@ -799,6 +817,7 @@ class AzureEventIngestor(ChangeBasedIngestor):
             "event": event.to_dict(),
             "evidence_pointer": event.provenance,
             **({"admission": admission.disposition} if admission is not None else {}),
+            **({"app_insights": app_insights} if app_insights else {}),
         }
 
     # ── the shared per-subscription stream engine (reused by all 3 streams) ──────
@@ -814,6 +833,7 @@ class AzureEventIngestor(ChangeBasedIngestor):
         ts_of,
         id_of,
         prefilter=None,
+        scope_of=None,
     ) -> AzureStreamResult:
         """Poll ONE event stream for every pinned subscription, incrementally.
 
@@ -831,6 +851,20 @@ class AzureEventIngestor(ChangeBasedIngestor):
         unadvanced while the others continue; a single malformed record is
         loud-skipped without failing the subscription. A budget deferral is likewise
         loud and leaves the checkpoint unadvanced (no silent thinning).
+
+        Two 2.0-D3 T1 additions, both additive to the above:
+
+        * **Scope defence (D3-AC2).** Every fetched record passes the
+          ``is_excluded_telemetry`` gate BEFORE it can be mapped, so Application
+          Insights raw telemetry or Log Analytics/KQL output seeded into any stream
+          is dropped loudly and counted (``telemetry_excluded``) instead of becoming
+          an event. The gate short-circuits on the alert / activity / health
+          envelopes, so it cannot touch a record MSP-B2 legitimately ingests.
+        * **App Insights scope (D3-AC1).** ``scope_of`` resolves a record's
+          Application Insights component by EXPLICIT reference; when it does, the
+          scope rides the record wrapper and the count appears in run health
+          (``app_insights``). A ``None`` scope changes nothing, so D3 never
+          re-classifies or narrows a B2 record.
         """
         env = self.config.environment
         next_checkpoints: Dict[str, str] = dict(checkpoints)
@@ -874,11 +908,28 @@ class AzureEventIngestor(ChangeBasedIngestor):
                         _STREAM_LABEL.get(stream, stream), sub,
                     )
                 in_scope = [r for r in fetched if prefilter(r)] if prefilter else list(fetched)
-                new_records = _filter_new(in_scope, since_iso, ts_of)
+                # 2.0-D3 T1 / AC2 — the scope-defence gate. Sits ahead of the
+                # incremental filter so an excluded record can never advance a
+                # checkpoint either: it is not data this connector processes at all.
+                telemetry_excluded = 0
+                kept: List[Dict[str, Any]] = []
+                for candidate in in_scope:
+                    if is_excluded_telemetry(candidate):
+                        telemetry_excluded += 1
+                        logger.warning(
+                            "azure_events: %s DROPPED an out-of-scope record for "
+                            "subscription %s — Application Insights raw telemetry / "
+                            "analytics output is not ingested (2.0-D3 scope defence)",
+                            stream, sub,
+                        )
+                        continue
+                    kept.append(candidate)
+                new_records = _filter_new(kept, since_iso, ts_of)
                 emitted = 0
                 skipped = 0
                 deduped = 0
                 deferred = 0
+                app_insights_count = 0
                 for raw in new_records:
                     try:
                         event = mapper(raw, org_id=self.org_id)
@@ -906,10 +957,15 @@ class AzureEventIngestor(ChangeBasedIngestor):
                         # handled by B7, not silently dropped.
                         deduped += 1
                         continue
+                    # D3 T1: explicit-reference App Insights scope, transport-only.
+                    ai_scope = scope_of(raw) if scope_of else None
+                    if ai_scope is not None:
+                        app_insights_count += 1
                     records.append(
                         self._to_record(
                             event, sub, id_of(raw),
                             stream=stream, surface=surface, admission=admission,
+                            app_insights=ai_scope.to_dict() if ai_scope else None,
                         )
                     )
                     emitted += 1
@@ -931,6 +987,11 @@ class AzureEventIngestor(ChangeBasedIngestor):
                     **({"in_scope": len(in_scope)} if prefilter else {}),
                     **({"skipped": skipped} if skipped else {}),
                     **({"deduped": deduped} if deduped else {}),
+                    # D3 T1: both are omitted when zero, so a stream that met no
+                    # App Insights signal and no excluded record reports exactly the
+                    # status shape it reported before D3.
+                    **({"telemetry_excluded": telemetry_excluded} if telemetry_excluded else {}),
+                    **({"app_insights": app_insights_count} if app_insights_count else {}),
                     **(
                         {
                             "reason": "run_event_budget_exhausted",
@@ -948,10 +1009,11 @@ class AzureEventIngestor(ChangeBasedIngestor):
                 # nothing here is computed for logging alone.
                 logger.info(
                     "azure_events: stream=%s subscription=%s polled=%d in_scope=%d "
-                    "new=%d mapped=%d mapper_skipped=%d deduped=%d deferred=%d "
-                    "since=%s checkpoint=%s",
-                    stream, sub, len(fetched), len(in_scope), len(new_records),
-                    emitted, skipped, deduped, deferred,
+                    "telemetry_excluded=%d new=%d mapped=%d mapper_skipped=%d "
+                    "deduped=%d deferred=%d app_insights=%d since=%s checkpoint=%s",
+                    stream, sub, len(fetched), len(in_scope), telemetry_excluded,
+                    len(new_records), emitted, skipped, deduped, deferred,
+                    app_insights_count,
                     since_iso or "(first_run)",
                     next_checkpoints.get(sub) or "(unchanged)",
                 )
@@ -1072,6 +1134,12 @@ class AzureEventIngestor(ChangeBasedIngestor):
         Alerts ONLY (scope defence); normalised through ``map_azure_monitor``
         (T2-AC3). See :meth:`_ingest_stream` for the per-subscription checkpoint /
         failure-isolation semantics.
+
+        2.0-D3 T1: this is one of the two surfaces that can carry an Application
+        Insights operational signal (availability, application-failure and
+        dependency-failure alerts), so it resolves the App Insights scope by
+        explicit component reference. The alert set read here is UNCHANGED — D3
+        classifies, it does not filter.
         """
         client = self._alerts_client or default_alerts_client()
         return self._ingest_stream(
@@ -1082,6 +1150,7 @@ class AzureEventIngestor(ChangeBasedIngestor):
             mapper=map_azure_monitor,
             ts_of=alert_fired_at,
             id_of=alert_id,
+            scope_of=lambda raw: app_insights_scope(raw, surface=SURFACE_AZURE_MONITOR),
         )
 
     # ── Activity Log (administrative) polling (MSP-B2 T3 / AT-650) ───────────────
@@ -1114,6 +1183,11 @@ class AzureEventIngestor(ChangeBasedIngestor):
 
         Normalised through ``map_service_health`` (T3-AC2/AC3). Same per-subscription
         checkpoint and failure-isolation semantics as the other streams.
+
+        2.0-D3 T1: the second surface that can carry an Application Insights
+        operational signal — a health/failure event whose impacted resources
+        explicitly name an App Insights component is a health transition for the
+        monitored application. The event set read here is likewise UNCHANGED.
         """
         client = self._service_health_client or default_service_health_client()
         return self._ingest_stream(
@@ -1124,6 +1198,9 @@ class AzureEventIngestor(ChangeBasedIngestor):
             mapper=map_service_health,
             ts_of=service_health_timestamp,
             id_of=service_health_id,
+            scope_of=lambda raw: app_insights_scope(
+                raw, surface=SURFACE_AZURE_SERVICE_HEALTH
+            ),
         )
 
     # ── Admission read side (the deduplicated view) ─────────────────────────────
