@@ -83,11 +83,11 @@ describe("TopNav — org name never crowds out the nav", () => {
       "Integration Hub",
       "Stack Builder",
       "Discovery Run",
-      "Run Health",
       "Source Intelligence",
       "Opportunity Review",
       "Agent Blueprint",
       "Executive Report",
+      "Run Health",
     ];
     for (const label of expectedItems) {
       // getAllByText: labels appear in both the desktop and mobile nav lists.
