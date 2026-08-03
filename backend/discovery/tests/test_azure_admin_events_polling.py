@@ -115,7 +115,9 @@ class TestAC1ActivityLog:
     def test_activity_record_shape(self):
         client = FakeStreamClient({SUB_A: [_activity(SUB_A, "e1", "2026-06-01T12:00:00Z")]})
         [rec] = _ingestor([SUB_A], activity=client).ingest_activity_log(token="T").records
-        assert rec["event"]["source_system"] == "azure_activity"
+        # AC4: the event carries the provider family; the stream is on the wrapper.
+        assert rec["event"]["source_system"] == "azure"
+        assert rec["surface"] == "azure_activity"
         assert rec["event"]["event_class"] == "configuration"   # ...write → configuration
         assert rec["account_scope"] == SUB_A
         assert rec["provider"] == "azure"
@@ -173,7 +175,8 @@ class TestAC2ServiceHealth:
         ]})
         recs = {r["provider_event_id"]: r for r in
                 _ingestor([SUB_A], health=client).ingest_service_health(token="T").records}
-        assert recs["SH-1"]["event"]["source_system"] == "azure_service_health"
+        assert recs["SH-1"]["event"]["source_system"] == "azure"
+        assert recs["SH-1"]["surface"] == "azure_service_health"
         assert recs["SH-1"]["event"]["event_class"] == "error"          # active incident
         assert recs["SH-2"]["event"]["event_class"] == "state_change"   # resolved maintenance
         assert recs["SH-1"]["account_scope"] == SUB_A
@@ -293,8 +296,12 @@ class TestIngestAll:
         alerts, activity, health = self._clients()
         ing = _ingestor([SUB_A], activity=activity, health=health, alerts=alerts)
         result = ing.ingest_all(token="T")
-        sources = {r["event"]["source_system"] for r in result.records}
-        assert sources == {"azure_monitor", "azure_activity", "azure_service_health"}
+        # Every event carries the one provider family (AC4); the three streams stay
+        # individually visible through the wrapper's `surface`.
+        assert {r["event"]["source_system"] for r in result.records} == {"azure"}
+        assert {r["surface"] for r in result.records} == {
+            "azure_monitor", "azure_activity", "azure_service_health"
+        }
         assert result.emitted_count == 3
 
     def test_ingest_all_status_keyed_by_stream_and_sub(self):

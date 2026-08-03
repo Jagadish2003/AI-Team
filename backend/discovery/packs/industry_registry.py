@@ -131,7 +131,17 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
         label="Financial services",
         # R191-R1 T3: sqlserver_opsignal added — the shipped native-DB pack
         # serves the new database anchor below.
-        pack_hints=["ncino", "service_cloud", "sqlserver_opsignal"],
+        # 2.0-D1 T4: financial_services_cloud added — the pack now SHIPS (T1
+        # registration, T2 detectors, T3 scorer), which is the condition the
+        # story's registry-honesty rule sets for an entry appearing on a
+        # selectable surface. A contract test pins the invariant directly:
+        # if this pack is hinted here it must ship detectors.
+        pack_hints=[
+            "ncino",
+            "financial_services_cloud",
+            "service_cloud",
+            "sqlserver_opsignal",
+        ],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals", "compliance_risk"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests", "compliance_risk"]),
@@ -439,6 +449,69 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
                 "engineering-change source today; GitLab is not yet connectable.",
             ),
         ],
+    ),
+
+    # 2.0-D2 T4: the Insurance industry — added so Insurance appears in the
+    # industry selector with the SAME honest anchoring the Insurance template
+    # (template_registry.py "insurance") already carries. D2 is a configuration
+    # exercise on the existing Service Cloud pack, so:
+    #
+    #   * pack_hints anchors on service_cloud ONLY — no insurance domain pack
+    #     exists, and the registry-honesty rule forbids hinting one that does
+    #     not ship (mirrors how logistics/manufacturing were re-anchored in
+    #     R191-R1 T1). sqlserver_opsignal is NOT added here: unlike the six
+    #     industries T3 gave a database anchor, this industry's whole purpose is
+    #     to match the Insurance TEMPLATE's shape, and the template names no
+    #     database source — adding one would make the two disagree.
+    #   * system_defaults + recommended_systems use EXACTLY the template's
+    #     canonical system ids and roles (salesforce_sc system_of_record;
+    #     servicenow/jira workflow_system; teams/slack operational_signal_source;
+    #     confluence/sharepoint documentation_system), so the industry and the
+    #     template never disagree about the primary pack or the workflow shape
+    #     (a contract test in test_insurance_anchoring.py pins this).
+    #
+    # HONEST SYSTEM ANCHORING (D2 AC3 / R191-R1). Every id below resolves to a
+    # SHIPPED ingestor — salesforce_sc through the base Salesforce ingestor +
+    # its service_cloud product-pack declaration, the rest through their own
+    # discovery/ingest modules. No insurance platform (Guidewire, Duck Creek,
+    # SAP, Dynamics 365, Zendesk, …) is anchored here: none has a shipped
+    # ingestor, so anchoring one would advertise support the app does not have.
+    # There is no roadmap_systems entry either — the story does not commit an
+    # insurance-platform connector to any release, so inventing a target would
+    # be dishonest; if one is ever demanded it enters roadmap_systems with a
+    # real target, staying non-connectable. The R191-R1 cross-check
+    # (test_r191_r1_ingestor_registry_enforcement.py) now covers this entry, and
+    # a negative control proves the gate rejects an unimplemented platform.
+    "insurance": IndustryConfig(
+        industry_id="insurance",
+        label="Insurance",
+        pack_hints=["service_cloud"],
+        system_defaults={
+            # Claims + policy-service records are the primary workload — the
+            # Service Cloud system of record (matches the template's role).
+            "salesforce_sc":  SystemDefaultConfig("system_of_record",   "primary",   ["service_casework", "intake_requests", "compliance_risk"]),
+            # Assignment and escalation history — workflow systems, exactly as
+            # the template classes them (workflow_system, not the
+            # operational_signal_source other industries give ServiceNow/Jira).
+            "servicenow":     SystemDefaultConfig("workflow_system",    "secondary", ["backlog_work_queues", "handoffs_routing"]),
+            "jira":           SystemDefaultConfig("workflow_system",    "secondary", ["backlog_work_queues", "handoffs_routing"]),
+            # Corroborating handoff signals (capped at MEDIUM by corroboration,
+            # as every conversation source is).
+            "teams":          SystemDefaultConfig("operational_signal_source", "optional", ["communications", "handoffs_routing"]),
+            "slack":          SystemDefaultConfig("operational_signal_source", "optional", ["communications", "handoffs_routing"]),
+            # Policy wording, claims procedure and underwriting guidance.
+            "confluence":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
+            "sharepoint":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
+        },
+        recommended_systems=["servicenow", "jira", "confluence", "sharepoint"],
+        llm_context_suffix=(
+            "Insurance context. Claims handling, underwriting review, and "
+            "policy servicing are the primary friction categories. Claim "
+            "intake and status handoffs, underwriting referral approvals, and "
+            "policy-endorsement and cancellation servicing are priority "
+            "patterns. Never suggest automated claim, coverage, or "
+            "underwriting decisions."
+        ),
     ),
 }
 

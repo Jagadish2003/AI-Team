@@ -1,4 +1,5 @@
 import type { Decision, Confidence } from "./common";
+import type { InterventionProjection } from "./enrichment";
 
 export type Tier = "Quick Win" | "Strategic" | "Complex";
 export type OpportunityTier = Tier; // backward-compat alias
@@ -24,6 +25,7 @@ export interface OpportunityOverride {
 export interface OpportunityCandidate {
   id: string;
   identifier?: string;             // legacy mock field
+  opportunity_identity?: string;    // stable cross-run outcome/lifecycle key
   title: string;
   category: string;
   tier: Tier;
@@ -43,6 +45,9 @@ export interface OpportunityCandidate {
   corroboration_label?: string | null;
   triple_corroboration?: boolean;
   corroboration_rule_ids?: string[];
+  // 2.0-A1 — intervention projection, stored with the opportunity by the run
+  // pipeline. Absent on older runs and on findings that are not projectable.
+  projection?: InterventionProjection | null;
   // R191-P1 T3 — the pack (and its version at run time) that produced this
   // finding. Optional/additive: a single-pack run stamps its one pack; a
   // multi-pack run stamps whichever pack's detector fired. Absent on runs

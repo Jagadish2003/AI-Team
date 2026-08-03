@@ -327,9 +327,17 @@ class OpsEventStream:
             self._budget.charge()
             return Admission(self._signals[key], "new")
 
-        # An at-least-once redelivery of a firing already counted — idempotent.
+        # An at-least-once redelivery of a firing already counted — idempotent in
+        # the FOLD (no count, no span change), but still CHARGED to the budget.
+        # The budget bounds the work a run does, not the facts it ends up with: a
+        # redelivery was fetched, mapped and admitted, and the poll loop stops
+        # fetching on `has_capacity()`. Making redeliveries free would leave a
+        # provider redelivery storm doing unbounded fetch+map work with the budget
+        # never moving — the hang class the poll bounds exist to prevent. They are
+        # counted separately so a depleted budget is explainable rather than
+        # mysterious (see BudgetReport.duplicates).
         if event.signal_id in existing.provider_event_ids:
-            self._budget.charge()
+            self._budget.charge(duplicate=True)
             return Admission(existing, "duplicate")
 
         self._fold(existing, event, dt)
@@ -410,6 +418,19 @@ class OpsEventStream:
         ]
         signals.sort(key=lambda s: (s.event_signature, s.resource_id, s.active_period_start))
         return signals
+
+    def has_capacity(self) -> bool:
+        """True while the run's event budget can still process another event.
+
+        The read side of MSP-B7 T4's budget, exposed so a POLLING producer can stop
+        *fetching* once the budgeted window is full instead of paying for provider
+        pages whose events :meth:`admit` will only defer. The budget's purpose is to
+        stop the run processing everything (see :mod:`discovery.signals.budget`);
+        without this a producer with an unbounded backlog keeps calling the provider
+        forever while every event is deferred — the budget bounds the data but never
+        the work. An unbudgeted stream always has capacity.
+        """
+        return self._budget.has_capacity()
 
     def budget_report(self) -> BudgetReport:
         """The run's event-budget outcome (MSP-B7 T4).

@@ -1,6 +1,26 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.15
-Date: 2026-07-27
+Version: v1.17
+Date: 2026-07-31
+
+> v1.17 - 2.0-A2 T7 (No outcome without action): outcome measurement writes
+> now require a current customer-recorded action on the opportunity lifecycle.
+> Reopened opportunities clear that action and invalidate dependent stored
+> movement rows; outcome read surfaces suppress invalidated/stale movements
+> rather than exposing them as customer-visible outcomes. No frontend type shape
+> changed.
+
+> v1.16 - 2.0-A2 T6 (Outcome surfaces): added org-scoped, cross-run outcome
+> surfaces `GET /api/outcomes` and `GET /api/outcomes/{opportunityIdentity}`
+> (Analyst+), keyed by `opportunity_identity` rather than a single run. Responses
+> are assembled from stored lifecycle and movement artifacts only, include
+> `numberRefs[]` so displayed numbers resolve to evidence plus baseline/current
+> run ids, and portfolio aggregates require `caveatedMeasurementCount`.
+> `GET /api/runs/{runId}/executive-report` now includes `outcomeSection`, built
+> from stored movement rows for that run and persisted during materialization.
+> Frontend schemas changed in `frontend/src/types/outcome.ts`,
+> `frontend/src/types/executiveReport.ts`, and
+> `frontend/src/types/analystReview.ts`; this version requires FE and BE lead
+> sign-off before merge.
 
 > v1.15 — MSP-B13 (Cloud Connector Onboarding): added the multi-scope cloud
 > connector routes for `aws_events` / `azure_events` (T3 / AT-745 — create with
@@ -580,21 +600,186 @@ Response: `PilotRoadmapModel` (`src/types/pilotRoadmap.ts`)
 
 ---
 
-### H) Executive Report Stub (Screen 10)
+### H) Executive Report (Screen 10)
 
 #### GET /api/runs/{runId}/executive-report
-Response (v1 stub shape):
+Response:
 ```json
 {
   "confidence": "High",
-  "sourcesAnalyzed": { "recommendedConnected": 2, "totalConnected": 5 },
+  "sourcesAnalyzed": {
+    "recommendedConnected": 2,
+    "totalConnected": 5,
+    "uploadedFiles": 0,
+    "sampleWorkspaceEnabled": false
+  },
   "topQuickWins": [],
   "snapshotBubbles": [{ "x": 90, "y": 55, "r": 18 }],
-  "roadmapHighlights": { "next30Count": 3, "next60Count": 2, "next90Count": 1, "blockerCount": 4 }
+  "roadmapHighlights": {
+    "next30Count": 3,
+    "next60Count": 2,
+    "next90Count": 1,
+    "blockerCount": 4
+  },
+  "aiExecutiveSummary": "",
+  "outcomeSection": {
+    "schemaVersion": "1.0.0",
+    "runId": "run_123",
+    "generatedFrom": "stored_movement_records",
+    "summary": "Stored movement measurements are compared against baseline following recorded actions.",
+    "aggregates": {
+      "actionedOpportunityCount": 2,
+      "measuredOpportunityCount": 2,
+      "measurementCount": 2,
+      "caveatedMeasurementCount": 1,
+      "materialCaveatMeasurementCount": 0,
+      "byDirection": { "improved": 1, "worsened": 1 },
+      "byComparability": { "comparable": 1, "weakly_comparable": 1 },
+      "byProjectionValidation": { "within_band": 1, "too_early": 1 },
+      "numberRefs": []
+    },
+    "highlights": [],
+    "numberRefs": []
+  }
 }
 ```
 
 ---
+
+### I) Outcomes (2.0-A2 T6)
+
+Outcome data is cross-run because each movement compares a frozen baseline run
+with a current run. These routes are org-scoped and keyed by
+`opportunity_identity`; they do not use a latest-run fallback and do not
+recompute measurements on read. Requires authentication and Analyst role.
+Unactioned and reopened opportunities are not outcome resources: the per-
+opportunity outcome route returns 404 when the lifecycle has no current recorded
+action, and portfolio/report aggregates exclude any movement rows invalidated by
+action reversal.
+
+#### GET /api/outcomes
+
+Query filters:
+`comparabilityVerdict[]`, `projectionVerdict[]`, `pack[]`, `detector[]`,
+`confidence[]`, `limit`.
+
+Response: `OutcomePortfolioView` (`frontend/src/types/outcome.ts`)
+```json
+{
+  "schemaVersion": "1.0.0",
+  "orgId": "org_123",
+  "filters": {
+    "comparabilityVerdict": [],
+    "projectionVerdict": [],
+    "pack": [],
+    "detector": [],
+    "confidence": []
+  },
+  "aggregates": {
+    "actionedOpportunityCount": 4,
+    "measuredOpportunityCount": 3,
+    "measurementCount": 5,
+    "caveatedMeasurementCount": 2,
+    "materialCaveatMeasurementCount": 1,
+    "byDirection": { "improved": 3, "worsened": 1, "unchanged": 1 },
+    "byComparability": { "comparable": 3, "weakly_comparable": 2 },
+    "byProjectionValidation": { "within_band": 2, "above_band": 1, "too_early": 2 },
+    "numberRefs": [
+      {
+        "id": "aggregate:caveatedMeasurementCount",
+        "label": "Measurements carrying caveats",
+        "value": 2,
+        "unit": "count",
+        "evidence": {
+          "measurementCount": 2,
+          "runIds": ["run_baseline", "run_current"],
+          "runPairs": [
+            {
+              "opportunityIdentity": "opp_stable_identity",
+              "baselineRunId": "run_baseline",
+              "currentRunId": "run_current"
+            }
+          ],
+          "lifecycles": [
+            {
+              "opportunityIdentity": "opp_stable_identity",
+              "state": "measured",
+              "actionDate": "2026-06-15",
+              "lastRunId": "run_current"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "count": 4,
+  "items": []
+}
+```
+
+`caveatedMeasurementCount` is required on every aggregate response and is
+computed at aggregation time. A missing field is a schema violation.
+
+#### GET /api/outcomes/{opportunityIdentity}
+
+Response: `OpportunityOutcomeView` (`frontend/src/types/outcome.ts`)
+```json
+{
+  "schemaVersion": "1.0.0",
+  "orgId": "org_123",
+  "opportunityIdentity": "opp_stable_identity",
+  "lifecycle": { "state": "measured", "actionDate": "2026-06-15" },
+  "measurementCount": 1,
+  "caveatedMeasurementCount": 0,
+  "latestMeasurement": {
+    "opportunityIdentity": "opp_stable_identity",
+    "detectorId": "HANDOFF_FRICTION",
+    "actionDate": "2026-06-15",
+    "measuredAt": "2026-07-31T00:00:00+00:00",
+    "baselineRunId": "run_baseline",
+    "currentRunId": "run_current",
+    "primaryMovement": {
+      "signalName": "owner_changes_90d",
+      "baselineValue": 240,
+      "currentValue": 150,
+      "delta": -90,
+      "deltaPct": -37.5,
+      "direction": "improved"
+    },
+    "comparability": { "verdict": "comparable", "reasons": [] },
+    "projectionValidation": { "verdict": "within_band" },
+    "confounderSummary": { "count": 0, "materialCount": 0 },
+    "confounders": [],
+    "numberRefs": [
+      {
+        "id": "opp_stable_identity:run_current:owner_changes_90d:delta",
+        "label": "Movement against baseline",
+        "value": -90,
+        "unit": null,
+        "signalName": "owner_changes_90d",
+        "field": "delta",
+        "evidence": {
+          "opportunityIdentity": "opp_stable_identity",
+          "signalName": "owner_changes_90d",
+          "baselineRunId": "run_baseline",
+          "currentRunId": "run_current",
+          "postActionRunIds": ["run_current"],
+          "baseline": { "runId": "run_baseline", "value": 240, "window": {} },
+          "current": { "runId": "run_current", "value": 150, "window": {} },
+          "confounderSummary": { "count": 0, "materialCount": 0 }
+        }
+      }
+    ]
+  },
+  "measurements": [],
+  "numberRefs": [],
+  "emptyState": null
+}
+```
+
+Outcome vocabulary across API, UI, report and export must be
+movement-and-comparison shaped. The contract forbids outcome text that claims
+causation, credit or financial return.
 
 ## DoD (Contract Freeze)
 - Every `src/data/mock*.json` file is listed in `mock_to_endpoint_map.json` and mapped to an endpoint above.

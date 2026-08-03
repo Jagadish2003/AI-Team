@@ -306,6 +306,50 @@ describe('dataCache', () => {
     }
   });
 
+  it('does not flash a cached error at a consumer that is about to retry it', async () => {
+    // The Blueprint evidence panel: a background prefetch warms
+    // `runs/{id}/evidence` as soon as the run STARTS, and that endpoint 404s until
+    // the run materialises the artifact. A page mounting later inherits the cached
+    // failure and — because prime() runs in a mount EFFECT, one render after the
+    // first — rendered its error panel for a frame before the retry's loading
+    // state arrived. prime() is contractually going to retry, so that error is
+    // already superseded and must not reach the consumer.
+    const fetcher = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('404'))
+      .mockResolvedValue(['ev-1']);
+
+    const seen: string[] = [];
+    function Consumer() {
+      const r = useResource<string[]>('runs/r3/evidence', fetcher);
+      seen.push(r.error ? 'error' : r.loading ? 'loading' : r.data ? 'data' : 'empty');
+      return <span data-testid="v">{seen[seen.length - 1]}</span>;
+    }
+
+    // One provider (one store) throughout — the consumer mounts, fails, unmounts,
+    // then a later page mounts onto the SAME cached failure.
+    function Harness() {
+      const [mounted, setMounted] = React.useState(true);
+      return (
+        <div>
+          <button onClick={() => setMounted((m) => !m)}>toggle</button>
+          {mounted ? <Consumer /> : null}
+        </div>
+      );
+    }
+    render(<Harness />, { wrapper });
+
+    await waitFor(() => expect(screen.getByTestId('v').textContent).toBe('error'));
+    fireEvent.click(screen.getByText('toggle')); // unmount — prefetch failure stays cached
+
+    seen.length = 0;
+    fireEvent.click(screen.getByText('toggle')); // the page the user navigates to
+
+    await waitFor(() => expect(screen.getByTestId('v').textContent).toBe('data'));
+    expect(seen).not.toContain('error');
+    expect(seen[0]).toBe('loading');
+  });
+
   it('is inert (no fetch, no throw) outside a DataCacheProvider', () => {
     const fetcher = vi.fn();
     const { result } = renderHook(() => useResource('x', fetcher)); // no wrapper

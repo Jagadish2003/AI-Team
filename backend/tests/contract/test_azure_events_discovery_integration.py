@@ -137,13 +137,26 @@ class TestNativeAzureIngestionInvoked:
         # OperationalEvents emitted in the bridge-compatible record shape.
         assert data["health"]["status"] == "ok"
         assert len(data["records"]) == 3
-        source_systems = {r["event"]["source_system"] for r in data["records"]}
-        assert source_systems == {"azure_monitor", "azure_activity", "azure_service_health"}
+
+        # AC4 transport re-stamp: the EVENT's source_system is the provider FAMILY,
+        # so a native event equals its bridged twin in every field but the signature's
+        # own inputs. The per-stream MSP-B0 source system is not lost — it moves to the
+        # transport wrapper as `surface` (with the stream key alongside it), mirroring
+        # the shared AWS cloud-event skeleton's per-surface record metadata.
+        assert {r["event"]["source_system"] for r in data["records"]} == {"azure"}
+        assert {r["surface"] for r in data["records"]} == {
+            "azure_monitor", "azure_activity", "azure_service_health",
+        }
+        assert {r["stream"] for r in data["records"]} == {
+            "alerts", "activity_log", "service_health",
+        }
         # Every record carries the provider-agnostic B0 event payload + provenance.
         for record in data["records"]:
             assert record["provider"] == "azure"
             assert record["account_scope"] == SUB
             assert "account_scope" not in record["event"]  # no invented detector field
+            # The surface stays on the wrapper only — never invented onto the event.
+            assert "surface" not in record["event"]
 
     def test_not_configured_connector_contributes_nothing(self, client, monkeypatch):
         monkeypatch.setattr(ae, "build_ingestor", lambda org_id, **kw: None)

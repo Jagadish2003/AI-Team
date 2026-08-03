@@ -104,10 +104,25 @@ CREATE_VECTOR_EXTENSION = "CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA pub
 # dimension) on purpose: the embedding model — and therefore the vector
 # dimension — is a per-deployment decision made through the model gateway
 # (R16-D1), and vectors from different models are never compared (AC8), so the
-# store must hold whatever dimension the active model emits. A dimensioned ANN
-# index (HNSW / IVFFLAT) is deliberately deferred to the retrieval-API task (T4),
-# which pins the dimension for a deployment; org-scoped correctness does not
-# depend on it — every query is bounded by ``WHERE org_id = %s`` first.
+# store must hold whatever dimension the active model emits. The shipped
+# embedding model (text-embedding-3-small) emits 1536; text-embedding-3-large
+# emits 3072, and the R18-B2 T5 backfill migrates between them in place — which
+# only works because the column accepts both.
+#
+# NO dimensioned ANN index (HNSW / IVFFLAT) is created, and this is a decision
+# rather than an omission. pgvector can only build one on a column with a FIXED
+# dimension, so adding it means pinning this column to a single model's output
+# and giving up the model-portability the paragraph above describes. Searches are
+# therefore exact, not approximate — which is also the more correct answer, and is
+# bounded in practice because every query is filtered by ``WHERE org_id = %s`` and
+# the active ``(embedding_model, embedding_model_version)`` pair before ranking, so
+# a scan covers one tenant's current-model partition rather than the whole table.
+#
+# Revisit when a single org's current-model partition reaches the low hundreds of
+# thousands of chunks and query latency becomes measurable; at that point pinning
+# the dimension (or moving behind the same ``retrieve()`` API to a dedicated vector
+# store, Section 6) is the deliberate trade to make. Do not add the index simply
+# because it is conventional — it costs model portability.
 CREATE_RETRIEVAL_CHUNKS_TABLE = f"""
     CREATE TABLE IF NOT EXISTS retrieval_chunks (
         chunk_id                VARCHAR(36)    NOT NULL PRIMARY KEY,

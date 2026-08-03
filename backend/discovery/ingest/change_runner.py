@@ -50,6 +50,10 @@ Change events (R16-A1 §4, AT-381): for each record in every fully-processed
 batch this runner emits one ``ingestion.artifact_changed`` telemetry event. 1.6
 only EMITS — the Release 1.8 retrieval-freshness layer will consume them. Emission
 is fire-and-forget: it never affects the checkpoint lifecycle or the run outcome.
+A connector whose records are not retrieval artifacts at all (a transport-only
+event connector: ``produces_retrieval_content = False``) is exempt from the
+per-record emission and reports its volume once per batch instead — see
+:attr:`~discovery.ingest.base.ChangeBasedIngestor.produces_retrieval_content`.
 """
 from __future__ import annotations
 
@@ -98,6 +102,65 @@ def _is_persistable_checkpoint(value: str, connector_id: str, org_id: str) -> bo
         org_id,
     )
     return False
+
+
+def _emit_ingestion_completed(org_id: str, connector_id: str, result: "IngestionResult") -> None:
+    """Emit the ONE connector-agnostic ``ingestion.completed`` event for this pass.
+
+    This runner is the single completion path every ``ChangeBasedIngestor``
+    travels, and it already holds the whole outcome — so this is the one place
+    that can report "connector X finished ingesting for org Y at time T" for
+    EVERY change-based connector, present and future, with no per-connector code
+    and no connector named here. The Run-Health connectors panel
+    (``app/health_aggregation.py``) reads it for "Last ingestion", which was
+    otherwise unavailable for any connector outside the native-DB ingestors and
+    the three ids ``app/connector_metrics.py`` hardcodes.
+
+    Deliberately NOT ``db.ingestor_completed`` (DB-shaped payload whose
+    ``degraded_count`` drives the panel's ``last_error``) and deliberately not
+    inferred from the checkpoint (which only moves when the position advances) —
+    see ``IngestionCompletedPayload`` for the full rejection rationale.
+
+    Called ONLY for a pass the runner itself judged successful (no captured
+    error). A clean poll that found nothing new still counts — that is a real
+    successful ingestion, and reporting it is the difference between "checked,
+    nothing new" and "never ran".
+
+    ``record_event`` is imported lazily (like ``_emit_artifact_changed`` below) to
+    avoid an import cycle with the app package at module load. Fire-and-forget:
+    a telemetry import/write failure must NEVER break ingestion.
+    """
+    try:
+        from app.telemetry import record_event
+    except Exception:  # pragma: no cover — telemetry must not break ingestion
+        logger.warning(
+            "change-ingest: telemetry unavailable; skipping ingestion.completed "
+            "for connector=%s org=%s.",
+            connector_id,
+            org_id,
+        )
+        return
+    try:
+        record_event(
+            "ingestion.completed",
+            {
+                "org_id": org_id,
+                "connector_id": connector_id,
+                "count": int(result.records),
+                "batches": int(result.batches),
+                "complete": bool(result.complete),
+                "checkpoint_advanced": bool(result.checkpoint_advanced),
+                "first_run": bool(result.first_run),
+                "observed_at": _utc_iso(),
+            },
+        )
+    except Exception:  # noqa: BLE001 — observability must never break ingestion
+        logger.warning(
+            "change-ingest: ingestion.completed emit failed for connector=%s org=%s.",
+            connector_id,
+            org_id,
+            exc_info=True,
+        )
 
 
 def _emit_artifact_changed(
@@ -295,12 +358,27 @@ def ingest_with_checkpoint(
             # checkpoint lifecycle or the run outcome. A connector that manages its
             # own thread-level retrieval freshness (Slack/Teams, R18-A4 T3) still
             # emits the telemetry event but skips the per-record freshness notify.
-            _emit_artifact_changed(
-                org_id,
-                connector_id,
-                batch.records,
-                notify_freshness=not getattr(ingestor, "manages_retrieval_freshness", False),
-            )
+            # A TRANSPORT-ONLY event connector (produces_retrieval_content = False:
+            # the native cloud connectors / the MSP-B8 bridge) emits neither — its
+            # records are not retrieval artifacts, so both per-record paths would be
+            # pure per-event cost at cloud-event volume. The volume is still
+            # reported, per batch, so nothing goes quiet (MSP-B1).
+            if getattr(ingestor, "produces_retrieval_content", True):
+                _emit_artifact_changed(
+                    org_id,
+                    connector_id,
+                    batch.records,
+                    notify_freshness=not getattr(ingestor, "manages_retrieval_freshness", False),
+                )
+            elif batch.records:
+                logger.info(
+                    "change-ingest: connector=%s org=%s — %d transport-only record(s) "
+                    "in this batch; per-record artifact_changed/freshness skipped "
+                    "(the records are observations, not retrieval artifacts).",
+                    connector_id,
+                    org_id,
+                    len(batch.records),
+                )
 
             if is_first_run and _is_persistable_checkpoint(
                 batch.next_checkpoint, connector_id, org_id
@@ -381,6 +459,15 @@ def ingest_with_checkpoint(
                 type(exc).__name__,
                 exc,
             )
+
+    # The connector-agnostic completion fact (Run Health "Last ingestion"). Emitted
+    # here — outside the try/except, after the whole lifecycle settled — so it
+    # reports the FINAL outcome of the pass and can never be mistaken for a
+    # mid-stream state. Only a pass with no captured error is a successful
+    # ingestion; a failed pass already logged loudly above and must not stamp a
+    # success time. Fire-and-forget inside the helper.
+    if result.error is None:
+        _emit_ingestion_completed(org_id, connector_id, result)
 
     return result
 

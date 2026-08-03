@@ -35,7 +35,19 @@ EXPECTED_INDUSTRIES = {
     "energy_utilities",
     "manufacturing",
     "technology",
+    # 2.0-D2 T4 added the ninth industry, Insurance, anchored on shipped
+    # connectors only. Including it here extends the per-industry Stack Builder
+    # walkthrough to Insurance as well.
+    "insurance",
 }
+
+# 2.0-D2 T4: Insurance is the one industry deliberately WITHOUT a database
+# anchor — it exists to mirror the Insurance TEMPLATE's shape exactly, and that
+# template names no database source. The AC4 "database in every industry
+# profile" invariant (R191-R1 T3) is therefore scoped to the eight industries it
+# was written for; Insurance is asserted present-but-DB-free instead of silently
+# widening the rule.
+DATABASE_ANCHOR_EXEMPT_INDUSTRIES = {"insurance"}
 
 VALID_ROLES = {
     "system_of_record",
@@ -61,12 +73,17 @@ VALID_WORKFLOW_TAGS = {
 FORBIDDEN_ENGINE_OR_TEMPLATE_MODEL_PATHS = {
     "backend/app/routes_stack_builder_launch.py",
     "backend/discovery/runner.py",
-    "backend/discovery/packs/template_registry.py",
 }
 FORBIDDEN_ENGINE_OR_TEMPLATE_MODEL_PREFIXES = (
     "backend/discovery/detectors/",
     "backend/discovery/enrichment/",
 )
+# template_registry.py is deliberately NOT in the forbidden set: it is BOTH the
+# template model AND the registry, so 2.0-D1 (FSC) and 2.0-D2 (Insurance) add
+# template CONFIG entries to it — a legitimate config-only change. The guard
+# below still fails if a template-MODEL or public-API line changes, via
+# _template_registry_model_or_api_lines_changed(); a dict entry passes.
+TEMPLATE_REGISTRY_REL = "backend/discovery/packs/template_registry.py"
 
 FRONTEND_REGISTRY_SOURCE_FILES = (
     REPO_ROOT / "frontend" / "src" / "api" / "stackBuilderApi.ts",
@@ -154,12 +171,12 @@ def _is_ancestor(ref: str, descendant: str = "HEAD") -> bool:
     return result.returncode == 0
 
 
-def _story_changed_paths() -> set[str]:
+def _story_base_ref() -> str:
     # If dev has already been merged into this feature branch, ignore dev's own
     # changes for the R191-R1 config-only guard and inspect only this branch's
     # story delta on top of dev. Otherwise fall back to the R1 target branch.
     if _is_ancestor("origin/dev"):
-        return _changed_paths_against_ref("origin/dev")
+        return "origin/dev"
 
     candidates = [
         os.environ.get("R191_R1_BASE_REF"),
@@ -169,10 +186,36 @@ def _story_changed_paths() -> set[str]:
     for ref in [c for c in candidates if c]:
         try:
             _git(["rev-parse", "--verify", ref])
-            return _changed_paths_against_ref(ref)
+            return ref
         except RuntimeError:
             continue
     pytest.skip("No R191-R1 base ref available for diff guard")
+
+
+def _story_changed_paths() -> set[str]:
+    return _changed_paths_against_ref(_story_base_ref())
+
+
+def _template_registry_model_or_api_lines_changed(ref: str) -> list[str]:
+    """Added/removed lines in template_registry.py that touch the template MODEL
+    or public API (not a config dict entry). 2.0-D1/D2 legitimately add template
+    ENTRIES to this file, so its mere appearance in the diff is not a violation —
+    only a model/API-definition change is. Same forbidden-token discipline as
+    test_insurance_template.py::test_no_template_model_or_api_line_changed."""
+    forbidden_tokens = (
+        "class TemplateDefinition", "class FocusDefaults",
+        "def register_template", "def unregister_template", "def get_template",
+        "def list_templates", "def resolve_launch_config",
+        "def template_defaults_snapshot", "def normalize_template_ids",
+    )
+    diff = _git(["diff", "-U0", f"{ref}...HEAD", "--", TEMPLATE_REGISTRY_REL])
+    offenders: list[str] = []
+    for line in diff.splitlines():
+        if not line.startswith(("+", "-")) or line.startswith(("+++", "---")):
+            continue
+        if any(token in line for token in forbidden_tokens):
+            offenders.append(line.strip())
+    return offenders
 
 
 @pytest.mark.parametrize("industry_id", sorted(EXPECTED_INDUSTRIES))
@@ -262,9 +305,10 @@ def test_ac4_registry_calibration_invariants_hold():
     assert set(INDUSTRY_REGISTRY) == EXPECTED_INDUSTRIES
 
     for industry_id, config in INDUSTRY_REGISTRY.items():
-        assert "sqlserver" in config.system_defaults, (
-            f"{industry_id}: missing database default"
-        )
+        if industry_id not in DATABASE_ANCHOR_EXEMPT_INDUSTRIES:
+            assert "sqlserver" in config.system_defaults, (
+                f"{industry_id}: missing database default"
+            )
         if "slack" in config.system_defaults:
             assert "teams" in config.system_defaults, (
                 f"{industry_id}: Slack default without Teams parity"
@@ -357,7 +401,8 @@ def test_frontend_stack_builder_has_no_cached_registry_arrays():
 
 
 def test_registry_story_diff_avoids_engine_and_template_model_code():
-    changed = _story_changed_paths()
+    base_ref = _story_base_ref()
+    changed = _changed_paths_against_ref(base_ref)
     forbidden = sorted(
         path
         for path in changed
@@ -368,3 +413,12 @@ def test_registry_story_diff_avoids_engine_and_template_model_code():
         "R191-R1 registry/catalog calibration must not change discovery engine "
         f"or template-model code. Forbidden changed paths: {forbidden}"
     )
+
+    # template_registry.py may change (2.0-D1/D2 add template CONFIG entries),
+    # but ONLY as config — a template-model or public-API line must not move.
+    if TEMPLATE_REGISTRY_REL in changed:
+        model_changes = _template_registry_model_or_api_lines_changed(base_ref)
+        assert model_changes == [], (
+            "template_registry.py changed the template MODEL/API, not just a "
+            f"config entry: {model_changes}"
+        )

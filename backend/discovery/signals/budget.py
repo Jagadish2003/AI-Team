@@ -67,6 +67,12 @@ class BudgetReport:
     deferred: int
     deferred_by_source: Dict[str, int] = field(default_factory=dict)
     deferred_window: Optional[Dict[str, str]] = None
+    #: How many of ``processed`` were at-least-once REDELIVERIES of a firing the
+    #: run had already counted. They are charged (they cost the same fetch+map
+    #: work, and the budget is what stops a redelivery storm paging for ever), so
+    #: reporting them separately is what makes a budget depleted by provider churn
+    #: distinguishable from one depleted by genuine event volume.
+    duplicates: int = 0
 
     @property
     def seen(self) -> int:
@@ -93,6 +99,7 @@ class BudgetReport:
         return {
             "budget": self.budget,
             "processed": self.processed,
+            "duplicates": self.duplicates,
             "deferred": self.deferred,
             "seen": self.seen,
             "breached": self.breached,
@@ -118,6 +125,7 @@ class RunBudget:
             raise ValueError("budget limit must be >= 0 or None")
         self.limit = limit
         self.processed = 0
+        self.duplicates = 0
         self.deferred = 0
         self._deferred_by_source: Dict[str, int] = {}
         self._first_deferred_dt: Optional[datetime] = None
@@ -129,9 +137,17 @@ class RunBudget:
         """True while the run may still process another event within budget."""
         return self.limit is None or self.processed < self.limit
 
-    def charge(self) -> None:
-        """Count one processed (admitted) event against the budget."""
+    def charge(self, *, duplicate: bool = False) -> None:
+        """Count one processed (admitted) event against the budget.
+
+        ``duplicate`` marks an at-least-once redelivery of an already-counted
+        firing. It is still charged — it cost the same fetch and mapping work, and
+        the budget is what stops a redelivery storm paging for ever — but it is
+        tallied separately so the report can say WHY a budget was depleted.
+        """
         self.processed += 1
+        if duplicate:
+            self.duplicates += 1
 
     def defer(
         self, source_system: str, observed_at: Optional[str], observed_dt: Optional[datetime]
@@ -158,6 +174,7 @@ class RunBudget:
         return BudgetReport(
             budget=self.limit,
             processed=self.processed,
+            duplicates=self.duplicates,
             deferred=self.deferred,
             deferred_by_source=dict(self._deferred_by_source),
             deferred_window=window,

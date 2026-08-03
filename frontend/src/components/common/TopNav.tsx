@@ -31,7 +31,6 @@ const items = [
   { to: "/stack-builder", label: "Stack Builder", runScoped: false, analystOnly: true },
   // Run-scoped screens
   { to: "/discovery-run", label: "Discovery Run", runScoped: true },
-  { to: "/run-health", label: "Run Health", runScoped: false, analystOnly: true },
   // { to: "/partial-results", label: "Evidence Collection", runScoped: true }, // Hidden - Sprint 5.1
   {
     to: "/source-intelligence",
@@ -52,6 +51,7 @@ const items = [
     sfOnly: true,
   },
   { to: "/executive-report", label: "Executive Report", runScoped: true },
+  { to: "/run-health", label: "Run Health", runScoped: false, analystOnly: true },
 ] satisfies NavItem[];
 
 export default function TopNav() {
