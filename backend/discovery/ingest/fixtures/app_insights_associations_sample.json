@@ -1,0 +1,21 @@
+{
+  "_comment": "2.0-D3 T3 — offline association configuration. Maps an Application Insights component resource id to a .NET app_id (DotNetAppTarget.app_id) and/or a ServiceNow CMDB CI sys_id. Identifiers only: an association names things, it never carries a credential, and an inline credential-looking field is rejected rather than ignored.",
+  "_no_inference": "Every association here is an explicit operator declaration. Nothing in AgentIQ associates an Application Insights component with a .NET application or a CMDB CI on the basis of a similar name, URL, hostname, IIS site name, resource group, owner, environment, tag, or events happening at similar times. A display name matching in both systems is not evidence.",
+  "_shape": "Either a JSON object keyed by org id (with a 'default'/'*' fallback) or a plain array applied to every org — the same shape ENTERPRISE_APP_REPOS uses. Live deployments set APP_INSIGHTS_ASSOCIATIONS to the same JSON.",
+  "_why_these_entries": "The two entries below deliberately name the app_ids the offline .NET fixture (dotnet_app_sample.json) actually configures, so an offline run demonstrates a RESOLVED association rather than reporting a miss. A shipped default that always reported 'declared but not configured' would train operators to ignore the field.",
+  "_cmdb_example": "A CMDB association is declared the same way, with a CI sys_id, and may be combined with a .NET reference in one entry: {\"component_id\": \"<ARM id>\", \"dotnet_app_id\": \"orders-api\", \"cmdb_ci_sys_id\": \"a1b2c3d4e5f6000011112222333344455\"}. It is not in the default set because a CMDB reference resolves only where MSP-B3 CMDB ingestion has already stored that CI for the org, which an offline run has not done — so including one here would report a permanent miss.",
+
+  "default": [
+    {
+      "_case": "exact .NET association — the component IS the configured orders-api application",
+      "component_id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/prod/providers/microsoft.insights/components/orders-api",
+      "dotnet_app_id": "orders-api",
+      "notes": "Declared by the platform team during onboarding."
+    },
+    {
+      "_case": "exact .NET association — the component IS the configured inventory-svc application",
+      "component_id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/prod/providers/microsoft.insights/components/inventory-svc",
+      "dotnet_app_id": "inventory-svc"
+    }
+  ]
+}
