@@ -39,8 +39,12 @@ export interface ResourceState<T> {
   data: T | undefined;
   loading: boolean;
   error: Error | null;
-  /** Force a refetch of this key (shared with every other consumer). */
-  refetch: () => void;
+  /**
+   * Force a refetch of this key (shared with every other consumer). Resolves when
+   * the refetch settles — awaitable for an imperative refresh that needs a busy
+   * state; safe to ignore, which is what most callers do.
+   */
+  refetch: () => Promise<void>;
 }
 
 export interface DataCacheApi {
@@ -235,9 +239,16 @@ class DataCacheStore {
     }
   }
 
-  run(key: string, background = false): void {
+  /**
+   * Fetch a key now. Returns a promise that resolves when THIS run settles, so an
+   * imperative caller (a Refresh button) can show a busy state and report
+   * completion. It never rejects — a failure lands in the entry's error state,
+   * which is where consumers read it. Callers that ignore the return value behave
+   * exactly as before.
+   */
+  run(key: string, background = false): Promise<void> {
     const e = this.map.get(key);
-    if (!e || !e.fetcher) return;
+    if (!e || !e.fetcher) return Promise.resolve();
     const fetcher = e.fetcher;
     // A background (stale-while-revalidate) refresh keeps the current value and
     // does NOT flip loading, so consumers never flash a spinner while fresh data
@@ -281,6 +292,7 @@ class DataCacheStore {
       },
     );
     e.promise = p;
+    return p;
   }
 
   /**
@@ -503,7 +515,8 @@ export function useResource<T>(
   }, [enabled, key, store, opts?.staleTime]);
 
   const refetch = useCallback(() => {
-    if (enabled) store!.run(key!);
+    if (!enabled) return Promise.resolve();
+    return store!.run(key!);
   }, [enabled, key, store]);
 
   // An enabled key with no data and no error yet IS loading — either prime()
