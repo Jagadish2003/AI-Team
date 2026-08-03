@@ -362,6 +362,22 @@ class TestTheServedCopyNeverOverclaims:
         assert scan_payload(body) == []
 
     def test_the_roadmap_payload_is_clean(self, client, adjusted):
+        """Scoped to the LEARNING-OWNED regions, not the whole body.
+
+        Sweeping the entire roadmap policed prose this guard does not own, and
+        produced two false positives that CI caught: the shipped Next-30-Days
+        summary "Prove value fast…" (fixed by narrowing the rule) and — the one
+        that matters — a finding's own ``corroboration_label`` reading
+        "Corroborated across ServiceNow and Jira".
+
+        That second one must NOT be narrowed away. A finding legitimately
+        carrying its corroboration status is exactly what the corroboration
+        feature is for; a guard flagging it would be policing the evidence, which
+        is how A1 T5 says a guard trains people to ignore it. The right fix is
+        scope: sweep what learning wrote, and use
+        :func:`reason_placement_violations` for the separate question of whether
+        learning copy has LEAKED into a credibility field.
+        """
         from app.db import run_kv_set
         from app.roadmap_engine import build_roadmap
 
@@ -369,7 +385,53 @@ class TestTheServedCopyNeverOverclaims:
         body = client.get(
             f"/api/runs/{adjusted['run_id']}/roadmap", headers=_auth(adjusted["org"])
         ).json()
-        assert scan_payload(body) == []
+
+        findings = [
+            item
+            for stage in body.get("stages") or []
+            for item in (stage.get("opportunities") or [])
+        ]
+        assert findings, "no roadmap opportunities to check"
+
+        violations = [
+            v
+            for item in findings
+            for v in scan_payload(item.get("_ranking") or {}, path=item.get("id", "?"))
+        ]
+        assert violations == [], [str(v) for v in violations]
+
+    def test_the_roadmap_findings_keep_learning_copy_out_of_credibility_fields(
+        self, client, adjusted
+    ):
+        """The other half of the roadmap boundary, asked the right way."""
+        from app.db import run_kv_set
+        from app.roadmap_engine import build_roadmap
+
+        run_kv_set("roadmap", adjusted["run_id"], build_roadmap(adjusted["opps"]))
+        body = client.get(
+            f"/api/runs/{adjusted['run_id']}/roadmap", headers=_auth(adjusted["org"])
+        ).json()
+        for stage in body.get("stages") or []:
+            for item in stage.get("opportunities") or []:
+                assert reason_placement_violations(item) == [], item.get("id")
+
+    def test_a_findings_own_corroboration_label_is_not_flagged(self, client, adjusted):
+        """The guard must not police the corroboration feature's own prose.
+
+        Pinned because narrowing the rule instead of the scope would have been
+        the tempting fix, and would have blinded the guard to learning copy
+        genuinely claiming corroboration.
+        """
+        from app.learning_reason_vocabulary import scan_text
+
+        served, _ = _moved_findings(client, adjusted)
+        labels = {o.get("corroboration_label") for o in served if o.get("corroboration_label")}
+        assert labels, "no corroboration labels present, so this proves nothing"
+        for label in labels:
+            assert scan_text(label), (
+                "expected the rule to match this text in isolation — the point is "
+                "that the SWEEP is scoped so it never sees it"
+            )
 
 
 # ---------------------------------------------------------------------------

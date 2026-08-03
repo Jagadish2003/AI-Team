@@ -383,12 +383,25 @@ class TestTheCopyNeverOverclaims:
         """A guard that flags the evidence trains people to ignore it (A1 T5)."""
         assert scan_text(text) == [], f"false positive on {text!r}"
 
-    def test_the_shipped_roadmap_payload_scans_clean(self):
+    def test_a_findings_own_corroboration_label_is_not_learning_copy(self):
+        """The scope lesson CI taught, pinned.
+
+        A finding legitimately carrying "Corroborated across ServiceNow and Jira"
+        matches ``corroboration_implication`` in isolation — and it SHOULD, because
+        learning copy claiming corroboration is exactly what that rule is for. The
+        answer is not to narrow the rule (that would blind it to the real failure)
+        but to scope the SWEEP to what learning wrote. This test states the rule's
+        behaviour so nobody "fixes" it the wrong way.
+        """
+        assert scan_text("Corroborated across ServiceNow and Jira")
+
+    def test_the_shipped_roadmap_stage_copy_scans_clean(self):
         """Copy owned by another feature must not trip this guard.
 
-        The boundary sweep in the contract tests scans whole payloads, so any
-        false positive on pre-existing platform copy would fail the build for a
-        reason that has nothing to do with learning.
+        Scoped to the STAGE prose the roadmap engine authors — the findings it
+        carries belong to other features and are swept by placement checks
+        instead. This is the narrower, correct version of a whole-payload sweep
+        that CI showed was over-reaching.
         """
         from app.learning_reason_vocabulary import scan_payload
         from app.roadmap_engine import build_roadmap
@@ -423,7 +436,13 @@ class TestTheCopyNeverOverclaims:
                 ]
             )
         ]
-        violations = scan_payload(build_roadmap(opps))
+        roadmap = build_roadmap(opps)
+        # Only the stage prose the roadmap engine itself writes.
+        stage_copy = [
+            {"title": stage.get("title"), "summary": stage.get("summary")}
+            for stage in roadmap["stages"]
+        ]
+        violations = scan_payload(stage_copy)
         assert violations == [], [str(v) for v in violations]
 
     def test_every_rendered_sentence_passes_its_own_guard(self):
