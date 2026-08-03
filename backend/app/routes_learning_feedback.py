@@ -82,7 +82,7 @@ class RecordFeedbackRequest(BaseModel):
 
 
 @router.get("/vocabulary", dependencies=[Depends(require_role("analyst"))])
-def get_vocabulary() -> Dict[str, Any]:
+def get_vocabulary(_token: str = Depends(require_auth)) -> Dict[str, Any]:
     """The actions and reason codes a client may send.
 
     Advertised rather than hardcoded in the frontend, so the closed vocabulary
@@ -142,7 +142,10 @@ def post_feedback(
     "/feedback/{opportunity_identity}",
     dependencies=[Depends(require_role("analyst"))],
 )
-def get_identity_feedback(opportunity_identity: str) -> List[Dict[str, Any]]:
+def get_identity_feedback(
+    opportunity_identity: str,
+    _token: str = Depends(require_auth),
+) -> List[Dict[str, Any]]:
     """Every decision ever recorded about one opportunity, oldest first."""
     return get_feedback_history(get_current_org_id(), opportunity_identity)
 
@@ -153,6 +156,7 @@ def get_org_feedback(
     detectorId: Optional[List[str]] = Query(None),
     packId: Optional[List[str]] = Query(None),
     limit: int = Query(500, ge=1, le=5000),
+    _token: str = Depends(require_auth),
 ) -> List[Dict[str, Any]]:
     """Decisions in this org, newest first."""
     return list_feedback(
@@ -168,7 +172,10 @@ def get_org_feedback(
     "/feedback/entry/{feedback_id}",
     dependencies=[Depends(require_role("analyst"))],
 )
-def get_feedback_entry(feedback_id: str) -> Dict[str, Any]:
+def get_feedback_entry(
+    feedback_id: str,
+    _token: str = Depends(require_auth),
+) -> Dict[str, Any]:
     """One decision by id — what an explainability link resolves to.
 
     A cross-org id answers 404 identically to a missing one, so the API never
@@ -185,6 +192,7 @@ def get_signal_set(
     detectorId: Optional[str] = Query(None),
     packId: Optional[str] = Query(None),
     limit: int = Query(2000, ge=1, le=5000),
+    _token: str = Depends(require_auth),
 ) -> Dict[str, Any]:
     """The current learning signal set for this org.
 
@@ -213,7 +221,7 @@ def get_signal_set(
 
 
 @router.get("/config", dependencies=[Depends(require_role("analyst"))])
-def get_learning_config() -> Dict[str, Any]:
+def get_learning_config(_token: str = Depends(require_auth)) -> Dict[str, Any]:
     """The weighting in force, and how well-founded each part of it is.
 
     Exposed because A3's whole discipline is that learning must never become

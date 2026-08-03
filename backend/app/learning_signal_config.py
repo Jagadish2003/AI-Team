@@ -100,6 +100,8 @@ class RecencyConfig:
 @dataclass(frozen=True)
 class LearningSignalConfig:
     outcome_signals: Dict[str, WeightedSignal] = field(default_factory=dict)
+    #: Measured direction, used only when no projection existed to validate.
+    movement_direction: Dict[str, WeightedSignal] = field(default_factory=dict)
     decision_signals: Dict[str, WeightedSignal] = field(default_factory=dict)
     defer_reasons: Dict[str, float] = field(default_factory=dict)
     comparability: Dict[str, float] = field(default_factory=dict)
@@ -120,6 +122,17 @@ class LearningSignalConfig:
     def outcome_weight(self, verdict: str) -> WeightedSignal:
         return self.outcome_signals.get(
             str(verdict or "").strip().lower(),
+            WeightedSignal(0.0, DIRECTION_NEUTRAL),
+        )
+
+    def movement_direction_weight(self, direction: str) -> WeightedSignal:
+        """The fallback when a measurement exists but no projection validated it.
+
+        A projection verdict answers "was our model right?"; the direction
+        answers "did the action help?" — and ranking cares about the second.
+        """
+        return self.movement_direction.get(
+            str(direction or "").strip().lower(),
             WeightedSignal(0.0, DIRECTION_NEUTRAL),
         )
 
@@ -186,6 +199,12 @@ _DEFAULTS = LearningSignalConfig(
         "below_band": WeightedSignal(2.0, DIRECTION_NEGATIVE),
         "not_projected": WeightedSignal(0.0, DIRECTION_NEUTRAL),
         "too_early": WeightedSignal(0.0, DIRECTION_NEUTRAL),
+    },
+    movement_direction={
+        "improved": WeightedSignal(1.5, DIRECTION_POSITIVE),
+        "worsened": WeightedSignal(1.5, DIRECTION_NEGATIVE),
+        "unchanged": WeightedSignal(1.2, DIRECTION_NEGATIVE),
+        "unknown": WeightedSignal(0.0, DIRECTION_NEUTRAL),
     },
     decision_signals={
         "accept": WeightedSignal(1.0, DIRECTION_POSITIVE),
@@ -257,7 +276,16 @@ def validate_config(config: LearningSignalConfig) -> None:
     # Zero-weighted outcomes (not_projected, too_early) are counted-but-unweighted
     # by design and are not part of the ordering guarantee — comparing against
     # them would make the invariant unsatisfiable for any non-zero decision.
-    outcome_weights = [s.weight for s in config.outcome_signals.values() if s.weight > 0]
+    # Directional signals are outcomes too — a measurement without a projection
+    # is still a measurement — so they are held to the same class boundary. A
+    # config that set them below an opinion would be the same inversion arriving
+    # through a different key.
+    outcome_weights = [
+        s.weight
+        for s in list(config.outcome_signals.values())
+        + list(config.movement_direction.values())
+        if s.weight > 0
+    ]
     if not outcome_weights:
         raise LearningConfigError("every outcome signal is weighted zero")
 
@@ -310,6 +338,7 @@ def parse_config(raw: Mapping[str, Any]) -> LearningSignalConfig:
         )
         for section in (
             "outcome_signals",
+            "movement_direction",
             "decision_signals",
             "defer_reasons",
             "recency",
@@ -335,6 +364,12 @@ def parse_config(raw: Mapping[str, Any]) -> LearningSignalConfig:
         signal = _weighted(value)
         if signal is not None:
             outcomes[str(key).strip().lower()] = signal
+
+    directions = {}
+    for key, value in (data.get("movement_direction") or {}).items():
+        signal = _weighted(value)
+        if signal is not None:
+            directions[str(key).strip().lower()] = signal
 
     decisions = {}
     for key, value in (data.get("decision_signals") or {}).items():
@@ -369,6 +404,7 @@ def parse_config(raw: Mapping[str, Any]) -> LearningSignalConfig:
 
     return LearningSignalConfig(
         outcome_signals=outcomes or dict(_DEFAULTS.outcome_signals),
+        movement_direction=directions or dict(_DEFAULTS.movement_direction),
         decision_signals=decisions or dict(_DEFAULTS.decision_signals),
         defer_reasons=defer_reasons or dict(_DEFAULTS.defer_reasons),
         comparability=comparability or dict(_DEFAULTS.comparability),

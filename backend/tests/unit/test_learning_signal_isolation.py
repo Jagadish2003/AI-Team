@@ -155,15 +155,19 @@ class TestTheLayerReadsOnlyItsTwoSources:
     def test_the_signal_set_reads_decisions_and_movements_and_nothing_else(self):
         """Every cross-module data read in learning_signals, enumerated.
 
-        The A1 signal registry is permitted (it supplies the signal CONCEPT for
-        similarity, not a signal value) and so is the config loader. Anything
-        else is a new learning input and must be a deliberate decision, not a
-        convenient import.
+        Two imports are permitted that are not data sources, and the distinction
+        matters: the A1 signal registry supplies the signal CONCEPT used for
+        similarity (not a signal value), and ``projection_validation`` supplies
+        the verdict VOCABULARY (a constant — duplicating the string locally would
+        be worse, since a rename there would silently stop matching here).
+        Anything else is a new learning input and must be a deliberate decision,
+        not a convenient import.
         """
         permitted = {
             "learning_feedback",
             "learning_signal_config",
             "opportunity_movement",
+            "projection_validation",
             "discovery.projection.signal_registry",
         }
         tree = _tree(APP / "learning_signals.py")

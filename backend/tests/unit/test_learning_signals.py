@@ -323,11 +323,14 @@ class TestOutcomeSignals:
         )
         assert within.weight > above.weight
 
-    @pytest.mark.parametrize("verdict", ["not_projected", "too_early"])
-    def test_neutral_verdicts_are_counted_but_carry_no_weight(self, verdict):
-        """Counted, not dropped: a signal that vanishes is one nobody can ask about."""
+    def test_too_early_is_counted_but_carries_no_weight(self):
+        """Counted, not dropped: a signal that vanishes is one nobody can ask about.
+
+        ``too_early`` really does teach nothing — the horizon has not elapsed, so
+        learning from it means learning from an unfinished experiment.
+        """
         signal = outcome_signal(
-            an_outcome(projectionValidation={"verdict": verdict}),
+            an_outcome(projectionValidation={"verdict": "too_early"}),
             now=NOW,
             config=CONFIG,
         )
@@ -335,6 +338,124 @@ class TestOutcomeSignals:
         assert signal.weight == 0.0
         assert signal.direction == DIRECTION_NEUTRAL
         assert signal.excluded_reason == EXCLUDED_NEUTRAL_VERDICT
+
+
+class TestMeasuredDirectionWhenNothingWasProjected:
+    """A measurement with no projection is still a measurement.
+
+    The verdict answers "was our model right?"; the direction answers "did the
+    action help?" — and ranking cares about the second. Zeroing these would make
+    every finding created before 2.0-A1 shipped permanently unlearnable.
+    """
+
+    @staticmethod
+    def unprojected(direction, role="movement"):
+        return an_outcome(
+            projectionValidation={"verdict": "not_projected"},
+            movements=[
+                {"signalName": "owner_changes_90d", "role": role, "direction": direction}
+            ],
+        )
+
+    @pytest.mark.parametrize(
+        "direction,expected",
+        [
+            ("improved", DIRECTION_POSITIVE),
+            ("worsened", DIRECTION_NEGATIVE),
+            ("unchanged", DIRECTION_NEGATIVE),
+        ],
+    )
+    def test_the_measured_direction_carries_the_signal(self, direction, expected):
+        signal = outcome_signal(self.unprojected(direction), now=NOW, config=CONFIG)
+        assert signal.weight > 0
+        assert signal.direction == expected
+        assert signal.excluded_reason is None
+
+    def test_a_directional_outcome_still_outweighs_every_decision(self):
+        """It is an outcome, so the class boundary applies to it too."""
+        weakest = min(
+            outcome_signal(self.unprojected(d), now=NOW, config=CONFIG).weight
+            for d in ("improved", "worsened", "unchanged")
+        )
+        strongest_decision = max(
+            decision_signal(
+                a_decision(action=action, reasonCode=reason, recordedAt=days_ago(1)),
+                now=NOW,
+                config=CONFIG,
+            ).weight
+            for action, reason in [
+                ("accept", None),
+                ("dismiss", None),
+                *[("defer", r) for r in CONFIG.defer_reasons],
+            ]
+        )
+        assert weakest > strongest_decision
+
+    def test_a_directional_outcome_weighs_less_than_a_validated_one(self):
+        """A direction with no expectation to compare against is weaker evidence."""
+        validated = outcome_signal(an_outcome(), now=NOW, config=CONFIG)
+        directional = outcome_signal(
+            self.unprojected("improved"), now=NOW, config=CONFIG
+        )
+        assert directional.weight < validated.weight
+
+    def test_the_direction_is_not_used_when_a_projection_exists(self):
+        """The band verdict already incorporates it and knows what was expected.
+
+        Applying both would count one measurement twice.
+        """
+        with_projection = an_outcome(
+            movements=[
+                {"signalName": "x", "role": "movement", "direction": "worsened"}
+            ]
+        )
+        signal = outcome_signal(with_projection, now=NOW, config=CONFIG)
+        assert signal.direction == DIRECTION_POSITIVE, (
+            "the within_band verdict must win over a raw 'worsened' direction"
+        )
+        assert signal.evidence_ref["measuredDirection"] is None
+
+    def test_the_movement_role_signal_is_preferred_over_a_population_one(self):
+        """A denominator moving says nothing about whether the intervention worked."""
+        record = an_outcome(
+            projectionValidation={"verdict": "not_projected"},
+            movements=[
+                {"signalName": "total_cases", "role": "population", "direction": "worsened"},
+                {"signalName": "owner_changes", "role": "movement", "direction": "improved"},
+            ],
+        )
+        signal = outcome_signal(record, now=NOW, config=CONFIG)
+        assert signal.direction == DIRECTION_POSITIVE
+        assert signal.evidence_ref["measuredDirection"] == "improved"
+
+    def test_an_unroled_signal_is_used_when_no_movement_role_is_marked(self):
+        signal = outcome_signal(
+            self.unprojected("improved", role=None), now=NOW, config=CONFIG
+        )
+        assert signal.weight > 0
+
+    def test_an_unknown_direction_carries_nothing(self):
+        signal = outcome_signal(self.unprojected("unknown"), now=NOW, config=CONFIG)
+        assert signal.weight == 0.0
+        assert signal.excluded_reason == EXCLUDED_NEUTRAL_VERDICT
+
+    def test_a_measurement_with_no_movements_at_all_carries_nothing(self):
+        signal = outcome_signal(
+            an_outcome(projectionValidation={"verdict": "not_projected"}, movements=[]),
+            now=NOW,
+            config=CONFIG,
+        )
+        assert signal.weight == 0.0
+
+    def test_the_label_describes_the_direction_not_the_missing_projection(self):
+        """Destined for a customer-facing 'why'."""
+        signal = outcome_signal(
+            self.unprojected("improved"), now=NOW, config=CONFIG
+        )
+        assert "improved measurably" in signal.label
+
+
+class TestOutcomeSignalsContinued:
 
     def test_a_weakly_comparable_measurement_is_down_weighted_not_dropped(self):
         clean = outcome_signal(an_outcome(), now=NOW, config=CONFIG)

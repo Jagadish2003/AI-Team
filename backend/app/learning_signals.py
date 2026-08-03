@@ -50,6 +50,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .learning_feedback import ACTION_DEFER, latest_feedback_by_identity
+from .projection_validation import VERDICT_NOT_PROJECTED
 from .learning_signal_config import (
     DIRECTION_NEGATIVE,
     DIRECTION_NEUTRAL,
@@ -291,6 +292,16 @@ _ACTION_LABELS = {
     "defer": "your team deferred this finding",
 }
 
+#: The role whose direction IS the outcome. A population/denominator signal
+#: moving says nothing about whether the intervention worked.
+MOVEMENT_ROLE = "movement"
+
+_DIRECTION_LABELS = {
+    "improved": "improved measurably after the change was made",
+    "worsened": "moved the wrong way after the change was made",
+    "unchanged": "did not move after the change was made",
+}
+
 _VERDICT_LABELS = {
     "within_band": "delivered measured improvement within the projected range",
     "above_band": "delivered measured improvement beyond the projected range",
@@ -366,6 +377,32 @@ def decision_signal(
     )
 
 
+def _measured_direction(record: Mapping[str, Any]) -> Optional[str]:
+    """The direction of the signal the finding is actually about.
+
+    Prefers the ``movement``-role signal: a population/denominator signal moving
+    says nothing about whether the intervention worked, so taking "the first
+    signal" would sometimes read a total case count as the outcome. Falls back to
+    the first signal carrying a usable direction when no role is marked.
+    """
+    movements = record.get("movements")
+    if not isinstance(movements, Sequence) or isinstance(movements, (str, bytes)):
+        return None
+
+    fallback: Optional[str] = None
+    for entry in movements:
+        if not isinstance(entry, Mapping):
+            continue
+        direction = _norm(entry.get("direction"))
+        if not direction:
+            continue
+        if _norm(entry.get("role")) == MOVEMENT_ROLE:
+            return direction
+        if fallback is None:
+            fallback = direction
+    return fallback
+
+
 def outcome_signal(
     record: Mapping[str, Any],
     *,
@@ -389,13 +426,33 @@ def outcome_signal(
     if isinstance(validation, Mapping):
         verdict = _norm(validation.get("verdict"))
     weighted = cfg.outcome_weight(verdict or "")
+    label = _VERDICT_LABELS.get(verdict or "", "was measured after action")
+    direction_used: Optional[str] = None
+
+    # No projection to validate against, but a real measurement all the same.
+    # The verdict answers "was our model right?"; the measured DIRECTION answers
+    # "did the action help?" — and ranking cares about the second. Falling back
+    # to it is what stops every finding created before 2.0-A1 shipped from being
+    # permanently unlearnable. Deliberately NOT applied when a projection exists:
+    # the band verdict already incorporates the direction and knows what was
+    # expected, so using both would count one measurement twice.
+    if verdict == VERDICT_NOT_PROJECTED:
+        direction_used = _measured_direction(record)
+        directional = cfg.movement_direction_weight(direction_used or "")
+        if directional.weight > 0:
+            weighted = directional
+            label = _DIRECTION_LABELS.get(
+                direction_used or "", "was measured after action"
+            )
+
     base = weighted.weight
 
     multipliers: Dict[str, float] = {}
     excluded: Optional[str] = None
     if base <= 0 or weighted.direction == DIRECTION_NEUTRAL:
-        # not_projected / too_early: a real measurement with nothing to learn
-        # from yet. Counted in the signal set so it stays visible.
+        # too_early, or not_projected with no determinable direction: a real
+        # measurement with nothing to learn from yet. Counted in the signal set
+        # so it stays visible rather than vanishing.
         excluded = EXCLUDED_NEUTRAL_VERDICT
 
     comparability = record.get("comparability")
@@ -474,10 +531,11 @@ def outcome_signal(
             "currentRunId": record.get("currentRunId"),
             "baselineRunId": record.get("baselineRunId"),
             "verdict": verdict,
+            "measuredDirection": direction_used,
             "comparabilityVerdict": comparability_verdict,
         },
         recorded_at=str(measured_at) if measured_at else None,
-        label=_VERDICT_LABELS.get(verdict or "", "was measured after action"),
+        label=label,
         excluded_reason=excluded,
         multipliers=multipliers,
     )
@@ -771,6 +829,7 @@ __all__ = [
     "EXCLUDED_NO_IDENTITY",
     "EXCLUDED_UNKNOWN_ACTION",
     "EXCLUDED_UNWEIGHTED_DEFER_REASON",
+    "MOVEMENT_ROLE",
     "SIGNAL_SET_SCHEMA_VERSION",
     "SIGNAL_SOURCES",
     "SOURCE_DECISION",

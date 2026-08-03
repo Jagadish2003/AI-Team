@@ -94,12 +94,42 @@ exposes the bases so a customer can see that too.
 | `within_band` | 3.0 | positive | worth doing **and** the model of it was right |
 | `above_band` | 2.5 | positive | worked, more than expected — but the projection missed, and A1's bands are calibrated from these |
 | `below_band` | 2.0 | negative | acted on, moved less than projected |
-| `not_projected` | 0.0 | neutral | measured, but nothing to compare against |
+| `not_projected` | — | — | falls through to measured direction, below |
 | `too_early` | 0.0 | neutral | learning from an unfinished experiment |
 
-The two zero-weighted verdicts are **counted, not excluded** — they stay visible
-in the signal set as counted-but-unweighted inputs. A signal that vanishes
-silently is one nobody can ask about later.
+`too_early` is **counted, not excluded** — it stays visible in the signal set as
+a counted-but-unweighted input. A signal that vanishes silently is one nobody
+can ask about later.
+
+### Measured direction — used only when nothing was projected
+
+A projection verdict answers *"was our model right?"*. The measured direction
+answers *"did the action help?"* — and ranking cares about the second. A finding
+a team acted on that measurably improved is evidence it was worth surfacing,
+whether or not anyone projected it beforehand. Zeroing these would make every
+finding created before 2.0-A1 shipped permanently unlearnable.
+
+| Direction | Weight | Direction | Why |
+|---|---|---|---|
+| `improved` | 1.5 | positive | acted on, moved the right way |
+| `worsened` | 1.5 | negative | symmetric with improved, same reason accept/dismiss are |
+| `unchanged` | 1.2 | negative | negative but weaker — a flat signal has more benign explanations than a regression |
+| `unknown` | 0.0 | neutral | no determinable direction; counted, never weighted |
+
+Two rules:
+
+* **Only when the verdict is `not_projected`.** When a projection exists the band
+  verdict already incorporates the direction and knows what was expected, so
+  using both would count one measurement twice.
+* **The `movement`-role signal wins.** A population/denominator signal moving
+  says nothing about whether the intervention worked, so taking "the first
+  signal" would sometimes read a total case count as the outcome. Falls back to
+  the first signal with a usable direction only when no role is marked.
+
+These are outcomes, so they sit above every decision weight and the outcome floor
+applies to them as to any other measurement — and the config validator holds them
+to the same class boundary, so an edit cannot invert the principle through this
+key either.
 
 ### Decision signals
 

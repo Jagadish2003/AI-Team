@@ -137,6 +137,7 @@ def _seed_movement(
     *,
     verdict: str = "within_band",
     detector_id: str = "HANDOFF_FRICTION",
+    direction: str = "improved",
 ) -> None:
     """Seed one A2 movement record.
 
@@ -173,7 +174,13 @@ def _seed_movement(
         "actionDate": action_date.isoformat(),
         "baselineRunId": "run_base",
         "currentRunId": "run_now",
-        "movements": [],
+        "movements": [
+            {
+                "signalName": "owner_changes_90d",
+                "role": "movement",
+                "direction": direction,
+            }
+        ],
         "comparability": {"verdict": "comparable"},
         "confounderSummary": {"count": 0, "materialCount": 0, "advisoryCount": 0},
         # The REAL shape built by projection_validation._projection_block: the
@@ -418,6 +425,34 @@ class TestOutcomesJoinDecisionsOnIdentity:
 
         groups = group_by_similarity(collect_learning_signals(org))
         assert any(g.has_outcome_evidence for g in groups)
+
+    def test_a_measurement_with_no_projection_still_teaches_from_its_direction(self):
+        """The case that would otherwise be permanently unlearnable.
+
+        Every finding created before 2.0-A1 shipped has a measurable outcome and
+        no projection to validate it against.
+        """
+        from app.learning_signals import collect_learning_signals
+
+        org, identity = _org(), _identity()
+        _seed_movement(org, identity, verdict="not_projected", direction="improved")
+
+        signal = collect_learning_signals(org).for_identity(identity)[0]
+        assert signal.weight > 0
+        assert signal.direction == "positive"
+        assert signal.evidence_ref["measuredDirection"] == "improved"
+
+    def test_a_directional_outcome_still_outweighs_a_decision(self):
+        from app.learning_signals import collect_learning_signals
+
+        org, identity = _org(), _identity()
+        _record(org, identity, "accept")
+        _seed_movement(org, identity, verdict="not_projected", direction="improved")
+
+        by_source = {
+            s.source: s for s in collect_learning_signals(org).for_identity(identity)
+        }
+        assert by_source["outcome"].weight > by_source["decision"].weight
 
     def test_every_signal_links_to_what_produced_it(self):
         """AC2 groundwork: no signal without a resolvable reference."""

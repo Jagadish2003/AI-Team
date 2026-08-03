@@ -31,7 +31,7 @@
     "not_projected": {
       "weight": 0.0,
       "direction": "neutral",
-      "_why": "A movement was measured but no projection existed to validate against — usually a finding created before 2.0-A1 shipped. There is a measured direction, but no expectation to compare it to, so it teaches nothing about whether this finding type is worth surfacing. Zero, not excluded, so it stays visible in the signal set as a counted-but-unweighted input."
+      "_why": "No projection existed to validate against — usually a finding created before 2.0-A1 shipped. This entry is deliberately zero because the VERDICT teaches nothing; the measurement itself still does, and falls through to `movement_direction` below. Kept at zero rather than removed so the fall-through is explicit rather than an absent key."
     },
     "too_early": {
       "weight": 0.0,
@@ -92,6 +92,36 @@
     "comparable": 1.0,
     "weakly_comparable": 0.5,
     "not_comparable": 0.2
+  },
+
+  "movement_direction": {
+    "_note": "The measured direction of the signal after the action — improved / worsened / unchanged. Used ONLY when the verdict is `not_projected`, i.e. when a real measurement exists but no projection was made to validate it against.",
+    "_why_it_is_a_signal_at_all": "A projection verdict answers 'was our MODEL right?'. The direction answers 'did the ACTION help?' — and the second question is the one ranking actually cares about. A finding that a team acted on and that measurably improved is evidence it was worth surfacing, whether or not anyone projected it beforehand. Treating those as worthless would discard every measurement taken on a finding created before 2.0-A1 shipped.",
+    "_why_only_when_not_projected": "When a projection DOES exist, the band verdict already incorporates the direction and is strictly better information (it knows what was expected). Applying both would count one measurement twice.",
+    "_why_below_the_band_verdicts": "A direction with no expectation to compare against is weaker evidence than a direction that landed where it was predicted to. Still an outcome, though — so these sit above every decision weight, and the outcome floor applies to them as it does to any other measurement.",
+    "_basis": "provisional",
+    "_basis_detail": "Ordering is reasoned (validated > directional > opinion); magnitudes are first guesses, like everything else here.",
+
+    "improved": {
+      "weight": 1.5,
+      "direction": "positive",
+      "_why": "The team acted and the signal moved the right way. Real positive evidence about this finding type."
+    },
+    "worsened": {
+      "weight": 1.5,
+      "direction": "negative",
+      "_why": "The signal moved the wrong way after the action. Symmetric with improved, for the same reason accept and dismiss are symmetric."
+    },
+    "unchanged": {
+      "weight": 1.2,
+      "direction": "negative",
+      "_why": "The team acted and nothing moved. Negative evidence, but weaker than an active worsening — a flat signal has more benign explanations (partial rollout, short horizon) than a regression does."
+    },
+    "unknown": {
+      "weight": 0.0,
+      "direction": "neutral",
+      "_why": "The direction could not be determined — commonly a signal with no baseline value to compare against. Nothing to learn; counted, never weighted."
+    }
   },
 
   "outcome_floor": {
