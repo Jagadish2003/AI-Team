@@ -313,6 +313,38 @@ persist an already-mapped event, use `store_raw_event(store, org_id, event, raw)
 
 ---
 
+### Application Insights association (2.0-D3 T3)
+
+`discovery/ingest/app_insights_association.py` answers "which application
+component or configuration item does this App Insights signal affect?" — and does
+so **only** from an explicit, operator-supplied reference.
+
+| Target | Stable identifier | Resolved against |
+|--------|-------------------|------------------|
+| `dotnet_app` | `DotNetAppTarget.app_id` | `dotnet_app_config.load_targets(org_id)` — the applications the customer already declared |
+| `cmdb_ci` | ServiceNow `sys_id` | `app.entity_resolution.lookup_resolved_entity` (`entity_type='system'`, `source_system='servicenow'`) — the org-scoped, read-only identity lookup MSP-B3's CMDB ingestion feeds |
+
+Rules that matter if you touch this:
+
+* **No inference, ever.** Not a name, URL, hostname, IIS site name, resource
+  group, owner, environment, tag, or events at similar times. "Orders API" in both
+  systems is not evidence.
+* **The CMDB lookup is never given a `display_name`.** That parameter makes
+  `lookup_resolved_entity` fall back to canonical-name matching when an id finds
+  nothing — which would smuggle in exactly the association above forbids.
+* **Ambiguity is refused with a named reason**, never resolved by picking. A
+  component with more than one configuration entry is refused *even when the
+  entries agree*, because such a config is ambiguous about intent.
+* **The association never enters the B0 event.** It rides the record wrapper
+  inside the `app_insights` block, so the event's identity — and therefore its
+  deterministic `event_signature` and its transport equivalence with every other
+  operational source — cannot depend on whether an association happens to be
+  configured. An otherwise valid event always ingests without one.
+
+Configuration is `APP_INSIGHTS_ASSOCIATIONS` (live) or
+`discovery/ingest/fixtures/app_insights_associations_sample.json` (offline),
+identifiers only; a credential-shaped field is rejected rather than ignored.
+
 ## 7. Resource entities into the graph (AT-639)
 
 When an operational event references a cloud resource, that resource is promoted

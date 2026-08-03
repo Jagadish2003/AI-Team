@@ -121,6 +121,13 @@ from .azure_app_insights import (
     is_excluded_telemetry,
 )
 
+#: 2.0-D3 T3 — explicit-reference association of the monitored application to a
+#: configured .NET application or a known CMDB CI. Additive record-wrapper
+#: information only: it never touches the MSP-B0 event, so the deterministic event
+#: signature and transport equivalence are unaffected by whether an association
+#: happens to be configured.
+from .app_insights_association import AppInsightsAssociationResolver
+
 logger = logging.getLogger(__name__)
 
 #: The transport provider tag stamped on emitted records (not a detector field —
@@ -655,6 +662,7 @@ class AzureEventIngestor(ChangeBasedIngestor):
         stream: Optional[OpsEventStream] = None,
         active_period_seconds: int = DEFAULT_ACTIVE_PERIOD_SECONDS,
         budget: Optional[int] = None,
+        association_resolver: Optional[Any] = None,
     ) -> None:
         self.org_id = org_id
         self.config = config
@@ -676,6 +684,11 @@ class AzureEventIngestor(ChangeBasedIngestor):
         # injectable sleep so tests exercise backoff without real delay.
         self._retry = retry_policy or RetryPolicy()
         self._sleep = sleep_fn or time.sleep
+        # D3 T3: resolved once per ingestor (the configuration does not change
+        # mid-run). Injectable so the association decision table is testable with
+        # no database and no configured estate.
+        self._associations = association_resolver
+        self._associations_loaded = association_resolver is not None
 
     # ── subscription access (the pinned-set discipline — AC4) ───────────────────
 
@@ -722,6 +735,52 @@ class AzureEventIngestor(ChangeBasedIngestor):
             return []
         token = await self.acquire_token()
         return list(await arm_lister(token, self.config))
+
+    # ── App Insights association (D3 T3) ────────────────────────────────────────
+
+    def _association_resolver(self):
+        """The association resolver, built on first use.
+
+        Deferred rather than built in ``__init__`` so a connector that never meets
+        an App Insights signal never reads the association configuration at all.
+        Built at most once; a construction failure degrades to "no associations"
+        rather than failing the poll, because an association is additive
+        information and must never be able to block an otherwise valid ingest.
+        """
+        if not self._associations_loaded:
+            self._associations_loaded = True
+            try:
+                self._associations = AppInsightsAssociationResolver(self.org_id)
+            except Exception:  # noqa: BLE001 — additive info never breaks a run
+                logger.warning(
+                    "azure_events: App Insights association config unusable for "
+                    "org=%s — events still ingest, without associations",
+                    self.org_id, exc_info=True,
+                )
+                self._associations = None
+        return self._associations
+
+    def _app_insights_wrapper(self, scope) -> Dict[str, Any]:
+        """The record-wrapper fragment for an in-scope App Insights signal.
+
+        The T1 scope block, plus (D3 T3) any explicitly-configured association for
+        the monitored application. Both live on the WRAPPER, never on the event.
+        """
+        block = scope.to_dict()
+        resolver = self._association_resolver()
+        if resolver is None:
+            return block
+        try:
+            outcome = resolver.resolve(scope.component_id)
+        except Exception:  # noqa: BLE001 — never let association break ingestion
+            logger.warning(
+                "azure_events: association resolution failed for %s (org=%s) — "
+                "event still ingested without an association",
+                scope.component_id, self.org_id, exc_info=True,
+            )
+            return block
+        block.update(outcome.to_wrapper())
+        return block
 
     # ── record shaping (shared by every stream) ─────────────────────────────────
 
@@ -979,7 +1038,10 @@ class AzureEventIngestor(ChangeBasedIngestor):
                         self._to_record(
                             event, sub, id_of(raw),
                             stream=stream, surface=surface, admission=admission,
-                            app_insights=ai_scope.to_dict() if ai_scope else None,
+                            app_insights=(
+                                self._app_insights_wrapper(ai_scope)
+                                if ai_scope else None
+                            ),
                         )
                     )
                     emitted += 1
