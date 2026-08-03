@@ -75,12 +75,14 @@ from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
 
 try:
     from discovery.signals.reference_mappers import (
+        map_app_insights,
         map_azure_activity_log,
         map_azure_monitor,
         map_service_health,
     )
 except ModuleNotFoundError:  # pragma: no cover - import shim
     from backend.discovery.signals.reference_mappers import (
+        map_app_insights,
         map_azure_activity_log,
         map_azure_monitor,
         map_service_health,
@@ -834,6 +836,7 @@ class AzureEventIngestor(ChangeBasedIngestor):
         id_of,
         prefilter=None,
         scope_of=None,
+        scope_mapper=None,
     ) -> AzureStreamResult:
         """Poll ONE event stream for every pinned subscription, incrementally.
 
@@ -862,8 +865,11 @@ class AzureEventIngestor(ChangeBasedIngestor):
           envelopes, so it cannot touch a record MSP-B2 legitimately ingests.
         * **App Insights scope (D3-AC1).** ``scope_of`` resolves a record's
           Application Insights component by EXPLICIT reference; when it does, the
-          scope rides the record wrapper and the count appears in run health
-          (``app_insights``). A ``None`` scope changes nothing, so D3 never
+          scope rides the record wrapper, the count appears in run health
+          (``app_insights``), and the record is normalised by ``scope_mapper``
+          (D3 T2's ``map_app_insights``) instead of the stream's default mapper —
+          so the monitored application becomes the event's resource. A ``None``
+          scope selects the default mapper unchanged, which is why D3 never
           re-classifies or narrows a B2 record.
         """
         env = self.config.environment
@@ -931,8 +937,18 @@ class AzureEventIngestor(ChangeBasedIngestor):
                 deferred = 0
                 app_insights_count = 0
                 for raw in new_records:
+                    # D3 T1/T2: resolve the App Insights scope BEFORE mapping — it
+                    # selects the mapper. An in-scope record is normalised by the
+                    # App Insights B0 mapper (resource = the monitored application);
+                    # everything else keeps the stream's own mapper untouched.
+                    ai_scope = scope_of(raw) if scope_of else None
+                    record_mapper = (
+                        scope_mapper
+                        if (ai_scope is not None and scope_mapper is not None)
+                        else mapper
+                    )
                     try:
-                        event = mapper(raw, org_id=self.org_id)
+                        event = record_mapper(raw, org_id=self.org_id)
                     except Exception:  # one malformed record must not fail the sub
                         logger.warning(
                             "azure_events: %s mapper failed for %s (sub=%s) — skipped",
@@ -957,8 +973,6 @@ class AzureEventIngestor(ChangeBasedIngestor):
                         # handled by B7, not silently dropped.
                         deduped += 1
                         continue
-                    # D3 T1: explicit-reference App Insights scope, transport-only.
-                    ai_scope = scope_of(raw) if scope_of else None
                     if ai_scope is not None:
                         app_insights_count += 1
                     records.append(
@@ -1151,6 +1165,7 @@ class AzureEventIngestor(ChangeBasedIngestor):
             ts_of=alert_fired_at,
             id_of=alert_id,
             scope_of=lambda raw: app_insights_scope(raw, surface=SURFACE_AZURE_MONITOR),
+            scope_mapper=map_app_insights,
         )
 
     # ── Activity Log (administrative) polling (MSP-B2 T3 / AT-650) ───────────────
@@ -1201,6 +1216,7 @@ class AzureEventIngestor(ChangeBasedIngestor):
             scope_of=lambda raw: app_insights_scope(
                 raw, surface=SURFACE_AZURE_SERVICE_HEALTH
             ),
+            scope_mapper=map_app_insights,
         )
 
     # ── Admission read side (the deduplicated view) ─────────────────────────────
