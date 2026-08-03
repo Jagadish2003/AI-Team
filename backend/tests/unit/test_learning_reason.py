@@ -347,6 +347,11 @@ class TestTheCopyNeverOverclaims:
                 CATEGORY_CREDIBILITY_IMPLICATION,
             ),
             ("Your team's decisions confirm this.", CATEGORY_CREDIBILITY_IMPLICATION),
+            (
+                "This finding is proven by your decisions.",
+                CATEGORY_CREDIBILITY_IMPLICATION,
+            ),
+            ("Your outcomes validate that.", CATEGORY_CREDIBILITY_IMPLICATION),
             ("Stronger evidence supports this.", CATEGORY_CREDIBILITY_IMPLICATION),
         ],
     )
@@ -365,11 +370,61 @@ class TestTheCopyNeverOverclaims:
             "The adjustment limit stopped this moving further than three places.",
             "One similar finding did not move as far as projected.",
             "Based on three decisions, which is limited evidence.",
+            # The SHIPPED roadmap stage summaries. Copy this guard does not own,
+            # and a false positive here is the exact failure A1 T5 warns about —
+            # "Prove value fast" tripped a bare-verb `verification_claim` rule
+            # before it was narrowed to require an object.
+            "Prove value fast with low-effort quick wins.",
+            "Scale into strategic pilots with cross-team alignment.",
+            "Invest in complex opportunities requiring deeper data + governance.",
         ],
     )
     def test_legitimate_copy_is_not_flagged(self, text):
         """A guard that flags the evidence trains people to ignore it (A1 T5)."""
         assert scan_text(text) == [], f"false positive on {text!r}"
+
+    def test_the_shipped_roadmap_payload_scans_clean(self):
+        """Copy owned by another feature must not trip this guard.
+
+        The boundary sweep in the contract tests scans whole payloads, so any
+        false positive on pre-existing platform copy would fail the build for a
+        reason that has nothing to do with learning.
+        """
+        from app.learning_reason_vocabulary import scan_payload
+        from app.roadmap_engine import build_roadmap
+
+        opps = [
+            {
+                "id": f"opp_{i}",
+                "opportunity_identity": f"ident_{i}",
+                "title": f"Finding {i}",
+                "tier": tier,
+                "impact": 7,
+                "effort": 3,
+                "confidence": "HIGH",
+                "aiRationale": "Case ownership changes cluster on one queue.",
+                "evidenceIds": [],
+                "decision": decision,
+                "packId": "service_cloud",
+                "requiredPermissions": ["Salesforce: read Case"],
+                "override": {
+                    "isLocked": False,
+                    "rationaleOverride": "",
+                    "overrideReason": "",
+                    "updatedAt": None,
+                },
+                "_debug": {"detector_id": "D"},
+            }
+            for i, (tier, decision) in enumerate(
+                [
+                    ("Quick Win", "APPROVED"),
+                    ("Strategic", "UNREVIEWED"),
+                    ("Complex", "UNREVIEWED"),
+                ]
+            )
+        ]
+        violations = scan_payload(build_roadmap(opps))
+        assert violations == [], [str(v) for v in violations]
 
     def test_every_rendered_sentence_passes_its_own_guard(self):
         """Our templates are clean by construction, not scrubbed at the edge."""

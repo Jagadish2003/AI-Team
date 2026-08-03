@@ -144,8 +144,15 @@ _CREDIBILITY_RULES: Tuple[Tuple[str, str], ...] = (
         r"|\bevidence\s+(?:is\s+)?(?:stronger|improved)\b",
     ),
     (
+        # Requires an OBJECT, not a bare verb. "Prove value fast with low-effort
+        # quick wins" is the SHIPPED Next-30-Days roadmap summary — ordinary
+        # business copy this guard does not own. Flagging it would be exactly the
+        # false positive A1 T5 warns trains people to ignore the guard. The
+        # failure actually being caught is a claim about a FINDING.
         "verification_claim",
-        r"\b(?:confirms?|confirmed|validates?|validated|proves?|proven|verifies|verified)\b",
+        r"\b(?:confirms?|confirmed|validates?|validated|proves?|proven|verifies|"
+        r"verified)\s+(?:this|that|it|the (?:finding|pattern|opportunity))\b"
+        r"|\b(?:confirmed|validated|proven|verified)\s+by\b",
     ),
     (
         "reliability_claim",
