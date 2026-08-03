@@ -13,8 +13,8 @@ reversible:
 
   * **Nothing is deleted.** A constituent entity keeps its row, its identity, and
     its edges; it gains a ``merged_into`` pointer in metadata. Deleting the row
-    would destroy exactly the evidence AC2 requires and would make T4's unmerge
-    impossible.
+    would destroy exactly the evidence AC2 requires and would make the AC4 unmerge
+    impossible (2.0-B2 T5).
   * **Every constituent source identity is retained** on the survivor, INCLUDING
     the survivor's own. "This entity is ServiceNow CI ``sn-1`` and Jira project
     ``PAY`` and git repo ``payments-api``" is the fact a finding needs to show;
@@ -38,7 +38,7 @@ is reported as ``already_merged``, never written twice.
 
 What this module does NOT do: change ``resolution_status``, rewrite edges, or
 hide a constituent from any list. Those are display/graph-consolidation concerns
-(and the corroboration uplift is T5). Keeping the constituent visible is the
+(and the corroboration uplift is AC5). Keeping the constituent visible is the
 conservative choice: nothing disappears from a customer's graph because a rule
 fired.
 """
@@ -85,6 +85,10 @@ ACTOR_SYSTEM = "system"
 OUTCOME_MERGED = "merged"
 OUTCOME_ALREADY_MERGED = "already_merged"
 OUTCOME_SKIPPED = "skipped"
+#: 2.0-B2 T5: the pair was deliberately UNMERGED, so re-merging it is refused.
+#: Distinct from ``skipped`` on purpose — skipped means "this applier had no
+#: authority here", blocked means "a person reversed this and the reversal stands".
+OUTCOME_BLOCKED = "blocked"
 
 #: Guard against a corrupt merged_into cycle (A→B→A). Far above any real chain.
 _MAX_SURVIVOR_HOPS = 32
@@ -503,7 +507,7 @@ def provenance_for_entities(
 
 def merged_constituents(org_id: str, survivor_id: str) -> List[Dict[str, Any]]:
     """The rows currently pointing at ``survivor_id`` — the reverse of the
-    pointer, so an unmerge (T4) can find what to restore without trusting the
+    pointer, so the AC4 unmerge can find what to restore without trusting the
     survivor's list alone."""
     provenance = get_entity_provenance(org_id, survivor_id)
     if provenance is None:
@@ -538,7 +542,7 @@ def _write_merged_pointer(
     """Mark the constituent as merged WITHOUT deleting it or changing its status.
 
     The row, its identity, and its edges all survive — that is what makes the
-    merge inspectable now and reversible later (T4). ``resolution_status`` is
+    merge inspectable now and reversible later (AC4 / T5). ``resolution_status`` is
     deliberately untouched: it records how the STANDING engine resolved that row,
     and overwriting it would destroy that separate fact.
     """
@@ -553,6 +557,25 @@ def _write_merged_pointer(
         "UPDATE entities SET metadata = %s, updated_at = %s WHERE org_id = %s AND id = %s",
         (json.dumps(metadata), now, org_id, _text(constituent.get("id"))),
     )
+
+
+def _merge_block_for(
+    cur: Any, org_id: str, left_row: Mapping[str, Any], right_row: Mapping[str, Any]
+) -> Optional[Any]:
+    """The active unmerge block covering this pair, or ``None`` (2.0-B2 T5).
+
+    Imported lazily because ``entity_unmerge`` imports this module — the dependency
+    runs unmerge → merge, and this is the one call back the other way.
+
+    Reads on the cursor this merge already holds rather than opening its own: every
+    concurrent merge holding one pooled connection while waiting for a second is a
+    deadlock that only shows up under load. A read failure therefore propagates —
+    ``apply_merge`` rolls back and raises, which is still fail-closed (no merge), and
+    the operator sees the real error rather than a merge that quietly went ahead.
+    """
+    from .entity_unmerge import merge_block_on_cursor
+
+    return merge_block_on_cursor(cur, org_id, left_row, right_row)
 
 
 def apply_merge(
@@ -619,6 +642,26 @@ def apply_merge(
                 reason=(
                     f"refusing to merge across entity types "
                     f"({left_row['entity_type']} vs {right_row['entity_type']})"
+                ),
+            )
+
+        # 2.0-B2 T5 / AC4: a pair somebody UNMERGED must not be re-merged by the
+        # next pass. This applier is idempotent and re-runs continuously — the
+        # source cross-reference is still there, and a confirmed proposal is still
+        # confirmed (T4 made that durable on purpose) — so without this check
+        # "unmerge" would mean "unmerged until the next run", and the merge would
+        # reappear with no explanation. Checked here rather than in the callers so
+        # every path into a merge is covered by construction.
+        block = _merge_block_for(cur, org, left_row, right_row)
+        if block is not None:
+            return MergeOutcome(
+                outcome=OUTCOME_BLOCKED, rule=rule,
+                survivor_id=_text(block.survivor_entity_id) or None,
+                merged_entity_id=_text(block.detached_entity_id) or None,
+                reason=(
+                    "refusing to re-merge a pair that was unmerged"
+                    + (f" ({block.unmerge_id})" if block.unmerge_id else "")
+                    + (f": {block.reason}" if block.reason else "")
                 ),
             )
 
@@ -698,6 +741,7 @@ class MergeRunReport:
     merged: int = 0
     already_merged: int = 0
     skipped: int = 0
+    blocked: int = 0
     outcomes: Tuple[MergeOutcome, ...] = ()
 
     def to_dict(self) -> Dict[str, Any]:
@@ -705,6 +749,7 @@ class MergeRunReport:
             "merged": self.merged,
             "already_merged": self.already_merged,
             "skipped": self.skipped,
+            "blocked": self.blocked,
             "outcomes": [o.to_dict() for o in self.outcomes],
         }
 
@@ -714,6 +759,7 @@ def _tally(outcomes: Sequence[MergeOutcome]) -> MergeRunReport:
         merged=sum(1 for o in outcomes if o.outcome == OUTCOME_MERGED),
         already_merged=sum(1 for o in outcomes if o.outcome == OUTCOME_ALREADY_MERGED),
         skipped=sum(1 for o in outcomes if o.outcome == OUTCOME_SKIPPED),
+        blocked=sum(1 for o in outcomes if o.outcome == OUTCOME_BLOCKED),
         outcomes=tuple(outcomes),
     )
 
@@ -823,6 +869,7 @@ __all__ = [
     "OUTCOME_MERGED",
     "OUTCOME_ALREADY_MERGED",
     "OUTCOME_SKIPPED",
+    "OUTCOME_BLOCKED",
     "EntityMergeError",
     "ConstituentIdentity",
     "MergeProvenance",

@@ -1,6 +1,32 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.17
+Version: v1.18
 Date: 2026-08-03
+
+> v1.18 — 2.0-B2 T5 (Cross-Source Entity Enrichment — unmerge & re-evaluation):
+> added authenticated Analyst+ endpoints that REVERSE a resolution:
+> `POST /api/entities/{entityId}/unmerge` (detach one constituent),
+> `POST /api/entities/{entityId}/unmerge-all` (split completely),
+> `GET /api/entity-unmerges[?status=&limit=]` (the org's unmerge log),
+> `POST /api/entity-unmerges/{unmergeId}/release` (**Owner only** — re-permit
+> automatic merging), and `GET /api/findings/reevaluation-flags[?status=&limit=]`.
+> An unmerge response reports what actually happened: `outcome`
+> (`unmerged` | `not_merged`), `survivorEntityId`, `detachedEntityId`, `unmergeId`,
+> `previousRule`, `restoredEntityIds[]` (includes any sub-merge that travelled with
+> the detached entity), `remainingConstituents`, `flaggedFindings`, and a
+> `dependencySweep` carrying `findingsExamined`, `dependentFindings`,
+> `unlinkedFindings`, `runsScanned` and `runsTruncated` — the bound is reported, never
+> silently applied. An entity that is not merged answers `not_merged` with HTTP 200
+> (a truthful answer, not an error); an unknown entity is a 404. Nothing is deleted by
+> a reversal: the restored row keeps its identity, edges and `resolution_status`, and
+> gains `metadata.unmerged_from`. **`POST /api/entity-merges/apply` gains a `blocked`
+> count and a `blocked` outcome value** — the only change to a previously documented
+> shape, and additive (existing counts and fields are unchanged): a pair that was
+> unmerged is refused rather than re-merged, with the reason naming the unmerge.
+> A `reevaluation-flags` entry carries `opportunityIdentity`, `status`
+> (`pending` | `cleared`), `reason`, `triggerKind`, `triggerRef`, `entityIds[]`,
+> `flaggedRunId`, `flaggedBy`, `flaggedAt`, and — once a later run has re-observed the
+> finding — `clearedRunId` and `clearedAt`. Organization-scoped: an entity or unmerge
+> id from another org returns 404, indistinguishable from an unknown id.
 
 > v1.17 — 2.0-B2 T2 (Cross-Source Entity Enrichment — merged-entity provenance):
 > added authenticated Analyst+ endpoints exposing what a merged entity is made of:
@@ -664,12 +690,105 @@ Requires: authenticated Analyst or Owner.
 
 Request: `{ "entity_types": ["system"], "include_confirmed": true }` (both
 optional).
-Response: `{ "merged": 1, "already_merged": 0, "skipped": 0, "outcomes": [...] }`
+Response: `{ "merged": 1, "already_merged": 0, "skipped": 0, "blocked": 0,
+"outcomes": [...] }`
+
+`blocked` (v1.18) counts pairs refused because they were UNMERGED — distinct from
+`skipped` ("this applier had no authority here") on purpose, so a reversal being
+honoured never looks like a merge that merely did not apply.
 
 Idempotent: a pair already merged is reported as `already_merged` and is not
 written again. A name-similarity proposal is never merged by this route — only a
 confirmed one is, and it is credited to the `confirmed_proposal` rule rather than
 to the tier that proposed it. Every applied merge emits an audit event.
+
+#### POST /api/entities/{entityId}/unmerge
+Purpose: reverse a resolution — detach this entity from the one it was merged into,
+restore it as an independent entity, and flag every dependent finding for
+re-evaluation on the next run.
+Requires: authenticated Analyst or Owner.
+
+Request (both optional): `{ "reason": "different services", "max_runs": 25 }`
+Response:
+```json
+{
+  "outcome": "unmerged",
+  "survivorEntityId": "e1",
+  "detachedEntityId": "e2",
+  "unmergeId": "unm_...",
+  "previousRule": "explicit_reference",
+  "restoredEntityIds": ["e2"],
+  "remainingConstituents": 0,
+  "flaggedFindings": 1,
+  "reason": "detached from e1",
+  "dependencySweep": {
+    "identities": ["<opportunityIdentity>"],
+    "findingsExamined": 12,
+    "dependentFindings": 1,
+    "unlinkedFindings": 3,
+    "runsScanned": 25,
+    "runsTruncated": 0
+  }
+}
+```
+
+Nothing is deleted: the restored row keeps its identity, its edges and its
+`resolution_status`, and gains `metadata.unmerged_from` (history — resolution follows
+`metadata.merged_into` only). A chain of merges comes apart at the reversed joint
+only, so a sub-merge the detached entity itself contains travels with it and appears
+in `restoredEntityIds`.
+
+`unlinkedFindings` counts findings that carry no entity references and therefore
+cannot be shown to depend on the merge — they are neither flagged nor hidden.
+`runsTruncated` reports findings the bounded sweep did not read.
+
+An entity that is not merged returns HTTP 200 with `outcome: "not_merged"`. An
+unknown entity returns 404. Every unmerge emits an audit event.
+
+#### POST /api/entities/{entityId}/unmerge-all
+Purpose: split a merged entity completely — one reversal per constituent, each with
+its own block and audit event.
+Requires: authenticated Analyst or Owner.
+
+Response: `{ "survivorEntityId": "e1", "detached": 2, "outcomes": [ <as above> ] }`
+
+#### GET /api/entity-unmerges
+Purpose: the org's unmerges, newest first — one entry per action, and the answer to
+"why did this pair stop merging?".
+Requires: authenticated Analyst or Owner.
+
+Query: `status` (`blocked` | `released`, omit for both), `limit` (default 100).
+Response: `{ "unmerges": [ { "unmergeId", "pairKey", "pairKeyKind", "status",
+"survivorEntityId", "detachedEntityId", "entityType", "previousRule",
+"restoredEntityIds", "flaggedFindingCount", "unlinkedFindingCount", "reason",
+"actorId", "createdAt", "releasedBy", "releasedAt", "releaseReason" } ], "count": 1 }`
+
+#### POST /api/entity-unmerges/{unmergeId}/release
+Purpose: allow a previously-unmerged pair to be merged again.
+Requires: authenticated **Owner** — this is the one action that re-permits AUTOMATIC
+merging of a pair a person deliberately separated.
+
+Request (optional): `{ "reason": "confirmed with the team" }`
+Response: `{ "unmergeId": "unm_...", "releasedKeys": 2, "status": "released" }`
+
+Does not itself merge anything — it removes the refusal. Nothing is deleted: the row
+keeps its unmerge record and gains who released it and why. An unknown or
+already-released id returns 404 (never 403, which would confirm the id exists).
+
+#### GET /api/findings/reevaluation-flags
+Purpose: findings awaiting re-evaluation because an entity they were built on
+changed identity.
+Requires: authenticated Analyst or Owner.
+
+Query: `status` (`pending` (default) | `cleared` | `all`), `limit` (default 200).
+Response: `{ "flags": [ { "opportunityIdentity", "status", "reason", "triggerKind",
+"triggerRef", "entityIds", "flaggedRunId", "flaggedBy", "flaggedAt", "updatedAt",
+"clearedRunId", "clearedAt" } ], "count": 1, "pending": 1 }`
+
+Keyed on the stable `opportunityIdentity`, so a flag survives to the run that
+re-evaluates it. A flag is cleared by the run that re-observed the finding and names
+it in `clearedRunId` — a finding that stops appearing keeps its flag rather than being
+treated as handled.
 
 ---
 

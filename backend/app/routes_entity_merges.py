@@ -24,7 +24,7 @@ The apply route is the deliberate seam between "decided" and "done": T1 decides
 and writes nothing, T3 records a human answer and writes nothing to the graph, and
 a merge only happens when someone (or a scheduled caller) invokes this. Wiring it
 into the discovery run is an operational decision, not something this task should
-make silently — a merge is irreversible until T4 ships unmerge.
+make silently — and unmerge (T5) is what makes a merge reversible.
 """
 from __future__ import annotations
 
