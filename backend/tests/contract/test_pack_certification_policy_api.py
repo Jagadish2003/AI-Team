@@ -95,6 +95,32 @@ def _auth(token: str = OWNER_TOKEN, org_id: str | None = None) -> Dict[str, str]
     return headers
 
 
+def _launch_body(**overrides: Any) -> Dict[str, Any]:
+    """A launch payload matching ``LaunchRequest``.
+
+    Mirrors ``test_pack_disable_lifecycle._launch_body``: ``org_id`` and
+    ``weightings`` are required, and the default singular ``pack_id`` is DROPPED when
+    the caller supplies ``pack_ids`` — otherwise the selection silently gains
+    ``service_cloud``, which would keep a runnable pack in every selection and turn
+    the expected 409 into a 200.
+    """
+    body: Dict[str, Any] = {
+        "org_id": "default",
+        "selected_system_ids": ["salesforce", "servicenow"],
+        "weightings": {},
+    }
+    if "pack_ids" not in overrides:
+        body["pack_id"] = "service_cloud"
+    body.update(overrides)
+    return body
+
+
+def _launch(client, **overrides) -> Any:
+    return client.post(
+        "/api/stack-builder/launch", json=_launch_body(**overrides), headers=_auth()
+    )
+
+
 def _set_policy(client, level: str, **kwargs) -> Any:
     return client.put(
         "/api/packs/certification/policy",
@@ -142,14 +168,18 @@ def test_lifting_the_restriction_is_recorded_not_deleted(client, isolated_org):
     assert lifted.json()["revision"] == 2  # a transition, not a disappearance
 
 
-def test_a_viewer_can_read_the_policy(client, isolated_org):
-    """A user who cannot select a pack must be able to see the rule stopping them."""
-    _set_policy(client, "certified")
+def test_a_viewer_can_read_the_policy(client):
+    """A user who cannot select a pack must be able to see the rule stopping them.
+
+    Runs in the DEFAULT org: the static viewer token holds its role there, whereas a
+    freshly seeded throwaway org gives it no role at all — which would make this
+    assert RBAC plumbing rather than the read permission under test.
+    """
     response = client.get(
         "/api/packs/certification/policy", headers=_auth(VIEWER_TOKEN)
     )
-    assert response.status_code == 200
-    assert response.json()["minimumLevel"] == "certified"
+    assert response.status_code == 200, response.text
+    assert response.json()["minimumLevel"] in {"community", "partner", "certified"}
 
 
 def test_an_illegal_level_is_a_bad_request(client, isolated_org):
@@ -207,12 +237,8 @@ def test_launch_is_refused_for_a_pack_below_the_floor(
 ):
     """AC3 over the wire, at the real activation edge."""
     _set_policy(client, "certified")
-    response = client.post(
-        "/api/stack-builder/launch",
-        json={"pack_ids": [PACK], "selected_system_ids": ["servicenow"]},
-        headers=_auth(),
-    )
-    assert response.status_code == 409
+    response = _launch(client, pack_ids=[PACK])
+    assert response.status_code == 409, response.text
     detail = response.json()["detail"]
     assert PACK in detail                       # names the pack
     assert "Community" in detail                # names the level it holds
@@ -221,12 +247,8 @@ def test_launch_is_refused_for_a_pack_below_the_floor(
 
 def test_launch_succeeds_for_a_compliant_pack(client, isolated_org):
     _set_policy(client, "certified")
-    response = client.post(
-        "/api/stack-builder/launch",
-        json={"pack_ids": [PACK], "selected_system_ids": ["servicenow"]},
-        headers=_auth(),
-    )
-    assert response.status_code == 200
+    response = _launch(client, pack_ids=[PACK])
+    assert response.status_code == 200, response.text
     assert PACK in response.json()["packIds"]
 
 
@@ -234,32 +256,20 @@ def test_launch_is_unaffected_when_no_policy_is_set(
     client, isolated_org, uncertified_pack
 ):
     """An org that has not opted in is not restricted by anybody else's policy."""
-    response = client.post(
-        "/api/stack-builder/launch",
-        json={"pack_ids": [PACK], "selected_system_ids": ["servicenow"]},
-        headers=_auth(),
-    )
-    assert response.status_code == 200
+    response = _launch(client, pack_ids=[PACK])
+    assert response.status_code == 200, response.text
 
 
 def test_lifting_the_policy_restores_activation(
     client, isolated_org, uncertified_pack
 ):
     _set_policy(client, "certified")
-    blocked = client.post(
-        "/api/stack-builder/launch",
-        json={"pack_ids": [PACK], "selected_system_ids": ["servicenow"]},
-        headers=_auth(),
-    )
-    assert blocked.status_code == 409
+    blocked = _launch(client, pack_ids=[PACK])
+    assert blocked.status_code == 409, blocked.text
 
     _set_policy(client, "community", reason="lifted for the pilot")
-    allowed = client.post(
-        "/api/stack-builder/launch",
-        json={"pack_ids": [PACK], "selected_system_ids": ["servicenow"]},
-        headers=_auth(),
-    )
-    assert allowed.status_code == 200
+    allowed = _launch(client, pack_ids=[PACK])
+    assert allowed.status_code == 200, allowed.text
 
 
 # ── Selection surface ─────────────────────────────────────────────────────────
