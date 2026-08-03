@@ -397,6 +397,66 @@ def test_a_merge_decision_from_an_unmergeable_tier_is_skipped_loudly(monkeypatch
     assert "not permitted to merge" in report.outcomes[0].reason
 
 
+def test_the_contract_fixture_shape_really_produces_a_proposal():
+    """Guard for the contract suite's seeded estate, run WITHOUT a database.
+
+    ``tests/contract/test_entity_merge_contract.py`` seeds three entities and
+    asserts that the name-only pair is proposed (and never auto-merged). Tier 3
+    needs more than a shared name — it needs a corroborating observed
+    relationship — so an estate missing the second edge silently produces no
+    proposal and those tests fail far from the cause. This mirrors the fixture in
+    memory so the shape is pinned where it is cheap to check.
+    """
+    from app import cross_source_resolution as csr
+
+    def _entity(eid, name, source, record_id):
+        return csr.ResolutionEntity(
+            entity_id=eid, org_id="org_a", entity_type="system", display_name=name,
+            canonical_name=" ".join(name.split()).lower(),
+            source_system=source, source_record_id=record_id,
+            cross_references=csr.extract_cross_references(
+                {"cross_references": [{"system": "jira", "record_id": "PAY"}]},
+                own_system=source,
+            ) if eid == "sn" else (),
+        )
+
+    sn = _entity("sn", "Payments Platform", "servicenow", "sn-1")
+    jira = _entity("jira", "Payments", "jira", "PAY")
+    git = _entity("git", "payments", "git", "repo-1")
+    pool = [sn, jira, git]
+    rels = csr.build_relationship_index([
+        {"from_entity_id": "jira", "to_entity_id": "team",
+         "relationship_type": "owns", "inferred": False},
+        {"from_entity_id": "git", "to_entity_id": "team",
+         "relationship_type": "owns", "inferred": False},
+    ])
+
+    decisions = csr.resolve_entities(pool, pool, relationship_index=rels)
+    by_subject = {d.subject.entity_id: d for d in decisions}
+
+    # The explicit cross-reference auto-merges...
+    assert by_subject["sn"].is_merge is True
+    assert by_subject["sn"].tier == csr.TIER_EXPLICIT_REFERENCE
+    # ...and the name-only pair is PROPOSED, never merged.
+    assert by_subject["git"].status == csr.STATUS_PROPOSED
+    assert by_subject["git"].is_merge is False
+    assert by_subject["git"].proposals[0].target.entity_id == "jira"
+
+    # And the corroboration really is load-bearing: drop the shared neighbour and
+    # the proposal correctly disappears — which is exactly how the contract
+    # fixture failed in CI.
+    without = csr.resolve_entities(
+        pool, pool,
+        relationship_index=csr.build_relationship_index([
+            {"from_entity_id": "jira", "to_entity_id": "team",
+             "relationship_type": "owns", "inferred": False},
+        ]),
+    )
+    assert {d.subject.entity_id: d for d in without}["git"].status == (
+        csr.STATUS_UNRESOLVED
+    )
+
+
 def test_merging_an_entity_with_itself_is_refused_not_written():
     assert em.apply_merge("org_a", "e1", "e1", rule=em.RULE_ALIAS_MAPPING).outcome == (
         em.OUTCOME_SKIPPED

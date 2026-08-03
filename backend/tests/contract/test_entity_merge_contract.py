@@ -147,7 +147,14 @@ def _cleanup() -> None:
 @pytest.fixture
 def estate():
     """ServiceNow 'Payments Platform' explicitly cites the Jira record — an
-    auto-merge pair. A third git entity shares the Jira entity's name only."""
+    auto-merge pair. A third git entity shares the Jira entity's name only.
+
+    The git and Jira entities are BOTH given an ``owns`` edge to the same team,
+    because tier 3 needs more than a shared name: it requires a corroborating
+    observed relationship (a shared neighbour, keyed on relationship type AND
+    target). Without both edges the engine correctly proposes nothing, and the
+    tests that need a proposal have nothing to work with.
+    """
     _cleanup()
     ids = {
         "sn": _insert_entity(
@@ -166,7 +173,10 @@ def estate():
         "team": _insert_entity("Platform Team", source_system="servicenow",
                                source_record_id="sn-team"),
     }
+    # The corroborating relationship tier 3 requires: the same edge type to the
+    # same third entity from both sides of the name match.
     _insert_edge(ids["jira"], ids["team"], "owns")
+    _insert_edge(ids["git"], ids["team"], "owns")
     yield ids
     _cleanup()
 
@@ -386,17 +396,23 @@ def test_a_confirmed_proposal_merges_and_records_the_human_rule(
         headers=_auth(), json={"action": "confirm"},
     )
 
+    assert emp.confirmed_pairs(ORG), "the confirmation must reach the merge handoff"
+
     report = _apply(client)
     assert report["merged"] >= 1
 
-    pair = emp.confirmed_pairs(ORG)[0]
-    provenance_left = em.get_entity_provenance(ORG, pair[1])
-    provenance_right = em.get_entity_provenance(ORG, pair[2])
-    merged = provenance_left if provenance_left.is_merged else provenance_right
-    assert merged.is_merged is True
-    assert em.RULE_CONFIRMED_PROPOSAL in merged.rules, (
-        "a name match never authorises a merge — the person who confirmed it did"
+    # Read the SURVIVOR, not the pair members: once merged, both sides of the
+    # confirmed pair are constituents of one head, so neither is itself a merged
+    # entity. `sn` is that head — oldest, stable id, and already a survivor from
+    # the auto-merge, so choose_survivor keeps accumulating onto it.
+    provenance = _provenance(client, estate["sn"])
+    by_id = {c["entity_id"]: c for c in provenance["constituents"]}
+    assert estate["git"] in by_id, "the confirmed pair must actually be merged"
+    assert by_id[estate["git"]]["rule"] == em.RULE_CONFIRMED_PROPOSAL, (
+        "a name match never authorises a merge — the person who confirmed it did, "
+        "and the provenance must credit the confirmation rather than the tier"
     )
+    assert em.RULE_CONFIRMED_PROPOSAL in provenance["rules"]
 
 
 def test_a_rejected_proposal_is_never_merged(client: TestClient, estate):
