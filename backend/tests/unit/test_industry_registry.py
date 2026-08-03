@@ -33,9 +33,9 @@ naming engineering-delivery friction as the primary signal category —
 additive (Salesforce variants stay primary too), not a Salesforce removal;
 (3) technology's pack_hints gain github_engineering (the pack that scores the
 already-connectable github default — the honest-pack-list gap the story
-names as its own example). The "1.9 cloud-ops/sec-ops packs" the story also
-names for this sub-goal have no registered pack_id in this codebase and are
-deliberately NOT invented (anchor-on-shipped).
+names as its own example). The 1.9 cloud-ops/security-ops packs the story also
+names for this sub-goal now have registered pack_ids, so technology includes
+them and the tests assert every hint remains registered.
 
 Pure-config module (no DB, no app import) — runs standalone, matching
 the repo's tests/unit/ purpose ("unit tests for individual backend modules").
@@ -445,13 +445,13 @@ def test_technology_pack_hints_include_github_engineering():
     assert "github_engineering" in hints
 
 
-def test_technology_pack_hints_do_not_reference_an_unshipped_cloud_ops_pack():
-    """The story also names '1.9 cloud-ops/sec-ops packs' for technology, but
-    no such pack_id exists in pack_config.PACK_REGISTRY in this codebase —
-    anchor-on-shipped means it must not be invented."""
+def test_technology_pack_hints_include_registered_1_9_ops_packs():
+    """Technology carries the 1.9 ops packs and every hint is registered."""
     from discovery.packs.pack_config import PACK_REGISTRY
 
     hints = get_pack_hints("technology")
+    assert "cloud_ops" in hints
+    assert "security_ops" in hints
     for hint in hints:
         assert hint in PACK_REGISTRY, f"pack_hint '{hint}' has no registered pack"
 
