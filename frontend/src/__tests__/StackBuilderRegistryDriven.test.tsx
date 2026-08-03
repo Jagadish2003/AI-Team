@@ -34,6 +34,18 @@ import type {
 const INDUSTRIES: IndustryListItem[] = [
   { industry_id: 'financial_services', label: 'Financial services', pack_hints: ['ncino'], recommended_systems: ['jira'] },
   { industry_id: 'public_sector', label: 'Public sector', pack_hints: ['service_cloud'], recommended_systems: [] },
+  {
+    industry_id: 'manufacturing',
+    label: 'Manufacturing',
+    pack_hints: ['service_cloud'],
+    recommended_systems: [],
+    roadmap_systems: [{
+      system_id: 'sap',
+      label: 'SAP',
+      target_release: 'future',
+      reason: 'SAP ingestion is on the roadmap.',
+    }],
+  },
 ];
 
 const LENDING: TemplateListItem = {
@@ -115,6 +127,15 @@ describe('R18-C1 T3 — industries and templates render from the registry API', 
   it('renders a template pill per registry template', () => {
     render(<Harness />);
     expect(screen.getByRole('checkbox', { name: 'Commercial lending' })).toBeInTheDocument();
+  });
+
+  it('keeps roadmap Coming soon labels readable in light theme', () => {
+    render(<Harness />);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Manufacturing' }));
+
+    expect(screen.getByText('SAP')).toBeInTheDocument();
+    expect(screen.getByText('Coming soon')).toHaveClass('text-amber-700');
   });
 });
 
