@@ -250,10 +250,10 @@ export default function DiscoveryFocusPage({
                   <span
                     key={system.system_id}
                     title={system.reason}
-                    className="inline-flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-800 dark:text-amber-100"
+                    className="integration-coming-soon-status-pill inline-flex items-center gap-2 whitespace-nowrap rounded-full border text-xs font-medium leading-none"
                   >
                     <span>{system.label}</span>
-                    <span className="text-amber-700 dark:text-amber-200/80">Coming soon</span>
+                    <span>Coming soon</span>
                   </span>
                 );
               })}

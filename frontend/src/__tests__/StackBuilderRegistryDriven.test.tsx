@@ -135,7 +135,9 @@ describe('R18-C1 T3 — industries and templates render from the registry API', 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Manufacturing' }));
 
     expect(screen.getByText('SAP')).toBeInTheDocument();
-    expect(screen.getByText('Coming soon')).toHaveClass('text-amber-700');
+    expect(screen.getByText('Coming soon').parentElement).toHaveClass(
+      'integration-coming-soon-status-pill',
+    );
   });
 });
 
