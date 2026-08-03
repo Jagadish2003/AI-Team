@@ -1,0 +1,174 @@
+{
+  "_meta": {
+    "purpose": "2.0-A3 T1 — the learning signal set: which signals the ranking-adaptation layer may learn from, and what each is worth relative to the others.",
+    "why_external": "The story says so in as many words: 'Keep the weighting explicit and configurable — it will need tuning once real outcome data exists.' Every number here is a first guess made before a single production outcome has been measured. Held in config, following the cloud_ops and outcome-confounder pattern, so re-weighting alters behaviour with no code deploy.",
+    "evidence_convention": "Every weight declares `basis` as one of: 'measured' (derived from a reproducible measurement, cite it), 'operationally_justified' (a defensible default from domain reasoning, not yet measured), or 'provisional' (a first guess, expected to be wrong). Mirrors app/config/outcome_confounders.json and discovery/signals/ops_calibration.py.",
+    "governing_principle": "An outcome outranks an opinion. A measured result from 2.0-A2 — the signal actually moved, or did not — is evidence about the world; an analyst decision is evidence about a judgement. Both are worth learning from, and neither is worthless, but they are not equals. This file may not be edited into a state where any decision weight meets or exceeds any outcome weight: the loader REFUSES such a config rather than silently applying it, because a config edit that inverts the principle would turn outcome-weighted learning back into click-tracking without anything in the product looking different.",
+    "not_a_scoring_input": "Nothing here feeds impact, effort, tier, confidence, corroboration, or evidence. These weights inform ORDERING only (2.0-A3 T2's bounded adjustment layer). T1 produces the signal set; it applies no adjustment.",
+    "configVersion": "1.0.0"
+  },
+
+  "outcome_signals": {
+    "_note": "Results from 2.0-A2's post-action movement measurement. These are what 'the product gets smarter' honestly means: it learns from what worked. Keyed by the T5 projection-validation verdict, because that verdict already answers the question the learning layer is asking — did reality land where we said it would?",
+    "_basis": "provisional",
+    "_basis_detail": "No production outcome data exists yet; 2.0-A2 running in the field is what will produce it. The ORDERING of these weights is defensible reasoning (a projection that verified is stronger evidence than one that merely moved); the MAGNITUDES are first guesses. Expect to revise all five once there is a real distribution to fit against.",
+
+    "within_band": {
+      "weight": 3.0,
+      "direction": "positive",
+      "_why": "The projection was made and reality landed inside the band. This is the single strongest signal the platform can produce about a finding type: it was worth doing AND the model of it was right."
+    },
+    "above_band": {
+      "weight": 2.5,
+      "direction": "positive",
+      "_why": "Improvement exceeded the projected band. Strongly positive about the FINDING (the intervention worked, more than expected), but slightly below within_band as a learning signal because the projection model was wrong — and A1's band width is itself calibrated from these outcomes. Rewarding a miss as highly as a hit would teach the ranking layer nothing about calibration."
+    },
+    "below_band": {
+      "weight": 2.0,
+      "direction": "negative",
+      "_why": "The action was taken and the signal moved less than projected, or not at all. Negative evidence about this finding type's value. Weighted slightly below the positive verdicts because a below-band result has more benign explanations than an above-band one — the action may have been partial, or the horizon short. The comparability verdict caveats it further at read time."
+    },
+    "not_projected": {
+      "weight": 0.0,
+      "direction": "neutral",
+      "_why": "No projection existed to validate against — usually a finding created before 2.0-A1 shipped. This entry is deliberately zero because the VERDICT teaches nothing; the measurement itself still does, and falls through to `movement_direction` below. Kept at zero rather than removed so the fall-through is explicit rather than an absent key."
+    },
+    "too_early": {
+      "weight": 0.0,
+      "direction": "neutral",
+      "_why": "The projection's horizon has not elapsed. Learning from it would mean learning from an unfinished experiment. Zero until the horizon passes and the verdict is re-measured."
+    }
+  },
+
+  "decision_signals": {
+    "_note": "Analyst accept / dismiss / defer. Evidence about a judgement rather than about the world — real, useful, and structurally capped below every outcome weight (see _meta.governing_principle).",
+    "_basis": "provisional",
+    "_basis_detail": "Set so that the strongest decision signal (accept, 1.0) sits below the weakest non-zero outcome signal (below_band, 2.0), leaving room to re-weight either group without crossing the boundary. Unmeasured.",
+
+    "accept": {
+      "weight": 1.0,
+      "direction": "positive",
+      "_why": "The analyst judged the finding real and worth acting on. The baseline unit of decision evidence — every other decision weight is expressed relative to this one."
+    },
+    "dismiss": {
+      "weight": 1.0,
+      "direction": "negative",
+      "_why": "The analyst judged the finding not worth surfacing. Deliberately symmetric with accept: a team that dismisses a whole finding type is telling the platform something exactly as informative as a team that accepts one, and asymmetry here would bias the layer towards surfacing more."
+    },
+    "defer": {
+      "weight": 0.35,
+      "direction": "negative",
+      "_why": "'Not now' is genuinely weaker than 'no' — the finding may be real and merely badly timed — but it is not neutral, because a finding deferred repeatedly is one the team keeps choosing not to act on. Weighted well below dismiss so a deferral cannot accumulate into the equivalent of a rejection quickly."
+    }
+  },
+
+  "defer_reasons": {
+    "_note": "The closed vocabulary a defer must cite. Free text is refused: a reason the layer cannot group on teaches it nothing, and free text in a learning input is an unbounded PII surface. Each reason carries its own multiplier because they are not equally informative about the FINDING — 'no capacity' says nothing about the finding's quality, while 'not valuable enough' very nearly is a dismissal.",
+    "_basis": "provisional",
+    "_basis_detail": "Ordering is reasoned; magnitudes are guesses. The zero-weighted reasons are the important ones: they are deferrals that carry no information about the finding at all, and treating them as weak dismissals would teach the layer to demote findings for reasons that are entirely about the customer's calendar.",
+
+    "no_capacity":            { "multiplier": 0.0, "_why": "A resourcing fact about the team, not a judgement about the finding. Recorded, never learned from." },
+    "blocked_by_dependency":  { "multiplier": 0.0, "_why": "Blocked on something external. Says nothing about whether the finding is worth surfacing." },
+    "awaiting_approval":      { "multiplier": 0.0, "_why": "In flight, not declined. Learning from it would penalise a finding for moving slowly through governance." },
+    "needs_more_evidence":    { "multiplier": 0.6, "_why": "A judgement about this finding's evidence quality specifically — informative, and the closest thing to a calibration signal a decision can produce." },
+    "timing_not_right":       { "multiplier": 0.4, "_why": "Partly about the finding (its urgency was overstated), partly about the calendar." },
+    "lower_priority":         { "multiplier": 0.8, "_why": "An explicit relative-value judgement. Nearly a dismissal, and treated as most of one." },
+    "other":                  { "multiplier": 0.3, "_why": "The escape hatch that keeps analysts from mis-picking a specific reason to get past the form. Deliberately low: an unstructured reason should barely move ranking." }
+  },
+
+  "recency": {
+    "_note": "A decision from two years ago describes a team, a pack version and a business that may no longer exist. Signals decay towards zero with age rather than being cliff-dropped, so the signal set has no discontinuity a customer could notice as 'the ranking changed and nothing happened'.",
+    "_basis": "provisional",
+    "_basis_detail": "180 days is one enterprise planning half-year — long enough to accumulate signal, short enough that a reorganised team is not ranked by its predecessor's opinions. Unmeasured.",
+    "half_life_days": 180,
+    "floor": 0.1,
+    "_floor_note": "Decay never reaches zero. An old outcome is weak evidence, not disproven evidence, and a signal that decays to exactly zero silently leaves the explainability surface — the customer sees a reason cite four decisions, then three, with nothing having changed."
+  },
+
+  "comparability": {
+    "_note": "2.0-A2 T3 attaches a comparability verdict to every measurement and NEVER blocks one. The learning layer honours the same rule: a caveated measurement is down-weighted, never discarded, so a portfolio of weakly-comparable outcomes still teaches something and the discarding never happens silently.",
+    "_basis": "operationally_justified",
+    "_basis_detail": "Follows directly from A2 T3's established 'carried, never silently normalised' rule. The multipliers are provisional; the principle that none of them is zero is not.",
+    "comparable": 1.0,
+    "weakly_comparable": 0.5,
+    "not_comparable": 0.2
+  },
+
+  "movement_direction": {
+    "_note": "The measured direction of the signal after the action — improved / worsened / unchanged. Used ONLY when the verdict is `not_projected`, i.e. when a real measurement exists but no projection was made to validate it against.",
+    "_why_it_is_a_signal_at_all": "A projection verdict answers 'was our MODEL right?'. The direction answers 'did the ACTION help?' — and the second question is the one ranking actually cares about. A finding that a team acted on and that measurably improved is evidence it was worth surfacing, whether or not anyone projected it beforehand. Treating those as worthless would discard every measurement taken on a finding created before 2.0-A1 shipped.",
+    "_why_only_when_not_projected": "When a projection DOES exist, the band verdict already incorporates the direction and is strictly better information (it knows what was expected). Applying both would count one measurement twice.",
+    "_why_below_the_band_verdicts": "A direction with no expectation to compare against is weaker evidence than a direction that landed where it was predicted to. Still an outcome, though — so these sit above every decision weight, and the outcome floor applies to them as it does to any other measurement.",
+    "_basis": "provisional",
+    "_basis_detail": "Ordering is reasoned (validated > directional > opinion); magnitudes are first guesses, like everything else here.",
+
+    "improved": {
+      "weight": 1.5,
+      "direction": "positive",
+      "_why": "The team acted and the signal moved the right way. Real positive evidence about this finding type."
+    },
+    "worsened": {
+      "weight": 1.5,
+      "direction": "negative",
+      "_why": "The signal moved the wrong way after the action. Symmetric with improved, for the same reason accept and dismiss are symmetric."
+    },
+    "unchanged": {
+      "weight": 1.2,
+      "direction": "negative",
+      "_why": "The team acted and nothing moved. Negative evidence, but weaker than an active worsening — a flat signal has more benign explanations (partial rollout, short horizon) than a regression does."
+    },
+    "unknown": {
+      "weight": 0.0,
+      "direction": "neutral",
+      "_why": "The direction could not be determined — commonly a signal with no baseline value to compare against. Nothing to learn; counted, never weighted."
+    }
+  },
+
+  "outcome_floor": {
+    "_note": "The class boundary, enforced after caveat multipliers are applied. A weighted outcome never falls below this multiple of the strongest decision weight, no matter how heavily caveated.",
+    "_why_this_exists": "Without it the governing principle holds in the config and breaks in the data. A below-band verdict (2.0) that is weakly-comparable (x0.5) and carries both severities of caveat (x0.54) lands at 0.54 — below a clean analyst accept at 1.0. Caveats are common in real measurement, so opinions would quietly win most of the time, and no amount of validating the config would reveal it. That is drift back to click-tracking arriving through multiplier compounding rather than through an edit.",
+    "_why_it_is_principled": "A caveat says 'this comparison is imperfect', not 'this is not a measurement'. 2.0-A2 T3's own rule is that a poor comparability verdict still REPORTS with the caveat attached — it never becomes a non-measurement. So caveats may order outcomes against EACH OTHER, and must not push one across the evidence-class boundary.",
+    "_why_recency_is_excluded": "The floor is applied before recency decay, not after, because decay is applied identically to both classes: at equal age an outcome therefore always outweighs a decision, while a three-year-old measurement and a three-year-old opinion fade together. Flooring after decay would claim an ancient measurement about a since-rebuilt system beats a fresh judgement about today's — which is not defensible.",
+    "_basis": "operationally_justified",
+    "_basis_detail": "The ratio is a first guess; the existence of a floor follows from the evidence-class argument above and is not a tuning parameter. Below the floor, differently-caveated outcomes compare equal — acceptable, because they have all been reduced to 'the weakest kind of measurement' and their ordering against each other has stopped carrying information.",
+    "ratio_to_strongest_decision": 1.05
+  },
+
+  "confounders": {
+    "_note": "2.0-A2 T4 labels the material changes that weaken a comparison. A measurement carrying material caveats is still a measurement — down-weighted here, never dropped, for the same reason as above.",
+    "_basis": "operationally_justified",
+    "_basis_detail": "Mirrors the comparability treatment. A2 T4's own rule is 'never a blocked measurement'; a learning layer that silently drops caveated outcomes would re-introduce exactly the blocking T4 refused.",
+    "material_caveat_multiplier": 0.6,
+    "advisory_caveat_multiplier": 0.9,
+    "_note_on_compounding": "Applied once per severity present, not once per caveat, so a measurement with six advisory caveats is not weighted into oblivion."
+  },
+
+  "cold_start": {
+    "_note": "AC4. Below this many distinct contributing signals in an org, the signal set reports itself INACTIVE and T2's adjustment layer must apply nothing. 'No pretending to personalise from three data points.'",
+    "_basis": "operationally_justified",
+    "_basis_detail": "Ten distinct signals is the smallest count at which a per-detector pattern is more plausible than coincidence, and it is a number a customer can be told without embarrassment. Deliberately counts DISTINCT OPPORTUNITY IDENTITIES, not rows: one analyst clicking accept ten times on the same finding is one data point, and a threshold a single opportunity can satisfy is not a threshold.",
+    "minimum_signals": 10,
+    "minimum_distinct_identities": 5,
+    "_distinct_note": "Both must be met. The second is what stops a single enthusiastically-reviewed opportunity from switching learning on for a whole org."
+  },
+
+  "similarity": {
+    "_note": "What makes two findings 'similar' for the purposes of 'your team accepted 4 similar findings'. Deliberately conservative and explicitly ranked: a claim of similarity the customer disagrees with makes the whole explainability surface untrustworthy.",
+    "_basis": "operationally_justified",
+    "_basis_detail": "The three dimensions are the run-invariant ones already stamped on every finding (detector, pack, signal concept). Nothing is inferred from titles or narrative text — a name-similarity match would be exactly the kind of silent fuzzy inference 2.0-B2 refuses for entity resolution, and it is refused here for the same reason.",
+    "same_detector_same_pack": {
+      "score": 1.0,
+      "_why": "The same detector in the same pack is the same finding type. The only dimension strong enough to justify the word 'similar' to a customer without qualification."
+    },
+    "same_detector_other_pack": {
+      "score": 0.6,
+      "_why": "Two packs can register detectors that measure the same concept (FSC_APPROVAL_REVIEW_CYCLE and APPROVAL_BOTTLENECK). Related, but calibrated differently per pack, so not equivalent."
+    },
+    "same_signal_concept": {
+      "score": 0.4,
+      "_why": "Different detectors reading the same underlying concept — the A1 signal registry's movement signal is the join. Weak, and the weakest thing that may still be called similar."
+    },
+    "minimum_score": 0.4,
+    "_minimum_note": "Below this, two findings are NOT similar and no learning transfers between them. There is deliberately no 'same pack' tier: two findings sharing only a pack have nothing meaningful in common, and calling them similar in a customer-facing explanation would be indefensible."
+  }
+}
