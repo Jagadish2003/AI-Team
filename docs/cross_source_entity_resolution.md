@@ -418,6 +418,34 @@ step 2 reads only rules T2 was permitted to merge on. A test pins
 `RESOLVED_BASES == T1's AUTO_MERGE_TIERS + {same_entity, confirmed_proposal}` so
 the two layers cannot drift into the gate trusting something T1 does not.
 
+### A reversed identity is not a resolved one (T7)
+
+**Checked before steps 2–4**, and the reason is that every one of them *outlives an
+unmerge by design*:
+
+| Basis | Why it survives a reversal |
+|---|---|
+| confirmed proposal | the confirmation stays confirmed — T4 made decisions durable on purpose |
+| T1 re-derivation | the source cross-reference is still in the data; that is why T5's block exists at all |
+
+So a reviewer reversed a merge and the finding **kept the HIGH it had been given for
+the identity they had just reversed** — the exact dishonesty AC5 exists to close,
+arriving through AC4's door. Found by the T7 acceptance sweep; T6 could not have
+caught it, because T5's block did not exist yet.
+
+`graph_identity_resolver` now asks `entity_unmerge.merge_block_for` first and
+returns no basis for a blocked pair — the same rule `apply_merge` follows, so the
+two layers cannot disagree about whether a pair is joined. Two details:
+
+- the **same-row** short-circuit (step 1) deliberately stays *above* the check: two
+  references locating one row are not a pair, so no reversal could have separated
+  them;
+- releasing the block restores the elevation once the pair is merged again, so the
+  check is not a one-way ratchet that silently caps a legitimate identity forever.
+
+Fails closed on both edges: an unreadable block state counts as blocked (that is
+`merge_block_for`'s own posture), and an unimportable unmerge layer does too.
+
 ### Degradation fails CLOSED
 
 An identity claim that is not *positively* resolved never elevates — whatever the

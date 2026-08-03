@@ -397,3 +397,72 @@ def test_operational_corroborators_are_not_gated_by_this_rule():
     assert result.elevated_confidence == CONFIDENCE_HIGH, (
         "an ungated observed corroborator still elevates on its own merits"
     )
+
+
+# ── T7: a REVERSED identity is not a resolved one ───────────────────────────
+#
+# Found by the 2.0-B2 T7 acceptance sweep. Every basis the resolver trusts outlives
+# an unmerge by design — a confirmed proposal stays confirmed (T4 made that durable
+# deliberately) and the source cross-reference T1 re-derives from is still in the
+# data — so before the block check the gate kept elevating on an identity a person
+# had just reversed. The end-to-end regression lives in
+# ``tests/contract/test_2_0_b2_acceptance.py``; these pin the unit-level rules.
+
+
+def test_a_blocked_pair_reads_as_unmerged():
+    """The happy path of the check: a recorded block means "a person separated
+    these", which is the opposite of a resolved identity."""
+    from app import entity_unmerge as eu
+
+    left = {"id": "L", "source_system": "servicenow", "canonical_name": "payments"}
+    right = {"id": "R", "source_system": "jira", "canonical_name": "payments"}
+    block = eu.MergeBlock(
+        org_id="org_a", pair_key="rows:L|R", pair_key_kind=eu.PAIR_KEY_ROWS,
+        unmerge_id="unm_1", status=eu.STATUS_BLOCKED, survivor_entity_id="L",
+        detached_entity_id="R", entity_type="system", previous_rule=None,
+        restored_entity_ids=(), flagged_finding_count=0, unlinked_finding_count=0,
+        reason=None, actor_id="analyst-1", created_at=None,
+    )
+    import app.entity_unmerge as module
+
+    original = module.merge_block_for
+    try:
+        module.merge_block_for = lambda org, a, b: block
+        assert gate._pair_is_unmerged("org_a", left, right) is True
+        module.merge_block_for = lambda org, a, b: None
+        assert gate._pair_is_unmerged("org_a", left, right) is False
+    finally:
+        module.merge_block_for = original
+
+
+def test_an_unavailable_unmerge_layer_fails_closed(monkeypatch):
+    """Consistent with the rest of this module: an unverifiable graph does not
+    elevate. The one fail-OPEN path in the gate is this module failing to import,
+    which CI catches; a missing unmerge layer must not silently re-permit an
+    elevation on a reversed identity.
+    """
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _no_unmerge(name, *args, **kwargs):
+        if name.endswith("entity_unmerge") or name == "app.entity_unmerge":
+            raise ImportError("entity_unmerge is not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_unmerge)
+    assert gate._pair_is_unmerged("org_a", {"id": "L"}, {"id": "R"}) is True
+
+
+def test_the_same_entity_basis_is_deliberately_not_block_checked():
+    """Two references that locate ONE row are not a pair, so no reversal could have
+    separated them — and a block keyed on some other pair must not suppress a node's
+    identity with itself."""
+    import inspect
+
+    source = inspect.getsource(gate.graph_identity_resolver)
+    same_entity_at = source.index("BASIS_SAME_ENTITY")
+    block_check_at = source.index("_pair_is_unmerged")
+    assert same_entity_at < block_check_at, (
+        "the same-row short-circuit must come BEFORE the block check"
+    )

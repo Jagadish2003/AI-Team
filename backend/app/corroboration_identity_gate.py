@@ -563,6 +563,30 @@ def _merged_identity_basis(
     return BASIS_SAME_ENTITY if provenance.is_merged else None
 
 
+def _pair_is_unmerged(
+    org_id: str, left_row: Mapping[str, Any], right_row: Mapping[str, Any]
+) -> bool:
+    """True when a person REVERSED this pair's merge (2.0-B2 T5's block).
+
+    Fails CLOSED, in both senses. An unreadable block state counts as blocked —
+    ``entity_unmerge.merge_block_for`` already reports a synthetic block on a read
+    failure, and a wrong HIGH is the harmful direction. And if the unmerge layer
+    cannot be imported at all, this returns True: refusing to elevate on an
+    unverifiable graph matches the standing posture of this module, where the only
+    fail-open path is a packaging fault CI catches.
+    """
+    try:
+        from .entity_unmerge import merge_block_for
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "corroboration identity gate: unmerge layer unavailable (%s) — treating "
+            "the pair as unresolved rather than risking an elevation on a reversed "
+            "identity", exc,
+        )
+        return True
+    return merge_block_for(org_id, left_row, right_row) is not None
+
+
 def graph_identity_resolver(
     org_id: str, left: EntityRef, right: EntityRef
 ) -> Optional[str]:
@@ -605,7 +629,30 @@ def graph_identity_resolver(
 
     left_id, right_id = str(left_row["id"]), str(right_row["id"])
     if left_id == right_id:
+        # Literally one row: there is no pair, so there is nothing a reversal could
+        # have separated. The unmerge check below deliberately does not apply.
         return BASIS_SAME_ENTITY
+
+    # 2.0-B2 T7: a pair somebody UNMERGED is not a resolved identity, and this has
+    # to be checked BEFORE any basis below.
+    #
+    # Found by the T7 AC sweep, and it was a wrong-HIGH: every basis below outlives
+    # a reversal by design. A confirmed proposal STAYS confirmed after an unmerge
+    # (T4 made that durable deliberately), and the source cross-reference T1
+    # re-derives from is still in the data — that is exactly why T5's block exists.
+    # Without this check a reviewer reverses a merge and the finding keeps the HIGH
+    # it was given for the identity they just reversed, which is the precise
+    # dishonesty AC5 exists to close.
+    #
+    # Same rule ``apply_merge`` follows, for the same reason, so the two layers
+    # cannot disagree about whether a pair is joined.
+    if _pair_is_unmerged(org_id, left_row, right_row):
+        logger.info(
+            "corroboration identity gate: refusing to resolve %s/%s — the pair was "
+            "unmerged, so the identity is not established (org %s)",
+            left_id, right_id, org_id,
+        )
+        return None
 
     # The merge that ACTUALLY happened (2.0-B2 T2) outranks everything below: it
     # is the recorded fact, and its provenance names the rule that authorised it.
