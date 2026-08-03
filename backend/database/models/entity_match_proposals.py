@@ -47,6 +47,13 @@ CREATE TABLE IF NOT EXISTS entity_match_proposals (
     tier                VARCHAR(32)  NOT NULL,
     confidence          FLOAT        NOT NULL,
     status              VARCHAR(16)  NOT NULL,
+    -- 2.0-B2 T4: the pair's STABLE source identity, independent of the entity ROW
+    -- ids above. Those ids churn — a source that starts supplying record ids makes
+    -- upsert_source_entity insert a NEW resolved row for an entity previously
+    -- known by name only — and a decision keyed on row ids alone would then miss
+    -- its own pair and re-propose it. NULL on rows written before T4; the store
+    -- backfills them from evidence_payload on the next scan.
+    identity_key        VARCHAR(64),
     -- The full proposal snapshot the reviewer sees: both entities' display names
     -- and source identities, the reason, and the corroborating relationships.
     evidence_payload    TEXT         NOT NULL,
@@ -91,14 +98,36 @@ CREATE INDEX IF NOT EXISTS idx_entity_match_proposal_history_org_proposal
     ON entity_match_proposal_history (org_id, proposal_id, revision DESC)
 """
 
+# 2.0-B2 T4: the durability read — "has this org already DECIDED this pair, under
+# any entity row ids?" Runs on every scan, so it is indexed.
+CREATE_ENTITY_MATCH_PROPOSALS_IDX_IDENTITY = """
+CREATE INDEX IF NOT EXISTS idx_entity_match_proposals_org_identity
+    ON entity_match_proposals (org_id, identity_key, status)
+"""
+
+# Added by migration 0033 for databases provisioned before T4.
+ALTER_ENTITY_MATCH_PROPOSALS_ADD_IDENTITY_KEY = """
+ALTER TABLE entity_match_proposals
+    ADD COLUMN IF NOT EXISTS identity_key VARCHAR(64)
+"""
+
 ALL_ENTITY_MATCH_PROPOSAL_DDL: tuple[str, ...] = (
     CREATE_ENTITY_MATCH_PROPOSALS_TABLE,
     CREATE_ENTITY_MATCH_PROPOSAL_HISTORY_TABLE,
     CREATE_ENTITY_MATCH_PROPOSALS_IDX_ORG_STATUS,
     CREATE_ENTITY_MATCH_PROPOSAL_HISTORY_IDX,
+    CREATE_ENTITY_MATCH_PROPOSALS_IDX_IDENTITY,
+)
+
+#: 2.0-B2 T4 only — for a database provisioned before the identity key existed.
+#: Idempotent, so it is safe on a fresh schema too (the column is already there).
+ALL_ENTITY_MATCH_PROPOSAL_T4_DDL: tuple[str, ...] = (
+    ALTER_ENTITY_MATCH_PROPOSALS_ADD_IDENTITY_KEY,
+    CREATE_ENTITY_MATCH_PROPOSALS_IDX_IDENTITY,
 )
 
 DROP_ENTITY_MATCH_PROPOSAL_DDL: tuple[str, ...] = (
+    "DROP INDEX IF EXISTS idx_entity_match_proposals_org_identity",
     "DROP INDEX IF EXISTS idx_entity_match_proposal_history_org_proposal",
     "DROP INDEX IF EXISTS idx_entity_match_proposals_org_status",
     "DROP TABLE IF EXISTS entity_match_proposal_history",
@@ -115,6 +144,7 @@ ENTITY_MATCH_PROPOSAL_COLUMNS: tuple[str, ...] = (
     "tier",
     "confidence",
     "status",
+    "identity_key",
     "evidence_payload",
     "revision",
     "decided_by",
@@ -146,4 +176,7 @@ __all__ = [
     "ENTITY_MATCH_PROPOSAL_HISTORY_COLUMNS",
     "CREATE_ENTITY_MATCH_PROPOSALS_TABLE",
     "CREATE_ENTITY_MATCH_PROPOSAL_HISTORY_TABLE",
+    "ALL_ENTITY_MATCH_PROPOSAL_T4_DDL",
+    "ALTER_ENTITY_MATCH_PROPOSALS_ADD_IDENTITY_KEY",
+    "CREATE_ENTITY_MATCH_PROPOSALS_IDX_IDENTITY",
 ]

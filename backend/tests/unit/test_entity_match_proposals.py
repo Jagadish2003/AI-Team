@@ -145,6 +145,13 @@ def captured(monkeypatch):
         def fetchone(self):
             return [True]  # every upsert reports "inserted"
 
+        def fetchall(self):
+            # 2.0-B2 T4 added two reads to the write path: the pre-T4 identity-key
+            # backfill and the decided-pair lookup. Both are row reads; an empty
+            # result means "nothing to heal, nothing decided yet", which is the
+            # state these T3 tests are about (a fresh queue).
+            return []
+
     class _Con:
         def cursor(self):
             return _Cur()
@@ -160,6 +167,16 @@ def captured(monkeypatch):
 
     monkeypatch.setattr(emp.db, "connect", lambda: _Con())
     return calls
+
+
+def _inserts(captured):
+    """The proposal INSERTs among the captured statements.
+
+    Position-independent on purpose: T4 added a backfill SELECT and a decided-pair
+    SELECT ahead of the write, and a test that means "the insert" should say so
+    rather than depend on it being first.
+    """
+    return [c for c in captured if "INSERT INTO entity_match_proposals" in c["sql"]]
 
 
 def test_only_proposals_reach_the_queue(captured):
@@ -202,7 +219,7 @@ def test_the_symmetric_pair_is_recorded_once(captured):
 
     assert outcome.created == 1
     assert len(outcome.proposal_ids) == 1
-    assert len(captured) == 1
+    assert len(_inserts(captured)) == 1
 
 
 def test_the_stored_row_is_pending_and_sorted(captured):
@@ -210,7 +227,7 @@ def test_the_stored_row_is_pending_and_sorted(captured):
     b = _entity("e1", "payments", source="jira", record_id="PAY")
     emp.record_proposals("org_a", [_proposal_decision(a, b)])
 
-    params = captured[0]["params"]
+    params = _inserts(captured)[0]["params"]
     assert params[0] == "org_a"
     assert params[3:5] == ("e1", "e2"), "the pair is stored sorted"
     assert emp.STATUS_PENDING in params
@@ -225,7 +242,7 @@ def test_the_upsert_refuses_to_touch_a_decided_row(captured):
     b = _entity("e2", "payments", source="jira", record_id="PAY")
     emp.record_proposals("org_a", [_proposal_decision(a, b)])
 
-    sql = captured[0]["sql"]
+    sql = _inserts(captured)[0]["sql"]
     assert "ON CONFLICT (org_id, proposal_id) DO UPDATE" in sql
     assert "WHERE entity_match_proposals.status = %s" in sql
     assert "RETURNING (xmax = 0)" in sql
