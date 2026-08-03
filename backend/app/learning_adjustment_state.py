@@ -1,0 +1,400 @@
+"""2.0-A3 T2 — reading and writing the stored per-org adjustment state.
+
+The state is a VALUE, computed deliberately from T1's signal set and written
+here, not an expression evaluated at read time. See
+``database/models/ranking_adjustments.py`` for why that distinction is what makes
+T4's audit and reset answerable.
+
+**Recomputation is explicit.** Nothing here runs on the serving path: serving
+READS the stored value. A ranking that shifted because someone opened a page
+would be exactly the invisible drift A3 exists to prevent.
+
+**Cold start is stored, not inferred.** When T1's signal set is inactive the
+recomputation still writes rows, with ``learning_active = FALSE`` and a zero
+weight. A zero that means "not enough evidence yet" and a zero that means
+"learning weighed this and arrived at neutral" are different facts, and a reader
+who cannot tell them apart will misread the first as the second.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import uuid
+from contextlib import closing
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+
+from . import db
+from .learning_adjustment import GroupAdjustment
+from .learning_signal_config import load_config
+
+logger = logging.getLogger(__name__)
+
+ADJUSTMENT_STATE_SCHEMA_VERSION = "1.0.0"
+
+CHANGE_RECOMPUTED = "recomputed"
+CHANGE_RESET = "reset"
+
+ACTOR_SYSTEM = "system"
+
+#: The sentinel a NULL group dimension is stored as. A NULL inside a primary key
+#: would let duplicate rows accumulate for the same real group, so the empty
+#: string carries "unknown" and is translated back to None on read.
+_UNKNOWN = ""
+
+
+def _clean(value: Any) -> str:
+    return str(value).strip() if value is not None else ""
+
+
+def _key_part(value: Optional[str]) -> str:
+    return _clean(value).lower() or _UNKNOWN
+
+
+def _from_key_part(value: Any) -> Optional[str]:
+    text = _clean(value).lower()
+    return text or None
+
+
+def ensure_ranking_adjustment_tables() -> None:
+    """Create the tables and indexes. Startup-only, like the sibling stores."""
+    from database.models.ranking_adjustments import ALL_RANKING_ADJUSTMENT_DDL
+
+    try:
+        with closing(db.connect()) as con:
+            with con.cursor() as cur:
+                for statement in ALL_RANKING_ADJUSTMENT_DDL:
+                    cur.execute(statement)
+            con.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not ensure ranking adjustment tables: %s", exc)
+
+
+# --------------------------------------------------------------------------
+# Reading — the serving path
+# --------------------------------------------------------------------------
+
+
+def get_adjustments(
+    org_id: str,
+) -> Dict[Tuple[Optional[str], Optional[str]], GroupAdjustment]:
+    """Every stored adjustment for one org, keyed for :func:`adjust_ranking`.
+
+    Org-scoped in the WHERE clause, never filtered afterwards: AC6's isolation
+    has to hold in the query or it does not hold.
+
+    Never raises. A read failure yields an empty map, which serves BASE order —
+    the safe direction, because an unavailable adjustment state must degrade to
+    no learning rather than to stale or partial learning.
+    """
+    org = _clean(org_id)
+    if not org:
+        return {}
+    try:
+        with closing(db.connect()) as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    "SELECT detector_id, pack_id, net_weight, outcome_weight,"
+                    "       decision_weight, has_outcome_evidence, signal_count,"
+                    "       contributing_refs, learning_active"
+                    "  FROM ranking_adjustments"
+                    " WHERE org_id = %s AND learning_active = TRUE",
+                    (org,),
+                )
+                rows = cur.fetchall()
+    except Exception as exc:  # noqa: BLE001 - serving must not depend on this
+        logger.warning("Could not read ranking adjustments for %s: %s", org, exc)
+        return {}
+
+    out: Dict[Tuple[Optional[str], Optional[str]], GroupAdjustment] = {}
+    for row in rows:
+        refs = row[7]
+        if isinstance(refs, (str, bytes)):
+            try:
+                refs = json.loads(refs)
+            except (TypeError, ValueError):
+                refs = []
+        detector, pack = _from_key_part(row[0]), _from_key_part(row[1])
+        out[(detector, pack)] = GroupAdjustment(
+            detector_id=detector,
+            pack_id=pack,
+            net_weight=float(row[2] or 0.0),
+            outcome_weight=float(row[3] or 0.0),
+            decision_weight=float(row[4] or 0.0),
+            has_outcome_evidence=bool(row[5]),
+            signal_count=int(row[6] or 0),
+            contributing_refs=tuple(
+                dict(r) for r in (refs or ()) if isinstance(r, Mapping)
+            ),
+        )
+    return out
+
+
+def list_adjustment_state(org_id: str) -> List[Dict[str, Any]]:
+    """The inspectable state, including inactive rows. T4's read model."""
+    org = _clean(org_id)
+    with closing(db.connect()) as con:
+        with con.cursor() as cur:
+            cur.execute(
+                "SELECT detector_id, pack_id, signal_concept, net_weight,"
+                "       outcome_weight, decision_weight, has_outcome_evidence,"
+                "       signal_count, learning_active, contributing_refs,"
+                "       config_version, revision, computed_at, updated_at"
+                "  FROM ranking_adjustments"
+                " WHERE org_id = %s"
+                " ORDER BY ABS(net_weight) DESC, detector_id ASC, pack_id ASC",
+                (org,),
+            )
+            rows = cur.fetchall()
+    return [
+        {
+            "detectorId": _from_key_part(r[0]),
+            "packId": _from_key_part(r[1]),
+            "signalConcept": r[2],
+            "netWeight": float(r[3] or 0.0),
+            "outcomeWeight": float(r[4] or 0.0),
+            "decisionWeight": float(r[5] or 0.0),
+            "hasOutcomeEvidence": bool(r[6]),
+            "signalCount": int(r[7] or 0),
+            "learningActive": bool(r[8]),
+            "contributingRefs": r[9] if isinstance(r[9], list) else [],
+            "configVersion": r[10],
+            "revision": int(r[11] or 1),
+            "computedAt": r[12].isoformat() if r[12] else None,
+            "updatedAt": r[13].isoformat() if r[13] else None,
+        }
+        for r in rows
+    ]
+
+
+def get_adjustment_history(
+    org_id: str, *, limit: int = 200
+) -> List[Dict[str, Any]]:
+    """Every value this org's adjustments have held, newest first."""
+    with closing(db.connect()) as con:
+        with con.cursor() as cur:
+            cur.execute(
+                "SELECT record FROM ranking_adjustment_history"
+                " WHERE org_id = %s ORDER BY recorded_at DESC, history_id DESC"
+                " LIMIT %s",
+                (_clean(org_id), max(1, min(int(limit), 1000))),
+            )
+            rows = cur.fetchall()
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        raw = row[0]
+        if isinstance(raw, Mapping):
+            out.append(dict(raw))
+            continue
+        try:
+            parsed = json.loads(raw) if raw else None
+        except (TypeError, ValueError):
+            continue
+        if isinstance(parsed, dict):
+            out.append(parsed)
+    return out
+
+
+# --------------------------------------------------------------------------
+# Writing — explicit recomputation
+# --------------------------------------------------------------------------
+
+
+def recompute_adjustments(
+    org_id: str,
+    *,
+    signal_set: Optional[Any] = None,
+    actor_id: str = ACTOR_SYSTEM,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Recompute this org's adjustment state from T1's signal set.
+
+    Deliberate, never on the serving path. Each group's previous value is
+    carried into an append-only history row before the current row is replaced,
+    so the sequence of values is reconstructable even though the current table is
+    updated in place.
+
+    Returns a summary: how many groups were written, whether learning was active,
+    and the config version the values were computed under.
+    """
+    org = _clean(org_id)
+    if not org:
+        raise ValueError("org_id is required")
+
+    config = load_config()
+    when = now or datetime.now(timezone.utc)
+
+    if signal_set is None:
+        from .learning_signals import collect_learning_signals
+
+        signal_set = collect_learning_signals(org)
+
+    from .learning_signals import group_by_similarity
+
+    groups = group_by_similarity(signal_set)
+    active = bool(signal_set.is_active)
+
+    previous = {
+        (row["detectorId"], row["packId"]): row for row in _safe_state(org)
+    }
+
+    written = 0
+    with closing(db.connect()) as con:
+        with con.cursor() as cur:
+            for group in groups:
+                detector = _key_part(group.key.detector_id)
+                pack = _key_part(group.key.pack_id)
+                prior = previous.get(
+                    (_from_key_part(detector), _from_key_part(pack))
+                )
+                revision = int((prior or {}).get("revision") or 0) + 1
+                refs = [dict(r) for r in group.contributing_refs]
+
+                cur.execute(
+                    "INSERT INTO ranking_adjustments ("
+                    "  org_id, detector_id, pack_id, signal_concept, net_weight,"
+                    "  outcome_weight, decision_weight, has_outcome_evidence,"
+                    "  signal_count, learning_active, contributing_refs,"
+                    "  config_version, revision, computed_at, updated_at"
+                    ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                    " ON CONFLICT (org_id, detector_id, pack_id) DO UPDATE SET"
+                    "  signal_concept = EXCLUDED.signal_concept,"
+                    "  net_weight = EXCLUDED.net_weight,"
+                    "  outcome_weight = EXCLUDED.outcome_weight,"
+                    "  decision_weight = EXCLUDED.decision_weight,"
+                    "  has_outcome_evidence = EXCLUDED.has_outcome_evidence,"
+                    "  signal_count = EXCLUDED.signal_count,"
+                    "  learning_active = EXCLUDED.learning_active,"
+                    "  contributing_refs = EXCLUDED.contributing_refs,"
+                    "  config_version = EXCLUDED.config_version,"
+                    "  revision = EXCLUDED.revision,"
+                    "  updated_at = EXCLUDED.updated_at",
+                    (
+                        org,
+                        detector,
+                        pack,
+                        group.key.signal_concept,
+                        float(group.net_weight),
+                        float(group.outcome_weight),
+                        float(group.decision_weight),
+                        bool(group.has_outcome_evidence),
+                        len(group.signals),
+                        active,
+                        json.dumps(refs),
+                        config.config_version,
+                        revision,
+                        when,
+                        when,
+                    ),
+                )
+                _append_history(
+                    cur,
+                    org_id=org,
+                    detector_id=detector,
+                    pack_id=pack,
+                    change_kind=CHANGE_RECOMPUTED,
+                    previous_net_weight=(prior or {}).get("netWeight"),
+                    net_weight=float(group.net_weight),
+                    signal_count=len(group.signals),
+                    learning_active=active,
+                    actor_id=actor_id,
+                    config_version=config.config_version,
+                    revision=revision,
+                    when=when,
+                    extra={"contributingRefs": refs},
+                )
+                written += 1
+        con.commit()
+
+    return {
+        "schemaVersion": ADJUSTMENT_STATE_SCHEMA_VERSION,
+        "orgId": org,
+        "groupsWritten": written,
+        "learningActive": active,
+        "inactiveReason": signal_set.inactive_reason,
+        "configVersion": config.config_version,
+        "computedAt": when.isoformat(),
+    }
+
+
+def _safe_state(org_id: str) -> List[Dict[str, Any]]:
+    try:
+        return list_adjustment_state(org_id)
+    except Exception as exc:  # noqa: BLE001 - a first run has no table yet
+        logger.debug("No prior adjustment state for %s: %s", org_id, exc)
+        return []
+
+
+def _append_history(
+    cur: Any,
+    *,
+    org_id: str,
+    detector_id: str,
+    pack_id: str,
+    change_kind: str,
+    previous_net_weight: Optional[float],
+    net_weight: float,
+    signal_count: int,
+    learning_active: bool,
+    actor_id: str,
+    config_version: Optional[str],
+    revision: int,
+    when: datetime,
+    extra: Optional[Mapping[str, Any]] = None,
+) -> None:
+    history_id = f"radj_{uuid.uuid4().hex[:20]}"
+    record = {
+        "schemaVersion": ADJUSTMENT_STATE_SCHEMA_VERSION,
+        "historyId": history_id,
+        "orgId": org_id,
+        "detectorId": _from_key_part(detector_id),
+        "packId": _from_key_part(pack_id),
+        "changeKind": change_kind,
+        "previousNetWeight": previous_net_weight,
+        "netWeight": net_weight,
+        "signalCount": signal_count,
+        "learningActive": learning_active,
+        "actorId": actor_id,
+        "configVersion": config_version,
+        "revision": revision,
+        "recordedAt": when.isoformat(),
+    }
+    if extra:
+        record.update(dict(extra))
+    cur.execute(
+        "INSERT INTO ranking_adjustment_history ("
+        "  history_id, org_id, detector_id, pack_id, change_kind,"
+        "  previous_net_weight, net_weight, signal_count, learning_active,"
+        "  actor_id, config_version, revision, record, recorded_at"
+        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            history_id,
+            org_id,
+            detector_id,
+            pack_id,
+            change_kind,
+            previous_net_weight,
+            net_weight,
+            signal_count,
+            learning_active,
+            actor_id,
+            config_version,
+            revision,
+            json.dumps(record),
+            when,
+        ),
+    )
+
+
+__all__ = [
+    "ACTOR_SYSTEM",
+    "ADJUSTMENT_STATE_SCHEMA_VERSION",
+    "CHANGE_RECOMPUTED",
+    "CHANGE_RESET",
+    "ensure_ranking_adjustment_tables",
+    "get_adjustment_history",
+    "get_adjustments",
+    "list_adjustment_state",
+    "recompute_adjustments",
+]

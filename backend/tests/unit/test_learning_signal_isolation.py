@@ -35,6 +35,13 @@ LEARNING_LAYER_MODULES = (
     "learning_feedback.py",
     "learning_signal_config.py",
     "routes_learning_feedback.py",
+    # 2.0-A3 T2 — the adjustment layer. Added because the guard below demanded
+    # it: these are the modules that most need the AC3 "never writes evidence,
+    # confidence or corroboration" check, since they are the ones that touch
+    # ordering.
+    "learning_adjustment.py",
+    "learning_adjustment_state.py",
+    "routes_learning_adjustment.py",
 )
 
 #: The scoring and evidence fields the learning layer must never write.

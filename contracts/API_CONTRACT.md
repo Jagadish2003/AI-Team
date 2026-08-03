@@ -1,7 +1,18 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.17
+Version: v1.18
 Date: 2026-07-31
 
+> v1.18 - 2.0-A3 T2 (Bounded ranking adjustment): opportunities returned by
+> GET /api/runs/{runId}/opportunities and the roadmap stages now carry an
+> additive `_ranking` object: `baseRank`, `baseImpact`, `adjustedRank`,
+> `moved`, `adjusted`, and the `caps` in force; when a learned adjustment
+> applied it also carries `effectiveImpact`, `appliedDelta`, `requestedDelta`,
+> `wasCapped` and `cappedBy`. Base scoring is unchanged — `impact`, `effort`,
+> `tier`, `confidence`, evidence and corroboration are untouched, and the
+> stored order remains the base order. New read routes under
+> /api/learning/adjustment (state, history, recompute, preview, base-order).
+> Additive; pre-v1.18 consumers are unaffected.
+>
 > v1.17 - 2.0-A2 T7 (No outcome without action): outcome measurement writes
 > now require a current customer-recorded action on the opportunity lifecycle.
 > Reopened opportunities clear that action and invalidate dependent stored

@@ -42,7 +42,7 @@ from .opportunity_display import (
     with_roadmap_display_titles,
 )
 from .replay import replay_run as replay_run_
-from .roadmap_engine import build_roadmap
+from .roadmap_engine import apply_learned_adjustment, build_roadmap
 from .terminology import apply_run_terminology
 from .routes_normalization import register_normalization_routes
 from .routes_connector_auth import register_connector_auth_routes
@@ -83,6 +83,7 @@ from .routes_opportunity_lifecycle import register_opportunity_lifecycle_routes
 from .routes_opportunity_baseline import register_opportunity_baseline_routes
 from .routes_opportunity_movement import register_opportunity_movement_routes
 from .routes_learning_feedback import register_learning_routes
+from .routes_learning_adjustment import register_learning_adjustment_routes
 from .routes_outcomes import register_outcome_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
@@ -380,6 +381,10 @@ register_outcome_routes(app)
 # plus A2 outcome results, outcome-weighted. Records and inspects signals only;
 # the bounded ranking adjustment is T2 and is not registered here.
 register_learning_routes(app)
+# 2.0-A3 T2: the bounded adjustment layer's read surface + recomputation.
+# The adjustment itself is applied at serve time via the one function in
+# app/learning_adjustment.py; these routes inspect and recompute its state.
+register_learning_adjustment_routes(app)
 
 origins = [
     o.strip()
@@ -797,9 +802,54 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
     # opportunity is never rewritten.
     from .projection_copy_guard import scrub_opportunity_narratives
 
+    # 2.0-A3 T2: the bounded learned adjustment, at SERVE time — which is what
+    # makes "base scoring untouched and always recoverable" structurally true
+    # rather than a convention: the stored order IS the base order, so turning
+    # learning off restores it with nothing to undo, and every returned finding
+    # carries its own baseRank/baseImpact.
+    #
+    # Applied BEFORE display shaping, deliberately. with_display_scores adds a
+    # deterministic per-id offset (up to +0.6) to spread bubbles on the matrix
+    # chart; running the adjustment after it would compute the score cap from
+    # that offset impact, making the cap vary by opportunity id for a purely
+    # cosmetic reason. The cap must be a fraction of the REAL base score.
+    adjusted = _apply_learned_ranking(opps)
     return scrub_opportunity_narratives(
-        apply_run_terminology([with_display(opp) for opp in opps], run_id)
+        apply_run_terminology([with_display(opp) for opp in adjusted], run_id)
     )
+
+
+def _apply_learned_ranking(opps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Route the served list through the ONE adjustment function.
+
+    A call site, not a second implementation — ``app.learning_adjustment`` is
+    the only place a learned adjustment is computed, because a second one would
+    compound into movement nobody could explain.
+
+    Non-blocking: a learning failure serves BASE order rather than no list. That
+    is also the safe direction if the adjustment state is unavailable — no
+    learning beats partial or stale learning.
+    """
+    try:
+        from .learning_adjustment import adjust_ranking
+        from .learning_adjustment_state import get_adjustments
+        from .learning_signals import collect_learning_signals
+
+        org_id = get_current_org_id()
+        adjustments = get_adjustments(org_id)
+        if not adjustments:
+            return opps
+        signal_set = collect_learning_signals(org_id)
+        result = adjust_ranking(
+            opps,
+            adjustments,
+            is_active=signal_set.is_active,
+            inactive_reason=signal_set.inactive_reason,
+        )
+        return list(result.ordered)
+    except Exception as exc:  # noqa: BLE001 - ranking is advisory, never fatal
+        logger.warning("Learned ranking not applied: %s", exc)
+        return opps
 
 
 #: 2.0-A3 T1 — how a review decision maps onto a learning action. UNREVIEWED is
@@ -984,7 +1034,12 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
     # stage summaries) to the run's active template. No-op without a template.
     run_roadmap = run_kv_get("roadmap", run_id, None)
     if run_roadmap is not None:
-        return apply_run_terminology(with_roadmap_display_titles(run_roadmap), run_id)
+        # 2.0-A3 T2: the learned adjustment at SERVE time. The STORED roadmap is
+        # base order — build_roadmap runs during materialization and must stay
+        # learning-free, or disabling learning could not restore what was stored.
+        return apply_run_terminology(
+            with_roadmap_display_titles(apply_learned_adjustment(run_roadmap)), run_id
+        )
     opps = run_kv_get("opps", run_id, None)
     if opps is None:
         raise HTTPException(
@@ -994,7 +1049,9 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
                 "T2 materialisation has not completed for this run."
             ),
         )
-    return apply_run_terminology(build_roadmap(with_display_titles(opps)), run_id)
+    return apply_run_terminology(
+        apply_learned_adjustment(build_roadmap(with_display_titles(opps))), run_id
+    )
 
 
 @app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
