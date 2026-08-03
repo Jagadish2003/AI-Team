@@ -188,7 +188,9 @@ class TestTheStateIsStored:
 
         history = client.get(f"{BASE}/history", headers=_auth(org)).json()
         assert len(history) >= 2
-        assert {h["changeKind"] for h in history} == {"recomputed"}
+        kinds = {h["changeKind"] for h in history}
+        assert "activated" in kinds
+        assert "recomputed" in kinds
         assert history[0]["revision"] > history[-1]["revision"]
 
     def test_history_records_the_value_it_replaced(self, client):
@@ -208,8 +210,10 @@ class TestTheStateIsStored:
         _record_feedback(org, _identity(), "accept")
 
         body = client.post(f"{BASE}/recompute", headers=_auth(org)).json()
+        assert body["changeKind"] == "recomputed"
         assert body["learningActive"] is False
         assert "not yet active" in (body["inactiveReason"] or "")
+        assert body["learningState"]["status"] == "learning_not_yet_active"
 
     def test_the_state_records_the_config_version_it_was_computed_under(self, client):
         org = _org()
@@ -530,6 +534,46 @@ class TestColdStartThroughTheRealStack:
         body = client.get(f"{BASE}/preview/{run_id}", headers=_auth(org)).json()
         assert body["learningActive"] is False
         assert "not yet active" in (body["inactiveReason"] or "")
+        assert body["learningState"]["remaining"]["decisions"] > 0
+
+    def test_falling_back_below_the_floor_neutralises_stale_state(self, client):
+        """If the current signal set is cold again, old active rows must not apply."""
+        from app.learning_adjustment_state import get_adjustments, recompute_adjustments
+        from app.learning_signals import collect_learning_signals
+
+        org = _org()
+        _seed_enough_to_activate(org)
+        activated = client.post(f"{BASE}/recompute", headers=_auth(org)).json()
+        assert activated["changeKind"] == "activated"
+        assert get_adjustments(org)
+
+        cold_record = {
+            "feedbackId": "fb_cold",
+            "opportunityIdentity": _identity(),
+            "action": "accept",
+            "reasonCode": None,
+            "actorId": "analyst_1",
+            "detectorId": "HANDOFF_FRICTION",
+            "packId": "service_cloud",
+            "recordedAt": datetime.now(timezone.utc).isoformat(),
+        }
+        cold_set = collect_learning_signals(
+            org,
+            decision_records=[cold_record],
+            outcome_records=[],
+        )
+        deactivated = recompute_adjustments(
+            org, signal_set=cold_set, actor_id=DEV_TOKEN
+        )
+
+        assert deactivated["changeKind"] == "deactivated"
+        assert deactivated["learningActive"] is False
+        assert get_adjustments(org) == {}
+        state = client.get(BASE, headers=_auth(org)).json()
+        assert all(group["learningActive"] is False for group in state["groups"])
+        assert all(group["netWeight"] == 0 for group in state["groups"])
+        history = client.get(f"{BASE}/history", headers=_auth(org)).json()
+        assert any(row["changeKind"] == "deactivated" for row in history)
 
     def test_an_org_that_never_recomputed_serves_base_order(self, client):
         org = _org()

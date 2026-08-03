@@ -64,9 +64,9 @@ STRENGTH_SUBSTANTIAL = "substantial"
 #: sentence HEDGES, never the adjustment itself.
 #:
 #: Set so that "three decisions and one measured outcome" (weighted 5) reads as
-#: LIMITED and says so. T1's cold start needs 10 weighted signals before learning
-#: activates for an org at all, but a single finding TYPE can rest on far fewer,
-#: and that is precisely the case the customer should be told about.
+#: LIMITED and says so. T1's cold start needs the configured decision floor before
+#: learning activates for an org at all, but a single finding TYPE can rest on far
+#: fewer, and that is precisely the case the customer should be told about.
 _SUBSTANTIAL_SIGNALS = 10
 _MODERATE_SIGNALS = 6
 

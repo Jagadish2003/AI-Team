@@ -251,6 +251,9 @@ def get_learning_config(_token: str = Depends(require_auth)) -> Dict[str, Any]:
             "floor": config.recency.floor,
         },
         "coldStart": {
+            "activationPolicy": config.cold_start.activation_policy,
+            "basis": config.basis_for("cold_start"),
+            "minimumDecisions": config.cold_start.minimum_decisions,
             "minimumSignals": config.cold_start.minimum_signals,
             "minimumDistinctIdentities": config.cold_start.minimum_distinct_identities,
         },

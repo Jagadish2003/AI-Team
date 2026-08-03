@@ -497,7 +497,7 @@ class TestColdStartHonesty:
 
         org = _org()
         config = load_config()
-        for _ in range(config.cold_start.minimum_signals):
+        for _ in range(config.cold_start.minimum_decisions):
             _record(org, _identity(), "accept")
 
         body = client.get(f"{BASE}/signals", headers=_auth(org)).json()
@@ -507,9 +507,23 @@ class TestColdStartHonesty:
     def test_the_threshold_is_reported_alongside_the_state(self, client):
         """The UI must be able to say how far off activation is."""
         body = client.get(f"{BASE}/signals", headers=_auth(_org())).json()
+        assert body["thresholds"]["minimumDecisions"] >= 1
         assert body["thresholds"]["minimumSignals"] >= 1
         assert body["thresholds"]["minimumDistinctIdentities"] >= 1
         assert body["counts"]["weighted"] == 0
+        assert body["activation"]["status"] == "learning_not_yet_active"
+        assert body["activation"]["remaining"]["decisions"] >= 1
+
+    def test_outcomes_do_not_bypass_the_minimum_decision_count(self, client):
+        org = _org()
+        for _ in range(12):
+            _seed_movement(org, _identity())
+
+        body = client.get(f"{BASE}/signals", headers=_auth(org)).json()
+        assert body["counts"]["outcomes"] >= 12
+        assert body["counts"]["decisions"] == 0
+        assert body["isActive"] is False
+        assert body["activation"]["remaining"]["decisions"] > 0
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +624,8 @@ class TestTheWeightingIsInspectable:
         body = client.get(f"{BASE}/config", headers=_auth(_org())).json()
         assert body["outcomeSignals"]["within_band"]["weight"] > 0
         assert body["decisionSignals"]["accept"]["weight"] > 0
+        assert body["coldStart"]["basis"] == "provisional"
+        assert body["coldStart"]["minimumDecisions"] >= 1
 
     def test_the_config_endpoint_declares_how_well_founded_each_part_is(self, client):
         """A customer is entitled to know most of these are still first guesses."""

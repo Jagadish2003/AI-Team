@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 ADJUSTMENT_STATE_SCHEMA_VERSION = "1.0.0"
 
 CHANGE_RECOMPUTED = "recomputed"
+CHANGE_ACTIVATED = "activated"
+CHANGE_DEACTIVATED = "deactivated"
 CHANGE_RESET = "reset"
 
 ACTOR_SYSTEM = "system"
@@ -80,6 +82,29 @@ def _affected_opportunity_count(rows: Sequence[Mapping[str, Any]]) -> int:
             if identity:
                 identities.add(identity)
     return len(identities)
+
+
+def _state_has_active(rows: Sequence[Mapping[str, Any]]) -> bool:
+    return any(bool(row.get("learningActive")) for row in rows)
+
+
+def _transition_kind(previous_active: bool, current_active: bool) -> str:
+    if current_active and not previous_active:
+        return CHANGE_ACTIVATED
+    if previous_active and not current_active:
+        return CHANGE_DEACTIVATED
+    return CHANGE_RECOMPUTED
+
+
+def _has_non_neutral_value(row: Mapping[str, Any]) -> bool:
+    return (
+        bool(row.get("learningActive"))
+        or float(row.get("netWeight") or 0.0) != 0.0
+        or float(row.get("outcomeWeight") or 0.0) != 0.0
+        or float(row.get("decisionWeight") or 0.0) != 0.0
+        or int(row.get("signalCount") or 0) != 0
+        or bool(_refs(row.get("contributingRefs")))
+    )
 
 
 def ensure_ranking_adjustment_tables() -> None:
@@ -260,21 +285,31 @@ def recompute_adjustments(
     groups = group_by_similarity(signal_set)
     active = bool(signal_set.is_active)
 
+    previous_state = _safe_state(org)
+    previous_active = _state_has_active(previous_state)
+    org_change_kind = _transition_kind(previous_active, active)
     previous = {
-        (row["detectorId"], row["packId"]): row for row in _safe_state(org)
+        (row["detectorId"], row["packId"]): row for row in previous_state
     }
 
     written = 0
+    seen_keys = set()
     with closing(db.connect()) as con:
         with con.cursor() as cur:
             for group in groups:
                 detector = _key_part(group.key.detector_id)
                 pack = _key_part(group.key.pack_id)
-                prior = previous.get(
-                    (_from_key_part(detector), _from_key_part(pack))
-                )
+                state_key = (_from_key_part(detector), _from_key_part(pack))
+                seen_keys.add(state_key)
+                prior = previous.get(state_key)
                 revision = int((prior or {}).get("revision") or 0) + 1
                 refs = [dict(r) for r in group.contributing_refs]
+                stored_net_weight = float(group.net_weight) if active else 0.0
+                stored_outcome_weight = float(group.outcome_weight) if active else 0.0
+                stored_decision_weight = float(group.decision_weight) if active else 0.0
+                row_change_kind = _transition_kind(
+                    bool((prior or {}).get("learningActive")), active
+                )
 
                 cur.execute(
                     "INSERT INTO ranking_adjustments ("
@@ -300,10 +335,10 @@ def recompute_adjustments(
                         detector,
                         pack,
                         group.key.signal_concept,
-                        float(group.net_weight),
-                        float(group.outcome_weight),
-                        float(group.decision_weight),
-                        bool(group.has_outcome_evidence),
+                        stored_net_weight,
+                        stored_outcome_weight,
+                        stored_decision_weight,
+                        bool(group.has_outcome_evidence) if active else False,
                         len(group.signals),
                         active,
                         json.dumps(refs),
@@ -318,16 +353,75 @@ def recompute_adjustments(
                     org_id=org,
                     detector_id=detector,
                     pack_id=pack,
-                    change_kind=CHANGE_RECOMPUTED,
+                    change_kind=row_change_kind,
                     previous_net_weight=(prior or {}).get("netWeight"),
-                    net_weight=float(group.net_weight),
+                    net_weight=stored_net_weight,
                     signal_count=len(group.signals),
                     learning_active=active,
                     actor_id=actor_id,
                     config_version=config.config_version,
                     revision=revision,
                     when=when,
-                    extra={"contributingRefs": refs},
+                    extra={
+                        "contributingRefs": refs,
+                        "learningState": signal_set.activation_state(),
+                    },
+                )
+                written += 1
+            for key, row in previous.items():
+                if key in seen_keys or not _has_non_neutral_value(row):
+                    continue
+                detector = _key_part(row.get("detectorId"))
+                pack = _key_part(row.get("packId"))
+                revision = int(row.get("revision") or 0) + 1
+                row_change_kind = (
+                    CHANGE_DEACTIVATED
+                    if bool(row.get("learningActive"))
+                    else CHANGE_RECOMPUTED
+                )
+                cur.execute(
+                    "UPDATE ranking_adjustments SET"
+                    "  net_weight = 0,"
+                    "  outcome_weight = 0,"
+                    "  decision_weight = 0,"
+                    "  has_outcome_evidence = FALSE,"
+                    "  signal_count = 0,"
+                    "  learning_active = FALSE,"
+                    "  contributing_refs = %s,"
+                    "  config_version = %s,"
+                    "  revision = %s,"
+                    "  computed_at = %s,"
+                    "  updated_at = %s"
+                    " WHERE org_id = %s AND detector_id = %s AND pack_id = %s",
+                    (
+                        json.dumps([]),
+                        config.config_version,
+                        revision,
+                        when,
+                        when,
+                        org,
+                        detector,
+                        pack,
+                    ),
+                )
+                _append_history(
+                    cur,
+                    org_id=org,
+                    detector_id=detector,
+                    pack_id=pack,
+                    change_kind=row_change_kind,
+                    previous_net_weight=row.get("netWeight"),
+                    net_weight=0.0,
+                    signal_count=0,
+                    learning_active=False,
+                    actor_id=actor_id,
+                    config_version=config.config_version,
+                    revision=revision,
+                    when=when,
+                    extra={
+                        "previousState": dict(row),
+                        "learningState": signal_set.activation_state(),
+                    },
                 )
                 written += 1
         con.commit()
@@ -336,8 +430,8 @@ def recompute_adjustments(
     emit_ranking_adjustment_changed(
         org_id=org,
         actor_id=actor_id,
-        change_kind=CHANGE_RECOMPUTED,
-        previous_state=list(previous.values()),
+        change_kind=org_change_kind,
+        previous_state=previous_state,
         current_state=current,
         groups_changed=written,
         opportunities_affected=_affected_opportunity_count(current),
@@ -348,9 +442,11 @@ def recompute_adjustments(
     return {
         "schemaVersion": ADJUSTMENT_STATE_SCHEMA_VERSION,
         "orgId": org,
+        "changeKind": org_change_kind,
         "groupsWritten": written,
         "learningActive": active,
         "inactiveReason": signal_set.inactive_reason,
+        "learningState": signal_set.activation_state(),
         "configVersion": config.config_version,
         "computedAt": when.isoformat(),
     }
@@ -561,6 +657,8 @@ def _append_history(
 __all__ = [
     "ACTOR_SYSTEM",
     "ADJUSTMENT_STATE_SCHEMA_VERSION",
+    "CHANGE_ACTIVATED",
+    "CHANGE_DEACTIVATED",
     "CHANGE_RECOMPUTED",
     "CHANGE_RESET",
     "ensure_ranking_adjustment_tables",
