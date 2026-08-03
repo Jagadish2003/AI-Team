@@ -81,6 +81,11 @@ OPPORTUNITY_LIFECYCLE_TRANSITIONED = "opportunity_lifecycle_transitioned"
 # story exists to prevent.
 OPPORTUNITY_FEEDBACK_RECORDED = "opportunity_feedback_recorded"
 
+# 2.0-A3 T4: the org-level ranking-adjustment state changed. Recompute and
+# reset both emit this event because both alter the layer that can reorder
+# future findings.
+RANKING_ADJUSTMENT_CHANGED = "ranking_adjustment_changed"
+
 # ---------------------------------------------------------------------------
 # Registry — every accepted event type listed here.
 # log_event() accepts any string; this registry is for documentation and
@@ -104,6 +109,7 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     RUNBOOK_MATCH_DECIDED,
     OPPORTUNITY_LIFECYCLE_TRANSITIONED,
     OPPORTUNITY_FEEDBACK_RECORDED,
+    RANKING_ADJUSTMENT_CHANGED,
 })
 
 # ---------------------------------------------------------------------------

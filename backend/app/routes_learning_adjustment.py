@@ -1,8 +1,9 @@
 """2.0-A3 T2 — the adjustment layer's read surface and its recomputation trigger.
 
-Same spine as the sibling learning routes: org from the tenancy middleware, never
-from the request; ``require_role("analyst")`` plus explicit ``require_auth`` on
-every route.
+Same spine as the sibling learning routes: org from the tenancy middleware,
+never from the request; explicit ``require_auth`` on every route. Org-wide
+governance surfaces (state, history, reset) require Owner. Run-scoped
+preview/explain/base-order remain Analyst+ operational reads.
 
 **The route that matters most is the base-order one.** ``GET /base-order`` answers
 "what would this have ranked without learning?" — and it answers it by serving the
@@ -13,8 +14,8 @@ Recomputation is a POST, deliberately: the state is a value computed on request,
 not an expression evaluated whenever a page is served. A ranking that shifted
 because someone opened a list would be the invisible drift A3 exists to prevent.
 
-Reset and the full audit surface are T4. This module deliberately ships no reset
-route — the history table it writes is what T4 will read.
+Reset and the full audit surface are T4: reset is Owner-only, appends history,
+and emits the ranking-adjustment governance audit event.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from .learning_adjustment_state import (
     get_adjustments,
     list_adjustment_state,
     recompute_adjustments,
+    reset_adjustments,
 )
 from .learning_reason import describe_adjustment
 from .learning_signal_config import load_config
@@ -46,13 +48,23 @@ class RecomputeRequest(BaseModel):
     """No body fields. The org comes from the tenancy middleware, never a payload."""
 
 
-@router.get("", dependencies=[Depends(require_role("analyst"))])
+class ResetRequest(BaseModel):
+    """Optional governance note for an Owner reset."""
+
+    reason: Optional[str] = None
+
+
+@router.get("", dependencies=[Depends(require_role("owner"))])
 def get_adjustment_state(_token: str = Depends(require_auth)) -> Dict[str, Any]:
     """The current adjustment state for this org, with its caps.
 
     Includes groups whose learning is INACTIVE (cold start), because a zero that
     means "not enough evidence yet" and a zero that means "learning arrived at
     neutral" are different facts and a reader must be able to tell them apart.
+
+    Owner-only by design: this governs org-wide ranking behaviour, while the
+    run-scoped preview/explain surfaces remain analyst-readable operational
+    views.
     """
     org_id = get_current_org_id()
     config = load_config()
@@ -70,7 +82,7 @@ def get_adjustment_state(_token: str = Depends(require_auth)) -> Dict[str, Any]:
     }
 
 
-@router.get("/history", dependencies=[Depends(require_role("analyst"))])
+@router.get("/history", dependencies=[Depends(require_role("owner"))])
 def get_history(
     limit: int = Query(200, ge=1, le=1000),
     _token: str = Depends(require_auth),
@@ -92,6 +104,27 @@ def post_recompute(
     try:
         return recompute_adjustments(
             get_current_org_id(), actor_id=_get_user_id_from_token(token)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/reset", dependencies=[Depends(require_role("owner"))])
+def post_reset(
+    body: Optional[ResetRequest] = None,
+    token: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Reset the org's adjustment state to neutral.
+
+    Reset is a governance action, so it is Owner-only. It appends reset history
+    and emits the audit event after the current state has been neutralised.
+    """
+    payload = body or ResetRequest()
+    try:
+        return reset_adjustments(
+            get_current_org_id(),
+            actor_id=_get_user_id_from_token(token),
+            reason=payload.reason,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
