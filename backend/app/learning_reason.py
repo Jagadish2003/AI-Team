@@ -482,12 +482,12 @@ def reason_placement_violations(finding: Mapping[str, Any]) -> List[str]:
             "reason" in value or "_ranking" in value or "learned" in value
         ):
             violations.append(field_name)
-        elif isinstance(value, str) and _READS_AS_LEARNED_COPY(value):
+        elif isinstance(value, str) and _reads_as_learned_copy(value):
             violations.append(field_name)
     return violations
 
 
-def _READS_AS_LEARNED_COPY(text: str) -> bool:
+def _reads_as_learned_copy(text: str) -> bool:
     """Whether a credibility field has had ranking-reason copy written into it."""
     lowered = text.lower()
     return any(
