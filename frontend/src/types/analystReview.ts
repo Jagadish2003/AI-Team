@@ -59,6 +59,15 @@ export interface OpportunityCandidate {
   // before the fields existed.
   packState?: "active" | "disabled";
   packStateLabel?: string;
+  // 2.0-C2 T3 (AT-833 / AC2): the certification level of the pack that produced
+  // this finding, so a board paper quoting it can say which level of pack it came
+  // from. Stamped at serve time and always the EFFECTIVE (signature-verified)
+  // level — an unverifiable Certified claim arrives as "community" (2.0-C2 AC1).
+  packCertificationLevel?: "certified" | "partner" | "community";
+  packCertificationLabel?: string;
+  // Valid badge, reviewed against an older platform version. Additive, never a
+  // downgrade.
+  packCertificationReviewDue?: boolean;
 }
 
 export interface ReviewAuditEvent {

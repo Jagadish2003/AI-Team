@@ -570,6 +570,10 @@ def _gate_pack_activation(
     """
     from .middleware.tenancy import get_current_org_id_optional
     from .pack_activation import AllPacksDisabledError, resolve_activatable_packs
+    from .pack_certification_policy import (
+        PackCertificationPolicyUnavailable,
+        PackCertificationPolicyViolation,
+    )
     from discovery.packs.pack_compatibility import PackIncompatibleError
     from discovery.packs.pack_config import normalize_pack_ids
 
@@ -585,7 +589,15 @@ def _gate_pack_activation(
         resolve_activatable_packs(
             org_id=org_id, pack_ids=selected_pack_ids, run_id=run_id
         )
-    except (AllPacksDisabledError, PackIncompatibleError) as exc:
+    except PackCertificationPolicyUnavailable as exc:
+        # Fail closed: a policy that cannot be read is not an absent policy.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (
+        AllPacksDisabledError,
+        PackIncompatibleError,
+        # 2.0-C2 T4 (AT-834 / AC3): a pack below this org's certification floor.
+        PackCertificationPolicyViolation,
+    ) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import PackCertificationBadge from '../components/common/PackCertificationBadge';
 import { Loader2 } from 'lucide-react';
 import PageShell from '../components/common/PageShell';
 import { Skeleton, SkeletonStatCard } from '../components/common/Skeleton';
@@ -107,6 +108,7 @@ export default function ExecutiveReportPage() {
   const reportConfidence = report?.confidence
     ? report.confidence.charAt(0).toUpperCase() + report.confidence.slice(1).toLowerCase()
     : 'Unavailable';
+  const packCertifications = report?.packCertifications ?? [];
   const roadmapStageLabel = roadmap.stages.length
     ? roadmap.stages.map((_, i) => `Phase ${i + 1}`).join(' / ')
     : '—';
@@ -153,6 +155,7 @@ export default function ExecutiveReportPage() {
           userName: profileNameFromEmail(auth?.user?.email),
           generatedAt,
           runId,
+          packCertifications: report?.packCertifications ?? [],
         },
         {
           filename: `AgentIQ-Executive-Report-${stamp}.pdf`,
@@ -278,6 +281,26 @@ export default function ExecutiveReportPage() {
 
         <div className="mb-4 rounded-xl border border-border bg-panel px-4 py-3 text-sm text-muted">
           Overview of confidence, source coverage, and prioritized quick wins across the Agent Roadmap.
+          {/* 2.0-C2 T3 (AT-833 / AC2): which level of pack produced the claims in
+              this report. On-screen counterpart of the same line in the PDF, so the
+              exported and viewed report say the same thing. */}
+          {packCertifications.length > 0 ? (
+            <div data-testid="report-pack-certifications" className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="text-xs">Produced by</span>
+              {packCertifications.map((item) => (
+                <span key={item.packId} className="flex items-center gap-1.5">
+                  <span className="font-mono text-xs text-text">{item.packId}</span>
+                  <PackCertificationBadge
+                    level={item.level}
+                    label={item.label}
+                    reviewDue={item.reviewDue}
+                    reviewDueDetail={item.reviewDueDetail}
+                    testId={`report-pack-certification-${item.packId}`}
+                  />
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">

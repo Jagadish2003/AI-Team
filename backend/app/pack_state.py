@@ -916,6 +916,10 @@ def pack_state_view(org_id: str) -> List[Dict[str, Any]]:
     )
 
     rows = _safe_state_rows(org_id)
+    # 2.0-C2 T3 (AT-833 / AC2): the level shown at SELECTION. Verified once for the
+    # whole list, and fail-soft — an unresolvable badge is omitted rather than
+    # blanking the row, but it is never guessed at.
+    certifications = _safe_certification_badges()
     view: List[Dict[str, Any]] = []
     for pack_id, pack in PACK_REGISTRY.items():
         row = rows.get(pack_id) or {}
@@ -941,6 +945,10 @@ def pack_state_view(org_id: str) -> List[Dict[str, Any]]:
                 "effectiveVersion": pinned or current_version,
                 "availableVersions": get_rollbackable_versions(pack_id),
                 "registered": True,
+                # 2.0-C2 T3: the EFFECTIVE (signature-verified) certification level
+                # and its label, so a selection surface can never present an
+                # unproved Certified claim as Certified.
+                "certification": certifications.get(pack_id),
             }
         )
 
@@ -959,6 +967,10 @@ def pack_state_view(org_id: str) -> List[Dict[str, Any]]:
                 "pinnedVersion": row.get("pinned_version") or None,
                 "effectiveVersion": None,
                 "availableVersions": [],
+                # A pack the registry no longer declares has no certification to
+                # report — stating None beats inventing a level for a pack that is
+                # gone (the same rule as its version fields).
+                "certification": None,
                 # The pack is no longer in the registry: it cannot run, but its
                 # lifecycle state and history are retained and reachable.
                 "registered": False,
@@ -990,6 +1002,26 @@ def has_pack_lifecycle_record(org_id: str, pack_id: str) -> bool:
             exc_info=True,
         )
         return False
+
+
+def _safe_certification_badges() -> Dict[str, Dict[str, Any]]:
+    """Certification badges for every registered pack (2.0-C2 T3 / AT-833).
+
+    Fail-soft for the same reason the state read is: a certification store or
+    crypto-backend problem must not blank the pack list a customer configures runs
+    from. The degradation direction is safe — a missing badge, never an unverified
+    claim rendered as Certified.
+    """
+    try:
+        from discovery.packs.pack_certification import certification_badges
+
+        return certification_badges()
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Could not resolve pack certification badges; omitting them",
+            exc_info=True,
+        )
+        return {}
 
 
 def _safe_state_rows(org_id: Optional[str]) -> Dict[str, Dict[str, Any]]:

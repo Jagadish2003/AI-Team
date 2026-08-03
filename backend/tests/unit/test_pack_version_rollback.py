@@ -87,6 +87,21 @@ def in_memory_store():
 
 
 @pytest.fixture(autouse=True)
+def in_memory_certification_policy():
+    """Activation also reads the 2.0-C2 T4 certification policy, and that read
+    fails CLOSED — inject it so this suite stays DB-free. No floor is set, so the
+    version-pin behaviour under test is unchanged."""
+    from app.pack_certification_policy import (
+        InMemoryPackCertificationPolicyStore,
+        set_policy_store,
+    )
+
+    set_policy_store(InMemoryPackCertificationPolicyStore())
+    yield
+    set_policy_store(None)
+
+
+@pytest.fixture(autouse=True)
 def clean_version_context():
     """No pinned config path leaks into or out of a test."""
     set_pack_config_paths({})

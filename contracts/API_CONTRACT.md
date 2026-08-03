@@ -1,6 +1,137 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.16
-Date: 2026-07-30
+Version: v1.20
+Date: 2026-08-03
+
+> v1.20 — 2.0-C2 T5 (Certification Expiry): a certification now expires on TWO
+> rules — the platform-version scope it was reviewed against, and the age of the
+> review itself. All fields are additive and optional.
+>
+> **Review-due FLAGS, it never revokes.** A due certification keeps its verified
+> `level`, still displays it, and still activates (including under a T4
+> "Certified only" policy). Consumers must not treat `reviewDue` as a downgrade.
+>
+> **Extended shapes:**
+> - `PackCertification` (every surface: `GET /api/packs/state`,
+>   `packCertifications` on the run record and executive report,
+>   `GET /api/packs/{packId}/certification/reviews`) gains `reviewDueDetail`
+>   (string | null — one sentence naming WHICH rule fired) and `reviewDueOn`
+>   (`YYYY-MM-DD` | null — when it falls due, so a surface can warn BEFORE the flag
+>   flips). The full verdict shape additionally carries `reviewDueReasons`
+>   (string[]; a certification can trip both rules at once).
+> - `GET /api/run-health/packs` — each pack row gains
+>   `certification_review_due_detail` and `certification_review_due_on`.
+> - `GET /api/packs/{packId}/certification/reviews` and the certification summary
+>   gain `reviewDueOn` (`Record<packId, YYYY-MM-DD>`).
+>
+> Review-due reason values: `reviewed_against_older_platform`,
+> `review_date_older_than_interval`, `reviewed_against_platform_version_undeclared`,
+> `review_date_unreadable`.
+
+> v1.19 — 2.0-C2 T4 (Pack Certification Policy Control): an org can restrict which
+> certification levels may be activated, Owner-controlled and enforced at activation.
+> New routes plus additive fields; a pre-v1.19 consumer is unaffected, and an org
+> that sets no policy behaves exactly as before.
+>
+> **New routes** (`app/routes_pack_certification.py`):
+> - `GET /api/packs/certification/policy` (viewer+) — `PackCertificationPolicy` =
+>   `{ orgId, minimumLevel: "certified" | "partner" | "community", minimumLevelLabel,
+>   restricted (boolean), label, revision, reason, updatedBy, updatedAt }`. Viewer+
+>   because a user who cannot select a pack must be able to see the rule stopping
+>   them. **503** when the policy cannot be read — deliberately NOT "unrestricted".
+> - `PUT /api/packs/certification/policy` (**owner**) — body
+>   `{ minimumLevel, reason?: string }`. The floor is a MINIMUM, not a list: the
+>   levels are ordered, so an org accepting Partner necessarily accepts Certified.
+>   `"community"` lifts the restriction (a write, not a delete — the change stays on
+>   the audit trail). Idempotent; the response adds `previousMinimumLevel`,
+>   `changed`, and `levels`.
+>
+> **Extended responses:**
+> - `GET /api/packs/state` — gains `certificationPolicy`
+>   (`PackCertificationPolicy | null`; `null` means it could not be read, never
+>   "unrestricted"), and each `PackStateItem` gains `activationBlocked` (boolean) and
+>   `activationBlockedReason` (string | null). Advisory, so a selection surface can
+>   grey a pack out rather than 409 after a run is configured; the enforcement point
+>   is activation.
+> - `POST /api/stack-builder/launch` and `POST /api/runs/{runId}/compute` — may now
+>   return **409** when a selected pack is below the org's certification floor (the
+>   detail names each pack, the level it holds, and the level required), and **503**
+>   when the policy itself cannot be read. The policy gate FAILS CLOSED: unlike every
+>   other pack-lifecycle read, an unreadable policy refuses activation rather than
+>   assuming no restriction.
+
+> v1.18 — 2.0-C2 T3 (Pack Certification Surfacing): the certification LEVEL is now
+> reported wherever a pack is selected, activated, or attributed. Every field is
+> additive and optional; a pre-v1.18 consumer is unaffected, and a response served
+> before the field existed simply omits it.
+>
+> **One rule across every surface:** the reported `level` is the EFFECTIVE,
+> signature-verified level. A pack claiming Certified whose signature does not
+> verify is reported as `community` everywhere at once (2.0-C2 AC1), with
+> `declaredLevel` preserving the claim. Consumers must render `level`, never
+> `declaredLevel`.
+>
+> `PackCertification` = `{ packId, level: "certified" | "partner" | "community",
+> label, statusLabel, declaredLevel, reviewDue (boolean) }`.
+>
+> **Extended responses:**
+> - `GET /api/packs/state` — each `PackStateItem` gains `certification`
+>   (`PackCertification | null`). `null` for an ORPHANED row (a pack the registry no
+>   longer declares) or when the badge could not be resolved — never a guessed level.
+>   *Selection.*
+> - `POST /api/stack-builder/launch` — the run record and the run-scoped
+>   `pack_certifications` KV gain `packCertifications`
+>   (`Record<string, PackCertification>`), the level each activated pack held at
+>   launch. Audit record: display surfaces read the live level. *Activation.*
+> - `GET /api/run-health/packs` — each pack row gains `certification_level`,
+>   `certification_label`, and `certification_review_due`. Read LIVE, like
+>   `pack_state` and unlike the immutable execution fields. *Attribution.*
+> - `GET /api/runs/{runId}/opportunities` — `OpportunityCandidate` gains
+>   `packCertificationLevel`, `packCertificationLabel`, and
+>   `packCertificationReviewDue` (present only when due). Stamped at serve time via
+>   the shared display funnel, so it reaches list, decision, override, roadmap,
+>   executive-report, and blueprint alike. *Findings.*
+> - `GET /api/runs/{runId}/executive-report` — gains `packCertifications`
+>   (`PackCertification[]`), one entry per pack that contributed a finding, in order
+>   of first appearance. Frozen into the artifact at generation time. *Exports.*
+
+> v1.17 — 2.0-C2 T2 (Pack Certification Review Workflow): documents the internal,
+> checklist-driven certification review surface. Entirely NEW routes; no existing
+> response shape changes, so every pre-v1.17 consumer is unaffected.
+>
+> **What this surface does NOT do:** recording a review never changes a pack's
+> certification level. A pack is Certified only when a valid CloudFulcrum signature
+> over its metadata verifies (2.0-C2 T1 / AT-831). An approval returns the
+> declaration and canonical payload to be signed offline; the badge moves when that
+> signature ships.
+>
+> **New routes** (`app/routes_pack_certification.py`):
+> - `GET /api/packs/certification/criteria` (viewer+) — the review checklist:
+>   `{ platformVersion, requiredCriteria: string[], criteria: CriterionSpec[],
+>   levels: ["certified","partner"], decisions: ["approved","rejected"] }`, where
+>   `CriterionSpec` is `{ criterionId, label, description, required (boolean) }`.
+>   Viewer-readable on purpose — a reader who sees a Certified badge must be able to
+>   see what was checked.
+> - `POST /api/packs/{packId}/certification/reviews` (**owner**) — body
+>   `{ proposedLevel: "certified" | "partner", decision: "approved" | "rejected",
+>   criteria: { criterionId, outcome: "pass" | "fail" | "not_applicable",
+>   note?: string }[], scopeSummary: string, reviewerName?: string, notes?: string }`.
+>   **201** returns the recorded `CertificationReview`. The reviewer, pack version,
+>   platform version, and date are stamped SERVER-side and are not accepted from the
+>   body. **400** for a malformed checklist (unknown criterion, duplicate verdict,
+>   `not_applicable` with no note); **409** when the decision contradicts the
+>   checklist (approved with a required criterion missing or failed, or rejected with
+>   no reason); **404** for an unknown pack.
+> - `GET /api/packs/{packId}/certification/reviews` (analyst+) —
+>   `{ orgId, packId, certification, latestReview, reviews[] }`, newest-first.
+>   `certification` is the live signature-verified badge (AT-831), returned alongside
+>   the trail so an approved-but-unsigned pack cannot read as Certified.
+>
+> `CertificationReview` = `{ reviewId, orgId, packId, packVersion, revision,
+> reviewerId, reviewerName, reviewedAt, reviewedAgainstPlatformVersion,
+> proposedLevel, decision, approved (boolean), criteria[], passedCriteria: string[],
+> scopeSummary, notes, summary }`, plus `certificationDeclaration` and
+> `canonicalPayload` on an APPROVAL only (the material to be signed). The trail is
+> append-only — a later review adds a revision and never rewrites an earlier one.
 
 > v1.16 — 2.0-C1 (Pack Compatibility, Safe Disable & Rollback): documents the pack
 > LIFECYCLE surface. All fields are additive and optional; every pre-v1.16 consumer

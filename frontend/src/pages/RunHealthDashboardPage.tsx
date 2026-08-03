@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import PackCertificationBadge from "../components/common/PackCertificationBadge";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Activity,
@@ -900,6 +901,20 @@ function PacksPanel({
                 <div className="flex flex-wrap items-center gap-2">
                   <span data-testid={`pack-state-${pack.pack_id}`}><StatusPill label={lifecycle.stateLabel} tone={lifecycle.stateTone} /></span>
                   <span data-testid={`pack-version-${pack.pack_id}`}><StatusPill label={lifecycle.versionLabel} tone={lifecycle.versionTone} /></span>
+                  {/* 2.0-C2 T3 (AT-833 / AC2): the level of the pack this run
+                      attributed its findings to. A third orthogonal fact beside
+                      state and version — assurance, not health — so it is its own
+                      pill and uses the shared badge component every other surface
+                      uses. */}
+                  <span data-testid={`pack-certification-${pack.pack_id}`}>
+                    <PackCertificationBadge
+                      level={pack.certification_level}
+                      label={pack.certification_label}
+                      reviewDue={pack.certification_review_due}
+                      reviewDueDetail={pack.certification_review_due_detail}
+                      testId={`pack-certification-badge-${pack.pack_id}`}
+                    />
+                  </span>
                 </div>
               </div>
               {pack.pack_state === "disabled" ? (
@@ -919,6 +934,7 @@ function PacksPanel({
                 <div><dt className="text-muted">Pack identifier</dt><dd className="text-lg font-semibold text-text">{pack.pack_id}</dd></div>
                 <div><dt className="text-muted">Version executed</dt><dd className="text-lg font-semibold text-text">{pack.pack_version ?? "Not available"}</dd></div>
                 <div><dt className="text-muted">Pack state</dt><dd className="text-lg font-semibold text-text">{lifecycle.stateLabel}</dd></div>
+                {pack.certification_label ? <div><dt className="text-muted">Certification</dt><dd className="text-lg font-semibold text-text">{pack.certification_label}{pack.certification_review_due ? " (review due)" : ""}</dd>{pack.certification_review_due ? <p data-testid={`pack-certification-review-due-${pack.pack_id}`} className="mt-1 text-xs leading-relaxed text-amber-300">{pack.certification_review_due_detail ?? "This certification is due for review."}</p> : pack.certification_review_due_on ? <p className="mt-1 text-xs text-muted">Next review due {pack.certification_review_due_on}</p> : null}</div> : null}
                 {pack.evaluated_count !== null && pack.evaluated_count !== undefined ? <div><dt className="text-muted">Evaluated successfully</dt><dd className="text-xl font-semibold text-text">{pack.evaluated_count}</dd></div> : null}
                 {pack.not_evaluated_count !== null && pack.not_evaluated_count !== undefined ? <div><dt className="text-muted">Not evaluated</dt><dd className="text-xl font-semibold text-text">{pack.not_evaluated_count}</dd></div> : null}
               </dl>

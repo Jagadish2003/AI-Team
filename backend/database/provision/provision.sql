@@ -7,11 +7,12 @@
 -- pgvector-backed retrieval_chunks + retrieval_refresh_queue, the MSP-B8
 -- ops_event_staging + ops_event_load_batches, the MSP-B5 runbook_matches /
 -- runbook_match_decision_history / runbook_match_feedback, the 2.0-C1
--- pack_states + append-only pack_state_history, and the R-1.9.1-L3
+-- pack_states + append-only pack_state_history, the 2.0-C2 append-only
+-- pack_certification_reviews + pack_certification_policies, and the R-1.9.1-L3
 -- vendor-side license_registry + append-only issuance_audit),
 -- indexes/constraints/rules, seeds the connector catalog, grants the app login
 -- role(s) privileges on the schema, REVOKES DELETE/TRUNCATE on the run-history
--- tables (2.0-C1 AC4), and stamps alembic_version to head 0033.
+-- tables (2.0-C1 AC4), and stamps alembic_version to head 0035.
 --
 -- BEFORE RUNNING ON PRODUCTION — two values in this file are dev defaults and
 -- MUST be set for the target environment. Both are marked "TODO(deploy)" below:
@@ -1433,6 +1434,75 @@ CREATE INDEX IF NOT EXISTS idx_pack_states_org_state
 
 
 --
+-- Name: pack_certification_reviews — 2.0-C2 T2 (AT-832) alembic 0034
+--
+-- Append-only certification review trail: who reviewed which pack version,
+-- against which criteria, with what decision and on what date (2.0-C2 AC5).
+-- Like the tables above it has NO runtime ensure_* helper — provisioning is the
+-- only thing that creates it, and app/pack_certification_review.py only reads and
+-- appends.
+--
+-- A review RECORDS a decision; it never grants a badge. Only a valid CloudFulcrum
+-- signature over a pack's certification metadata does that (2.0-C2 T1 / AT-831),
+-- so nothing in the runtime verification path reads this table. The read path is
+-- fail-soft: a deployment that has not yet run 0034 reports no reviews rather than
+-- failing a page.
+--
+-- DELETE/TRUNCATE on this table is REVOKED further down (it is in the protected
+-- set) — a certification decision that can be deleted is not auditable.
+--
+
+CREATE TABLE IF NOT EXISTS pack_certification_reviews (
+    id               VARCHAR(64)  PRIMARY KEY,
+    org_id           VARCHAR(64)  NOT NULL,
+    pack_id          VARCHAR(64)  NOT NULL,
+    pack_version     VARCHAR(32)  NOT NULL,
+    revision         INTEGER      NOT NULL,
+    reviewer_id      VARCHAR(128) NOT NULL,
+    reviewer_name    VARCHAR(256),
+    reviewed_at      TIMESTAMPTZ  NOT NULL,
+    platform_version VARCHAR(32)  NOT NULL,
+    proposed_level   VARCHAR(16)  NOT NULL,
+    decision         VARCHAR(16)  NOT NULL,
+    criteria         JSONB        NOT NULL DEFAULT '[]'::jsonb,
+    scope_summary    TEXT         NOT NULL DEFAULT '',
+    notes            TEXT,
+    UNIQUE (org_id, pack_id, revision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pack_certification_reviews_org_pack
+    ON pack_certification_reviews (org_id, pack_id, revision DESC);
+
+
+--
+-- Name: pack_certification_policies — 2.0-C2 T4 (AT-834) alembic 0035
+--
+-- Per-org activation floor: the MINIMUM certification level a pack must hold to be
+-- activated (e.g. a federal deployment setting 'certified'). No runtime ensure_*
+-- helper — provisioning is the only thing that creates it.
+--
+-- ABSENCE OF A ROW MEANS NO RESTRICTION. Provisioning changes no behaviour until an
+-- owner sets a floor; there is no seed step.
+--
+-- Unlike every other pack read, the policy read FAILS CLOSED: if this table cannot
+-- be read, activation is refused rather than proceeding as though no policy were
+-- set — a security control that fails open would lift the restriction exactly when
+-- it matters most. Lifting a restriction WRITES 'community'; there is no delete
+-- path, so "who lowered the floor, and when" stays answerable in audit_log.
+--
+
+CREATE TABLE IF NOT EXISTS pack_certification_policies (
+    org_id        VARCHAR(64)  PRIMARY KEY,
+    minimum_level VARCHAR(16)  NOT NULL,
+    revision      INTEGER      NOT NULL DEFAULT 0,
+    reason        TEXT,
+    updated_by    VARCHAR(128),
+    created_at    TIMESTAMPTZ  NOT NULL,
+    updated_at    TIMESTAMPTZ  NOT NULL
+);
+
+
+--
 -- PostgreSQL database dump complete
 --
 
@@ -1495,13 +1565,14 @@ INSERT INTO "public"."connectors" ("id", "payload") VALUES ('zendesk', '{"id": "
 -- backend/migrations/versions/ — a DB stamped lower will have `alembic upgrade
 -- head` re-run intervening migrations against tables that already exist.
 --
--- 2.0-C1: this file now carries the 0031 (pack_states / pack_state_history),
--- 0032 (version-pin columns) and 0033 (REVOKE DELETE/TRUNCATE on the history
--- tables) objects, so it must stamp 0033 — not 0030. A stale stamp would leave a
+-- 2.0-C1/C2: this file now carries the 0031 (pack_states / pack_state_history),
+-- 0032 (version-pin columns), 0033 (REVOKE DELETE/TRUNCATE on the history tables)
+-- 0034 (pack_certification_reviews) and 0035 (pack_certification_policies)
+-- objects, so it must stamp 0035. A stale stamp would leave a
 -- freshly provisioned database claiming a head it is ahead of, and `alembic upgrade
 -- head` would then re-run 0031-0033. Those are all idempotent, so it would not
 -- break, but the recorded head would be wrong. Bump this whenever you add DDL here.
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0033') ON CONFLICT DO NOTHING;
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0035') ON CONFLICT DO NOTHING;
 
 
 --
@@ -1585,6 +1656,7 @@ DECLARE
     protected_tables text[] := ARRAY[
         'kv',                   -- run-scoped artifacts: findings, evidence, roadmap, report
         'opportunity_instances',-- per-instance pack id + pack version stamps (R16-B1 §4)
+        'pack_certification_reviews', -- append-only certification review trail (2.0-C2 T2)
         'pack_state_history',   -- append-only pack lifecycle trail (2.0-C1 T2/T3)
         'run_events',           -- run event log (soft-deleted, never removed)
         'runs'                  -- run records

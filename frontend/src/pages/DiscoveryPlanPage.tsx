@@ -1,4 +1,9 @@
 import React from 'react';
+import { useEffect, useState } from 'react';
+import PackCertificationBadge from '../components/common/PackCertificationBadge';
+import { certificationsByPackId, fetchPackStates } from '../api/packStateApi';
+import type { PackCertification } from '../types/packCertification';
+import type { PackCertificationPolicy, PackStateItem } from '../api/packStateApi';
 import {
   ArrowLeft,
   Clock3,
@@ -272,6 +277,48 @@ export default function DiscoveryPlanPage({
 }: Props) {
   const { state, confidence } = setupState;
 
+  // 2.0-C2 T3 (AT-833 / AC2): certification levels for the packs this run may
+  // activate, so the level is visible AT SELECTION rather than only after a run.
+  // Fail-soft: a failed read leaves the badges absent — a pack picker must still
+  // work, and an unresolved badge is never rendered as a level.
+  const [packCertifications, setPackCertifications] = useState<
+    Record<string, PackCertification>
+  >({});
+  // 2.0-C2 T4 (AT-834): the org's activation floor, and which packs it blocks.
+  // Shown BEFORE launch so a restricted org sees the rule at the moment it picks a
+  // pack, rather than a 409 after the whole run is configured.
+  const [certificationPolicy, setCertificationPolicy] =
+    useState<PackCertificationPolicy | null>(null);
+  const [blockedPacks, setBlockedPacks] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let cancelled = false;
+    fetchPackStates()
+      .then(response => {
+        if (cancelled) return;
+        setPackCertifications(certificationsByPackId(response));
+        setCertificationPolicy(response.certificationPolicy ?? null);
+        setBlockedPacks(
+          Object.fromEntries(
+            (response.packs ?? [])
+              .filter((pack: PackStateItem) => pack.activationBlocked)
+              .map((pack: PackStateItem) => [
+                pack.packId,
+                pack.activationBlockedReason ?? 'Blocked by this organisation’s certification policy',
+              ]),
+          ),
+        );
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPackCertifications({});
+        setCertificationPolicy(null);
+        setBlockedPacks({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const qualityRows = calcQualityRows(
     state.selectedSystemIds,
     state.weightings,
@@ -363,11 +410,34 @@ export default function DiscoveryPlanPage({
               label="Template"
               value={templateLabel}
             />
+            {certificationPolicy?.restricted && (
+              <p
+                data-testid="certification-policy-banner"
+                className="mb-2 rounded-lg border border-blue-500/30 bg-blue-500/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-blue-700"
+              >
+                This organisation only activates packs certified{' '}
+                {certificationPolicy.label.toLowerCase()}.
+                {certificationPolicy.reason ? ` ${certificationPolicy.reason}.` : ''}
+              </p>
+            )}
             {salesforcePacks.length > 0 && (
-              <SummaryRow
-                label="Salesforce packs"
-                value={salesforcePackLabel}
-              />
+              <>
+                <SummaryRow
+                  label="Salesforce packs"
+                  value={salesforcePackLabel}
+                />
+                <div data-testid="salesforce-pack-certifications" className="flex flex-wrap justify-end gap-1.5 pb-2">
+                  {salesforcePacks.map(packId => (
+                    <PackCertificationBadge
+                      key={packId}
+                      level={packCertifications[packId]?.level}
+                      label={packCertifications[packId]?.label}
+                      reviewDue={packCertifications[packId]?.reviewDue}
+                      testId={`selection-pack-certification-${packId}`}
+                    />
+                  ))}
+                </div>
+              </>
             )}
             {/* Analysis pack — chosen per run (non-Salesforce). SINGLE-select
                 dropdown, defaulting to None. */}
@@ -391,8 +461,26 @@ export default function DiscoveryPlanPage({
                 </select>
               </div>
               {selectedAnalysisPack && (
-                <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
-                  {selectedAnalysisPack.description}
+                <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[11px] leading-relaxed text-muted">
+                    {selectedAnalysisPack.description}
+                  </p>
+                  <PackCertificationBadge
+                    level={packCertifications[selectedAnalysisPack.id]?.level}
+                    label={packCertifications[selectedAnalysisPack.id]?.label}
+                    reviewDue={packCertifications[selectedAnalysisPack.id]?.reviewDue}
+                    reviewDueDetail={packCertifications[selectedAnalysisPack.id]?.reviewDueDetail}
+                    testId={`selection-pack-certification-${selectedAnalysisPack.id}`}
+                  />
+                </div>
+              )}
+              {selectedAnalysisPack && blockedPacks[selectedAnalysisPack.id] && (
+                <p
+                  data-testid="analysis-pack-blocked"
+                  className="mt-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-700"
+                >
+                  {blockedPacks[selectedAnalysisPack.id]}. This run cannot start
+                  while it is selected.
                 </p>
               )}
             </div>
