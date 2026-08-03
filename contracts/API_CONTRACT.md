@@ -1,6 +1,27 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.16
+Version: v1.17
 Date: 2026-08-03
+
+> v1.17 — 2.0-B2 T2 (Cross-Source Entity Enrichment — merged-entity provenance):
+> added authenticated Analyst+ endpoints exposing what a merged entity is made of:
+> `GET /api/entities/{entityId}/provenance` (one entity),
+> `POST /api/entities/provenance` (many, bounded at 200 ids — the finding-view
+> seam), and `POST /api/entity-merges/apply` (apply the merges T1's auto-merge
+> tiers and T3's confirmed proposals authorised). A provenance body carries
+> `constituents[]` — EVERY constituent source identity including the survivor's own
+> (`is_origin: true`) — plus the `rule` that merged each one
+> (`explicit_reference` | `alias_mapping` | `confirmed_proposal`), `rules[]`,
+> `source_systems[]`, `constituent_count`, and `is_merged`. An entity that was
+> never merged answers with its single own identity and `is_merged: false` (not a
+> 404 — "not merged" and "not found" are different). The same block is stored on
+> `entities.metadata.merge_provenance`, so it also travels with
+> `GET /api/runs/{runId}/entities` — no separate call is required for a surface
+> that already reads entities. Merging never deletes a row or changes
+> `resolution_status`; the merged-away entity keeps its identity and edges and
+> gains a `metadata.merged_into` pointer. Apply is idempotent
+> (`merged` / `already_merged` / `skipped` counts). Organization-scoped: an entity
+> in another org returns 404, indistinguishable from an unknown id. Additive — no
+> previously documented shape changed.
 
 > v1.16 — 2.0-B2 T3 (Cross-Source Entity Enrichment — confirmation review):
 > added authenticated Analyst+ endpoints for the PROPOSED cross-source entity
@@ -586,6 +607,69 @@ Response:
 
 `skipped_already_decided` counts pairs the engine proposed again that a human has
 already answered — reported rather than hidden, since those never reopen.
+
+#### GET /api/entities/{entityId}/provenance
+Purpose: what a merged entity is made of — every constituent source identity and
+the rule that merged each (2.0-B2 T2 / AC2).
+Requires: authenticated Analyst or Owner. An entity in another organization
+returns 404, indistinguishable from an unknown id.
+
+Response:
+```json
+{
+  "version": 1,
+  "entity_id": "e1",
+  "constituents": [
+    { "entity_id": "e1", "source_system": "servicenow", "source_record_id": "sn-1",
+      "display_name": "Payments Platform", "canonical_name": "payments platform",
+      "rule": null, "confidence": null, "merged_at": null, "merged_by": null,
+      "evidence": {}, "is_origin": true },
+    { "entity_id": "e2", "source_system": "jira", "source_record_id": "PAY",
+      "display_name": "Payments", "canonical_name": "payments",
+      "rule": "explicit_reference", "confidence": 1.0,
+      "merged_at": "2026-08-03T10:00:00+00:00", "merged_by": "system",
+      "evidence": { "tier": "explicit_reference" }, "is_origin": false }
+  ],
+  "rules": ["explicit_reference"],
+  "source_systems": ["jira", "servicenow"],
+  "constituent_count": 2,
+  "is_merged": true,
+  "last_merged_at": "2026-08-03T10:00:00+00:00"
+}
+```
+
+The survivor's OWN identity is always present as `is_origin: true`, so
+`source_systems` is the complete set of systems the entity speaks for. `rule` is
+`null` on the origin (it was not merged in) and names the rule on every other
+constituent. An entity that was never merged returns its single own identity with
+`is_merged: false` — "not merged" and "not found" are different answers.
+
+The same block is stored on `entities.metadata.merge_provenance`, so it also
+travels with `GET /api/runs/{runId}/entities`.
+
+#### POST /api/entities/provenance
+Purpose: the same, for many entities in one round trip — a finding view resolving
+provenance for every entity it traverses must not issue one request per node.
+Requires: authenticated Analyst or Owner.
+
+Request: `{ "entity_ids": ["e1", "e2"] }` — at most 200 ids (400 beyond that).
+Response: `{ "provenance": { "<entityId>": <as above> }, "requested": 2,
+"resolved": 2 }`. An unknown id is simply absent from the map.
+
+#### POST /api/entity-merges/apply
+Purpose: apply the merges already authorised — T1's auto-merge tiers (explicit
+cross-reference, org alias table) and, unless `include_confirmed` is false, the
+pairs a human confirmed in the Entity Matches review surface.
+Requires: authenticated Analyst or Owner.
+
+Request: `{ "entity_types": ["system"], "include_confirmed": true }` (both
+optional).
+Response: `{ "merged": 1, "already_merged": 0, "skipped": 0, "outcomes": [...] }`
+
+Idempotent: a pair already merged is reported as `already_merged` and is not
+written again. A name-similarity proposal is never merged by this route — only a
+confirmed one is, and it is credited to the `confirmed_proposal` rule rather than
+to the tier that proposed it. Every applied merge emits an audit event.
 
 ---
 
