@@ -84,6 +84,28 @@ class SimilarityConfig:
 
 
 @dataclass(frozen=True)
+class AdjustmentPolicy:
+    """2.0-A3 T2 — how far the adjustment layer may move a finding.
+
+    Both caps are enforced; the weaker binds. See the ``ranking_adjustment``
+    block in ``config/learning_signals.json`` for why there are two.
+    """
+
+    enabled: bool = True
+    max_score_fraction: float = 0.15
+    max_rank_move: int = 3
+    points_per_signal_unit: float = 0.35
+
+    def score_cap_for(self, base_impact: float) -> float:
+        """The absolute point budget for one finding, from its own base score.
+
+        Proportional rather than absolute, so the layer is least free to reorder
+        the findings the base scorer is most confident about.
+        """
+        return abs(float(base_impact)) * self.max_score_fraction
+
+
+@dataclass(frozen=True)
 class ColdStartConfig:
     """AC4's threshold. Both conditions must be met before learning activates."""
 
@@ -113,6 +135,7 @@ class LearningSignalConfig:
     outcome_floor_ratio: float = 1.05
     recency: RecencyConfig = field(default_factory=RecencyConfig)
     cold_start: ColdStartConfig = field(default_factory=ColdStartConfig)
+    adjustment: AdjustmentPolicy = field(default_factory=AdjustmentPolicy)
     similarity: SimilarityConfig = field(default_factory=SimilarityConfig)
     config_version: str = "1.0.0"
     bases: Dict[str, str] = field(default_factory=dict)
@@ -311,6 +334,30 @@ def validate_config(config: LearningSignalConfig) -> None:
             "reveal it — see the outcome_floor block for the full argument."
         )
 
+    # The caps are what make the adjustment layer safe, so a config that removes
+    # the bound is refused rather than applied. An unbounded learned adjustment
+    # is not a smaller version of a bounded one — it is the invisible drift the
+    # whole story exists to prevent.
+    adjustment = config.adjustment
+    if not 0.0 < adjustment.max_score_fraction <= 1.0:
+        raise LearningConfigError(
+            f"ranking_adjustment.max_score_fraction is {adjustment.max_score_fraction}: "
+            "it must be in (0, 1]. Zero disables the layer silently (use `enabled` "
+            "for that, so the reason is recorded); above 1.0 lets learning more "
+            "than double a base score, which is an edit rather than an adjustment."
+        )
+    if adjustment.max_rank_move < 0:
+        raise LearningConfigError(
+            f"ranking_adjustment.max_rank_move is {adjustment.max_rank_move}: a "
+            "negative rank cap is meaningless. Use 0 to allow no movement."
+        )
+    if adjustment.points_per_signal_unit < 0:
+        raise LearningConfigError(
+            "ranking_adjustment.points_per_signal_unit must not be negative — the "
+            "sign belongs to the signal's direction, and expressing it twice lets "
+            "the two disagree"
+        )
+
     if config.cold_start.minimum_signals < 1:
         raise LearningConfigError(
             "cold_start.minimum_signals must be at least 1 — a threshold of zero "
@@ -346,6 +393,7 @@ def parse_config(raw: Mapping[str, Any]) -> LearningSignalConfig:
             "confounders",
             "outcome_floor",
             "cold_start",
+            "ranking_adjustment",
             "similarity",
         )
     }
@@ -394,6 +442,7 @@ def parse_config(raw: Mapping[str, Any]) -> LearningSignalConfig:
     confounders = data.get("confounders") or {}
     recency_raw = data.get("recency") or {}
     cold_raw = data.get("cold_start") or {}
+    adjust_raw = data.get("ranking_adjustment") or {}
     similarity_raw = data.get("similarity") or {}
 
     def _sim(key: str, fallback: float) -> float:
@@ -420,6 +469,14 @@ def parse_config(raw: Mapping[str, Any]) -> LearningSignalConfig:
         recency=RecencyConfig(
             half_life_days=_as_float(recency_raw.get("half_life_days"), 180.0),
             floor=_as_float(recency_raw.get("floor"), 0.1),
+        ),
+        adjustment=AdjustmentPolicy(
+            enabled=bool(adjust_raw.get("enabled", True)),
+            max_score_fraction=_as_float(adjust_raw.get("max_score_fraction"), 0.15),
+            max_rank_move=int(_as_float(adjust_raw.get("max_rank_move"), 3)),
+            points_per_signal_unit=_as_float(
+                adjust_raw.get("points_per_signal_unit"), 0.35
+            ),
         ),
         cold_start=ColdStartConfig(
             minimum_signals=int(_as_float(cold_raw.get("minimum_signals"), 10)),
@@ -520,6 +577,7 @@ __all__ = [
     "DIRECTION_NEUTRAL",
     "DIRECTION_POSITIVE",
     "RECOGNISED_BASES",
+    "AdjustmentPolicy",
     "ColdStartConfig",
     "LearningConfigError",
     "LearningSignalConfig",

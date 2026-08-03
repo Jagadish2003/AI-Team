@@ -152,6 +152,26 @@
     "_distinct_note": "Both must be met. The second is what stops a single enthusiastically-reviewed opportunity from switching learning on for a whole org."
   },
 
+  "ranking_adjustment": {
+    "_note": "2.0-A3 T2 — the bounded adjustment layer's cap. How far accumulated learning is allowed to move a finding, above a base score it never touches.",
+    "_why_two_caps": "The story offers a maximum rank move OR a bounded score fraction. They fail differently, so both ship — the weaker binds, which is the conservative direction. The SCORE fraction is the mathematical bound: it is enforced at the moment the delta is computed, is provable by inspection, and is stable regardless of list length. The RANK cap is the customer-facing promise ('nothing moved more than 3 places'), and is the one that is intuitive but behaves oddly on a short list — on a 4-item list a cap of 3 is nearly unbounded, which is exactly why it is not the only cap.",
+    "_why_the_rank_cap_needs_its_own_enforcement": "Capping each item's delta at N does NOT bound how far items actually move: an item can be passively displaced by others jumping over it, up to about 2N (verified by fuzzing — see test_learning_adjustment.py::TestTheCapIsRealNotDecorative). A cap that is applied to the sort key but not to the outcome reads as enforced while permitting double the promised movement. So placement uses a bounded-window algorithm that guarantees |final_rank - base_rank| <= max_rank_move by construction, and a test asserts the bound over the actual output rather than the intent.",
+    "_basis": "operationally_justified",
+    "_basis_detail": "No production data exists to tune against. 15% of a 1-10 impact score is at most 1.5 points — enough to reorder adjacent findings, never enough to move a 9 below a 5. 3 ranks is small enough that a customer scanning a list can see nothing was reshuffled wholesale. Both are first guesses in magnitude; the existence of a hard bound is not.",
+
+    "enabled": true,
+    "_enabled_note": "The global off switch. When false the layer computes nothing and every surface serves base order — the same code path a cold-start org takes, so 'learning off' and 'learning not yet active' are one behaviour with two reasons rather than two behaviours.",
+
+    "max_score_fraction": 0.15,
+    "_max_score_fraction_note": "The learned delta may not exceed this fraction of the finding's BASE impact score. A proportional bound, not an absolute one, so the cap scales with the score it is modifying — a 15% move on a base 9 is worth more absolute points than on a base 2, which is the right shape: the layer is least free to reorder the findings the base scorer is most confident about.",
+
+    "max_rank_move": 3,
+    "_max_rank_move_note": "No finding's served position may differ from its base position by more than this, in either direction. Enforced on the OUTPUT, not on the intent.",
+
+    "points_per_signal_unit": 0.35,
+    "_points_per_signal_unit_note": "Converts T1's net signal weight into impact points. One clean analyst accept (weight 1.0) is worth 0.35 impact points before capping; a single measured within-band outcome (3.0) is worth 1.05. Deliberately set so that a handful of decisions alone cannot reach the score cap on a high-base finding, while one measured outcome plus a few decisions can — the outcome-outweighs-opinion principle expressed in the thing the customer actually sees."
+  },
+
   "similarity": {
     "_note": "What makes two findings 'similar' for the purposes of 'your team accepted 4 similar findings'. Deliberately conservative and explicitly ranked: a claim of similarity the customer disagrees with makes the whole explainability surface untrustworthy.",
     "_basis": "operationally_justified",

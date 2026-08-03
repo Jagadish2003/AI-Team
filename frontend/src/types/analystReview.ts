@@ -56,6 +56,41 @@ export interface OpportunityCandidate {
   // same type), satisfying "every roadmap entry carries its packId".
   packId?: string;
   packVersion?: string;
+  // 2.0-A3 T2 — the bounded learned ranking adjustment (contract v1.18).
+  // Additive and optional: absent when learning is off, not yet active, or on
+  // responses served before this shipped. Base scoring is NOT affected —
+  // `impact`/`effort`/`tier`/`confidence` and all evidence fields are untouched,
+  // and `_ranking.baseRank` is what this finding would have ranked without
+  // learning, so the "without learning" view needs no second request.
+  _ranking?: OpportunityRanking;
+}
+
+export interface OpportunityRankingCaps {
+  /** Max fraction of base impact a learned adjustment may move. */
+  maxScoreFraction: number;
+  /** Max positions a finding may move from its base rank, in either direction. */
+  maxRankMove: number;
+}
+
+export interface OpportunityRanking {
+  schemaVersion: string;
+  /** Position without learning. The stored order IS the base order. */
+  baseRank: number;
+  baseImpact: number;
+  adjustedRank: number;
+  /** Positions moved; negative means it moved up the list. */
+  moved: number;
+  adjusted: boolean;
+  caps: OpportunityRankingCaps;
+  // Present only when a learned adjustment applied to this finding.
+  effectiveImpact?: number;
+  appliedDelta?: number;
+  requestedDelta?: number;
+  /** True when a cap prevented the full move — learning and the base scorer disagree. */
+  wasCapped?: boolean;
+  cappedBy?: "score_fraction" | "rank_move" | null;
+  hasOutcomeEvidence?: boolean;
+  signalCount?: number;
 }
 
 export interface ReviewAuditEvent {
