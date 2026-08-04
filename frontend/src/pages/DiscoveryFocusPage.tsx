@@ -132,6 +132,16 @@ function SkeletonPills({ label }: { label: string }) {
   );
 }
 
+const UNWIRED_INDUSTRY_IDS = new Set([
+  'manufacturing',
+  'logistics_supply_chain',
+  'technology',
+]);
+
+function isUnwiredIndustry(industry: IndustryListItem): boolean {
+  return UNWIRED_INDUSTRY_IDS.has(industry.industry_id);
+}
+
 export default function DiscoveryFocusPage({
   setupState,
   industries,
@@ -158,14 +168,14 @@ export default function DiscoveryFocusPage({
   const selectedTemplates = templates.filter(template =>
     selectedTemplateIds.includes(template.template_id),
   );
-  const selectedIndustry =
-    industries.find(ind => ind.industry_id === state.industryId) ?? null;
-  const roadmapSystems = selectedIndustry?.roadmap_systems ?? [];
 
   async function handleIndustrySelect(industryId: string) {
+    const industry = industries.find(ind => ind.industry_id === industryId);
+
     const next = state.industryId === industryId ? null : industryId;
     setIndustry(next);
     if (!next) return;
+    if (industry && isUnwiredIndustry(industry)) return;
 
     // AC9: choosing an industry applies its registry-calibrated system defaults
     // through the API path (editable, never confirmed here). Failure to fetch
@@ -248,22 +258,6 @@ export default function DiscoveryFocusPage({
                   onToggle={() => handleIndustrySelect(ind.industry_id)}
                 />
               ))}
-            </div>
-          )}
-          {roadmapSystems.length > 0 && (
-            <div className="mt-4 flex flex-wrap gap-2" aria-label="Roadmap systems">
-              {roadmapSystems.map(system => {
-                return (
-                  <span
-                    key={system.system_id}
-                    title={system.reason}
-                    className="integration-coming-soon-status-pill inline-flex items-center gap-2 whitespace-nowrap rounded-full border text-xs font-medium leading-none"
-                  >
-                    <span>{system.label}</span>
-                    <span>Coming soon</span>
-                  </span>
-                );
-              })}
             </div>
           )}
         </section>
