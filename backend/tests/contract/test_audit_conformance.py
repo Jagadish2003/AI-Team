@@ -130,6 +130,13 @@ AUDIT_EXEMPT_ROUTES: Dict[str, str] = {
         "Ends a session; org data unchanged. The JWT is added to the block list, "
         "which is the operational record."
     ),
+    "POST /api/audit/export/verify": (
+        "2.0-D4 T2: read-shaped POST. It verifies a signed document the CALLER "
+        "already holds and returns a boolean — it changes no state and discloses "
+        "nothing the caller does not already have, so there is nothing to audit. "
+        "POST only because the document goes in the body. The export GENERATION "
+        "route on the same prefix is a disclosure and does audit."
+    ),
     "POST /api/auth/forgot-password": (
         "Unauthenticated request for a reset link. Deliberately unaudited at "
         "request time: it is reachable by anyone with an email address, so "
