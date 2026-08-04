@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { OpportunityCandidate } from '../../types/analystReview';
-import { showRelease2ArcAUi } from '../../config/releaseFlags';
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
@@ -54,11 +53,11 @@ function buildPoints(filtered: OpportunityCandidate[], layout: MatrixLayout) {
 }
 
 function bubbleStyle(opportunity: OpportunityCandidate, isSelected: boolean, isHover: boolean) {
-  if (showRelease2ArcAUi && opportunity.decision === 'APPROVED') {
+  if (opportunity.decision === 'APPROVED') {
     return { fill: 'rgba(0,180,120,0.35)', stroke: '#00b478' };
   }
 
-  if (showRelease2ArcAUi && opportunity.decision === 'REJECTED') {
+  if (opportunity.decision === 'REJECTED') {
     return { fill: 'rgba(180,60,60,0.35)', stroke: '#b43c3c' };
   }
 
@@ -264,7 +263,7 @@ export default function OpportunityMatrix({
           Apply T41-6 scorer recalibration to produce distinct impact and effort values.
         </div>
       ) : (
-        showRelease2ArcAUi && <div className="mt-3 shrink-0 text-xs text-muted">
+        <div className="mt-3 shrink-0 text-xs text-muted">
           Approve or reject an opportunity in the detail panel - the bubble color updates in real time.
         </div>
       )}

@@ -326,29 +326,18 @@ export default function OpportunityReviewPage() {
             </div>
 
             {detailPanelOpen && (
-              <div className="grid min-h-[560px] border-t border-border lg:h-[560px] lg:grid-cols-[minmax(0,1fr)_380px]">
-                <div className="min-h-[560px] min-w-0 border-b border-border lg:min-h-0 lg:border-b-0 lg:border-r">
-                  <OpportunityDetail
-                    opp={selected}
-                    audit={audit}
-                    hideTitleBar={true}
-                    suppressPermissions={true}
-                    footer={blueprintAction}
-                    onNavigate={() => {
-                      select(selected.id);
-                      nav("/executive-report");
-                    }}
-                  />
-                </div>
-                <div className="min-h-[460px] min-w-0 bg-bg/20 p-4 lg:min-h-0">
-                  <ReasoningOverride
-                    opp={selected}
-                    audit={audit}
-                    onSave={handleSaveOverride}
-                    onViewEvidence={handleViewEvidence}
-                    onDecision={handleDecision}
-                  />
-                </div>
+              <div className="h-[560px] border-t border-border">
+                <OpportunityDetail
+                  opp={selected}
+                  audit={audit}
+                  hideTitleBar={true}
+                  suppressPermissions={true}
+                  footer={blueprintAction}
+                  onNavigate={() => {
+                    select(selected.id);
+                    nav("/executive-report");
+                  }}
+                />
               </div>
             )}
           </section>
@@ -365,7 +354,7 @@ export default function OpportunityReviewPage() {
         )}
 
         <div
-          className="mt-4 grid grid-cols-1 gap-4 lg:h-[460px] lg:grid-cols-2 lg:items-stretch"
+          className="mt-4 grid grid-cols-1 gap-4 lg:h-[460px] lg:grid-cols-3 lg:items-stretch"
         >
           <TopQuickWins
             quickWins={quickWins}
@@ -377,6 +366,14 @@ export default function OpportunityReviewPage() {
             ranked={ranked}
             selectedId={selectedId}
             onSelect={handleSelect}
+          />
+
+          <ReasoningOverride
+            opp={selected}
+            audit={audit}
+            onSave={handleSaveOverride}
+            onViewEvidence={handleViewEvidence}
+            onDecision={handleDecision}
           />
         </div>
 
