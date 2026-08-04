@@ -151,6 +151,14 @@ LICENSE_INSTALLED = "license_installed"
 OPPORTUNITY_DECISION_RECORDED = "opportunity_decision_recorded"
 EVIDENCE_DECISION_RECORDED = "evidence_decision_recorded"
 
+# 2.0-D4 T2 — a signed audit export was generated. Recursive on purpose: exporting
+# the audit log mutates nothing, but it is a DISCLOSURE — someone took a copy of the
+# organisation's audit trail out of the system — and a disclosure is exactly the kind
+# of thing an auditor expects to find recorded. A later export over an overlapping
+# period will therefore contain this row, which is how "who has read the trail
+# before?" becomes answerable.
+AUDIT_EXPORT_GENERATED = "audit_export_generated"
+
 
 # ---------------------------------------------------------------------------
 # 2.0-D4 T1 — outcome vocabulary (AC1's fifth required field).
@@ -213,6 +221,8 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     LICENSE_INSTALLED,
     OPPORTUNITY_DECISION_RECORDED,
     EVIDENCE_DECISION_RECORDED,
+    # 2.0-D4 T2.
+    AUDIT_EXPORT_GENERATED,
 })
 
 
