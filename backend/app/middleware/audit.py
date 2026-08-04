@@ -92,6 +92,18 @@ CONNECTOR_REVOCATION_FAILED = "connector_revocation_failed"
 # credential values are write-only, never readable back through the UI or logs).
 CONNECTOR_CREDENTIALS_SET = "connector_credentials_set"
 CONNECTOR_CREDENTIALS_REVOKED = "connector_credentials_revoked"
+# 2.0-D4 T1: a connector's configuration was edited. D4 names "connector
+# create/edit/delete" and only create and delete were covered — an edit that
+# changes what a connector reads (ServiceNow's cmdb_class_scope is the live
+# example) left no trace at all. Distinct from CONNECTOR_CONNECTED, which
+# records the access grant rather than a change to how it is used.
+CONNECTOR_CONFIGURED = "connector_configured"
+# 2.0-D4 T1: an analyst resolved one Security Operations evidence pointer back to
+# its underlying record. A DISCLOSURE rather than a state change — audited for the
+# same reason the signed export is (T2): reading protected security evidence is
+# exactly what a reviewer asks about, and the route's own docstring already
+# described itself as "audited" while emitting telemetry only.
+EVIDENCE_POINTER_RESOLVED = "evidence_pointer_resolved"
 SCOPE_DECLARED = "scope_declared"
 USER_LOGIN = "user_login"
 SETUP_STATE_SAVED = "setup_state_saved"
@@ -202,7 +214,9 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     RUN_COMPLETED,
     CONNECTOR_QUERIED,
     CONNECTOR_CONNECTED,
+    CONNECTOR_CONFIGURED,
     CONNECTOR_DISCONNECTED,
+    EVIDENCE_POINTER_RESOLVED,
     CONNECTOR_REVOCATION_FAILED,
     CONNECTOR_CREDENTIALS_SET,
     CONNECTOR_CREDENTIALS_REVOKED,

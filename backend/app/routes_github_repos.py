@@ -37,7 +37,8 @@ from pydantic import BaseModel
 from .db import org_connector_get, org_connector_set
 from .middleware.tenancy import get_current_org_id
 from .security import require_auth
-from .rbac import require_role
+from .connector_scope_audit import audit_scope_selection
+from .rbac import _get_user_id_from_token, require_role
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +139,7 @@ def register_github_repos_routes(app: FastAPI) -> None:
         summary="Select which GitHub repositories AgentIQ reads for this workspace",
         tags=["Integration Hub"],
     )
-    def set_github_repos(body: GitHubReposBody) -> GitHubReposResponse:
+    def set_github_repos(body: GitHubReposBody, token: str = Depends(require_auth)) -> GitHubReposResponse:
         org_id = get_current_org_id()
         connector = org_connector_get(org_id, "github")
         if not connector:
@@ -162,8 +163,18 @@ def register_github_repos_routes(app: FastAPI) -> None:
             if rid in available_ids and rid not in validated:
                 validated.append(rid)
 
+        previous_scope = connector.get("repos")
         connector["repos"] = validated
         org_connector_set(org_id, "github", connector)
+        # 2.0-D4 T1 (AC1): scope pin/unpin is a data-access grant.
+        audit_scope_selection(
+            connector_id="github",
+            scope_key="repos",
+            previous=previous_scope,
+            selected=validated,
+            actor_id=_get_user_id_from_token(token),
+            first_selection=not isinstance(previous_scope, list),
+        )
 
         return GitHubReposResponse(
             available=[GitHubRepo(**r) for r in available],

@@ -90,6 +90,9 @@ from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
 from .middleware.audit import (
+    CONNECTOR_CONFIGURED,
+    CONNECTOR_CONNECTED,
+    CONNECTOR_DISCONNECTED,
     EVIDENCE_DECISION_RECORDED,
     OPPORTUNITY_DECISION_RECORDED,
     OUTCOME_SUCCESS,
@@ -98,7 +101,7 @@ from .middleware.audit import (
 from .middleware.tenancy import get_current_org_id, register_tenancy
 from .middleware.license_gate import register_license_gate
 from .retrieval.default_resolvers import register_default_content_resolvers
-from .rbac import require_role, seed_owner
+from .rbac import _get_user_id_from_token, require_role, seed_owner
 
 _DEV_USER = os.getenv("DEV_JWT", "dev-token-change-me")
 _DEV_ORG = "default"
@@ -507,7 +510,11 @@ def list_connectors() -> List[Dict[str, Any]]:
     "/api/connectors/{connector_id}/connect",
     dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
-def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+def connect_connector(
+    connector_id: str,
+    body: Dict[str, Any],
+    token: str = Depends(require_auth),
+) -> Dict[str, Any]:
     org_id = get_current_org_id()
     status = body.get("status", "connected")
     # R191-R1 T5 (AT-726 / AC2): a roadmap connector (SAP/D365 and any tile whose
@@ -548,6 +555,35 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
         was_connected=was_connected,
         now_connected=status == license_limits.CONNECTED_STATUS,
     )
+    # 2.0-D4 T1 (AC1): D4 names connector create/edit/delete. Delete was audited
+    # and the OAuth CALLBACK emitted connector_connected, but this direct status
+    # toggle — the path a non-OAuth connector actually takes — recorded nothing.
+    # The event follows the resulting state rather than the route name, so a
+    # toggle to a non-connected status reads as a disconnect and matches what the
+    # OAuth revoke path emits for the same outcome.
+    # Two explicit calls rather than one with a conditional event type: the
+    # conformance sweep resolves each log_event call site's type statically, and
+    # a type chosen by an expression is exactly the case it cannot verify.
+    if status == license_limits.CONNECTED_STATUS:
+        audit_log_event(
+            CONNECTOR_CONNECTED,
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+            target=connector_id,
+            status=status,
+            was_connected=was_connected,
+            outcome=OUTCOME_SUCCESS,
+        )
+    else:
+        audit_log_event(
+            CONNECTOR_DISCONNECTED,
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+            target=connector_id,
+            status=status,
+            was_connected=was_connected,
+            outcome=OUTCOME_SUCCESS,
+        )
     return c
 
 
@@ -558,6 +594,7 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
 def configure_connector(
     connector_id: str,
     body: Optional[Dict[str, Any]] = None,
+    token: str = Depends(require_auth),
 ) -> Dict[str, Any]:
     org_id = get_current_org_id()
     c = org_connector_get(org_id, connector_id)
@@ -579,6 +616,19 @@ def configure_connector(
     c["configured"] = True
     c["lastSynced"] = "Just now"
     org_connector_set(org_id, connector_id, c)
+    # 2.0-D4 T1 (AC1): the "edit" half of D4's connector create/edit/delete. The
+    # payload names WHICH settings the request changed, never their values — the
+    # body can carry customer configuration, and an audit row is not the place to
+    # copy it. cmdb_class_scope is recorded by name because narrowing or widening
+    # it changes what ServiceNow data a run may read.
+    audit_log_event(
+        CONNECTOR_CONFIGURED,
+        connector_id=connector_id,
+        user_id=_get_user_id_from_token(token),
+        target=connector_id,
+        settings_changed=sorted(body.keys()) if isinstance(body, dict) else [],
+        outcome=OUTCOME_SUCCESS,
+    )
     return c
 
 

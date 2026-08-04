@@ -161,25 +161,14 @@ KNOWN_AUDIT_GAPS: Dict[str, str] = {
     "POST /api/auth/org-approval/reject": "Org rejection unaudited. Owner: D4 T1 follow-up.",
     "POST /api/workspace/members": "Member ADD via main.add_member is unaudited; routes_workspace's invite/remove paths do audit. Owner: D4 T1 follow-up.",
     # -- Scope pin / unpin (D4 names this explicitly) -----------------------
-    "PATCH /api/connectors/slack/channels": "Scope selection unaudited. Owner: D4 T1 follow-up (scope pin/unpin sweep).",
-    "PATCH /api/connectors/teams/channels": "Scope selection unaudited. Owner: D4 T1 follow-up (scope pin/unpin sweep).",
-    "PATCH /api/connectors/jira/projects": "Scope selection unaudited. Owner: D4 T1 follow-up (scope pin/unpin sweep).",
-    "PATCH /api/connectors/confluence/spaces": "Scope selection unaudited. Owner: D4 T1 follow-up (scope pin/unpin sweep).",
-    "PATCH /api/connectors/sharepoint/sites": "Scope selection unaudited. Owner: D4 T1 follow-up (scope pin/unpin sweep).",
-    "PATCH /api/connectors/github/repos": "Scope selection unaudited. Owner: D4 T1 follow-up (scope pin/unpin sweep).",
-    "PATCH /api/connectors/salesforce/products": "Product declaration selects packs for every future run; unaudited. Owner: D4 T1 follow-up.",
     "POST /api/db-connectors/{connector_id}/scope": "Native-DB table/column scope unaudited. Owner: D4 T1 follow-up.",
     # -- Connector create / edit (D4 names this explicitly) -----------------
-    "POST /api/connectors/{connector_id}/connect": "OAuth connect start unaudited; the CALLBACK that completes it emits connector_connected. Owner: D4 T1 follow-up.",
-    "POST /api/connectors/{connector_id}/configure": "Connector configuration edit unaudited. Owner: D4 T1 follow-up.",
     # -- Run lifecycle ------------------------------------------------------
-    "POST /api/stack-builder/launch": "Run start via the Stack Builder is unaudited; routes_sprint4_t2 emits run_started for its own path only. Owner: D4 T1 follow-up.",
     "POST /api/runs/{run_id}/compute": "Run computation unaudited. Owner: D4 T1 follow-up.",
     "POST /api/runs/{run_id}/replay": "Replay re-serves artifacts and can reset decisions; unaudited. Owner: D4 T1 follow-up.",
     "DELETE /api/stack-builder/setup-state/{org_id}": "Setup-state deletion unaudited (the SAVE emits setup_state_saved). Owner: D4 T1 follow-up.",
     # -- Analyst / lifecycle ------------------------------------------------
     "POST /api/opportunity-lifecycle/{opportunity_identity}/track": "ensure_tracked is insert-only and emits no transition, so tracking a finding is unaudited. Owner: D4 T1 follow-up.",
-    "POST /api/runs/{run_id}/secops/evidence/resolve": "SecOps evidence resolution is an analyst decision and is unaudited. Owner: D4 T1 follow-up.",
     # -- Data in ------------------------------------------------------------
     "POST /api/uploads": "Document upload adds customer data to the workspace; unaudited. Owner: D4 T1 follow-up.",
 }
@@ -194,7 +183,10 @@ KNOWN_AUDIT_GAPS: Dict[str, str] = {
 ACTIONS_PENDING_ROUTES: Dict[str, str] = {
     "pack activate/disable/rollback": "Pack governance routes land in 2.0-C1; no route exists on this branch.",
     "entity merge/unmerge": "Entity merge/unmerge lands in 2.0-B2; no route exists on this branch.",
-    "export generation": "Signed export generation is D4 T2 (AC3); no route exists on this branch.",
+    # NOTE: "export generation" is deliberately NOT listed here any more. D4 T2
+    # shipped POST /api/audit/export, which emits audit_export_generated, so the
+    # entry claiming "no route exists on this branch" had become false. It is now
+    # covered by TestD4NamedActions.test_every_named_action_with_a_route_audits.
     "learning adjustment/reset": (
         "PARTIAL: ranking_adjustment_changed IS emitted by routes_learning_adjustment, "
         "so this action is audited. Listed here only to record that it was checked."
@@ -414,7 +406,7 @@ class TestRouteConformance:
         'everything is declared as a gap'."""
         audited, exempt, declared, _ = _classified()
         total = len(audited) + len(exempt) + len(declared)
-        assert len(audited) >= 23, (
+        assert len(audited) >= 37, (
             f"audited routes dropped to {len(audited)} of {total} — the sweep is "
             "meant to ratchet coverage up, not down"
         )
@@ -539,6 +531,70 @@ class TestD4NamedActions:
     ])
     def test_the_event_type_for_each_named_action_is_registered(self, event_type):
         assert event_type in audit.AUDIT_EVENT_REGISTRY
+
+    def test_every_named_action_with_a_route_audits(self):
+        """The test that closes the hole the registry check above cannot see.
+
+        Checking only that ``SCOPE_DECLARED`` is REGISTERED passed for months
+        while all seven SaaS scope routes wrote nothing: the cloud and native-DB
+        scope paths emitted the type, so the constant existed and the check was
+        satisfied. D4 names the ACTION, so the assertion has to be about the
+        routes a customer actually calls.
+
+        A named action whose route does not exist yet belongs in
+        ACTIONS_PENDING_ROUTES, not here.
+        """
+        named_action_routes = {
+            "connector create": ["POST /api/connectors/{connector_id}/connect"],
+            "connector edit": ["POST /api/connectors/{connector_id}/configure"],
+            "connector delete": ["DELETE /api/connectors/{connector_id}"],
+            "scope pin/unpin": [
+                "PATCH /api/connectors/slack/channels",
+                "PATCH /api/connectors/teams/channels",
+                "PATCH /api/connectors/jira/projects",
+                "PATCH /api/connectors/confluence/spaces",
+                "PATCH /api/connectors/sharepoint/sites",
+                "PATCH /api/connectors/github/repos",
+                "PATCH /api/connectors/salesforce/products",
+                "POST /api/connectors/{connector_id}/scopes",
+            ],
+            "run start": [
+                "POST /api/runs/start",
+                "POST /api/stack-builder/launch",
+            ],
+            "license install": ["POST /api/license/update-key"],
+            "export generation": ["POST /api/audit/export"],
+            "learning adjustment/reset": [
+                "POST /api/learning/adjustment/recompute",
+                "POST /api/learning/adjustment/reset",
+            ],
+            "analyst decisions": [
+                "POST /api/runs/{run_id}/opportunities/{opp_id}/decision",
+                "POST /api/runs/{run_id}/evidence/{evidence_id}/decision",
+                "POST /api/learning/feedback/{opportunity_identity}",
+            ],
+        }
+        audited, _, _, _ = _classified()
+        live = {route_key(m, path) for m, path, _ in _state_changing_routes()}
+
+        unaudited: List[str] = []
+        absent: List[str] = []
+        for action, keys in named_action_routes.items():
+            for key in keys:
+                if key not in live:
+                    absent.append(f"{action}: {key}")
+                elif key not in audited:
+                    unaudited.append(f"{action}: {key}")
+
+        assert not absent, (
+            "These routes are named as D4 actions but are not state-changing "
+            "routes on the live app — the mapping has rotted:\n"
+            + "\n".join(f"  {a}" for a in sorted(absent))
+        )
+        assert not unaudited, (
+            "D4 names these actions and their routes do not audit:\n"
+            + "\n".join(f"  {u}" for u in sorted(unaudited))
+        )
 
     def test_pack_and_entity_actions_have_no_route_yet(self):
         """Records the ABSENCE, so the pending list cannot quietly become stale
