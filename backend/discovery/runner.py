@@ -395,6 +395,62 @@ def _surface_operational_credential_health(
         )
 
 
+#: Run-scoped KV key holding the assembled cloud-event signature rows.
+#: Read-only surface: ``GET /api/runs/{runId}/cloud-ops/event-signatures``.
+KV_CLOUD_OPS_EVENT_SIGNATURES = "cloud_ops_event_signatures"
+
+
+def _persist_cloud_ops_event_signatures(run_id: str, block: Dict[str, Any]) -> None:
+    """Persist the assembled ``cloud_ops.event_signatures`` rows for this run.
+
+    The rows are the EXACT detector input ``build_cloud_ops_runtime`` produced —
+    stored verbatim, computed nowhere else, so this is a record of what the run
+    actually saw rather than a re-derivation. Until now the only trace a run left
+    of them was the count in the ``cloudOpsRuntime`` health block and the assembly
+    log line: ``build_org_context`` does not carry the cloud_ops block, nothing in
+    the app layer persists it, and ``AzureEventIngestor.produces_retrieval_content
+    = False`` means no per-event telemetry is emitted either. A signature VALUE
+    therefore only survived a run inside a FIRED finding's evidence — which cannot
+    exist until a ServiceNow incident already carries that signature. This write
+    breaks that circularity so the values can be read and stamped into ServiceNow.
+
+    Write-only, additive, and strictly after assembly: it reads ``block`` and
+    never mutates it, so no detector, corroboration, or scoring input changes.
+    Non-blocking — any KV problem is logged and swallowed, exactly like
+    :func:`_surface_operational_credential_health`.
+    """
+    rows = block.get("event_signatures")
+    if not isinstance(rows, list):
+        return
+    try:
+        try:
+            from app.db import run_kv_set
+        except ModuleNotFoundError:  # project-root execution uses backend as package
+            from backend.app.db import run_kv_set  # type: ignore
+
+        run_kv_set(
+            KV_CLOUD_OPS_EVENT_SIGNATURES,
+            run_id,
+            {
+                "runId": run_id,
+                "capturedAt": datetime.now(timezone.utc).isoformat(),
+                "count": len(rows),
+                "rows": rows,
+            },
+        )
+        logger.info(
+            "Persisted %d cloud-ops event signature row(s) for run %s "
+            "(read via GET /api/runs/%s/cloud-ops/event-signatures)",
+            len(rows), run_id, run_id,
+        )
+    except Exception as e:  # noqa: BLE001 — persisting the record is non-blocking.
+        logger.warning(
+            "Could not persist cloud-ops event signatures (non-blocking) "
+            "run=%s: [%s]",
+            run_id, type(e).__name__,
+        )
+
+
 def _ingest_ops_event_bridge(org_id: str, run_id: str) -> Dict[str, Any]:
     """Drive MSP-B8 on the shared checkpoint path and validate each batch.
 
@@ -2248,6 +2304,10 @@ def run(
                 len(runtime.block.get("oscillation_records") or ()),
                 len(runtime.block.get("event_signatures") or ()),
             )
+            # Objective 2: record the assembled signature rows so they survive the
+            # run. Read-only over `runtime.block`, after every detector input is
+            # final — nothing downstream observes this call.
+            _persist_cloud_ops_event_signatures(run_id, runtime.block)
         except Exception as exc:  # noqa: BLE001
             cloud_ops_runtime_health = {
                 "status": "unavailable",
