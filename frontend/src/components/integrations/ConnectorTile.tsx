@@ -94,7 +94,7 @@ export default function ConnectorTile({
   const isUnavailable = connector.roadmap === true || connector.status === 'coming_soon';
   const roadmapTarget = connector.roadmapTarget ?? null;
   const roadmapIsVersioned = Boolean(roadmapTarget && /\d/.test(roadmapTarget));
-  const displayStatus = connector.status === 'coming_soon' ? 'not_configured' : connector.status;
+  const displayStatus = isUnavailable ? 'not_configured' : connector.status;
 
   // Connecting / configuring / reconnecting are analyst+ writes (the connector
   // auth-url and token routes are analyst+). Viewers get a read-only hub: their

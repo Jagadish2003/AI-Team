@@ -81,6 +81,7 @@ describe("ConnectorTile — roadmap (AT-726)", () => {
     renderTile(roadmapSap());
     expect(screen.queryByTestId("connector-roadmap-badge")).not.toBeInTheDocument();
     expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Not configured")).toBeInTheDocument();
     const btn = screen.getByRole("button", { name: /^connect$/i });
     expect(btn).toBeDisabled();
   });
@@ -89,6 +90,7 @@ describe("ConnectorTile — roadmap (AT-726)", () => {
     renderTile(roadmapUnscheduled());
     expect(screen.queryByTestId("connector-roadmap-badge")).not.toBeInTheDocument();
     expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Not configured")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^connect$/i })).toBeDisabled();
   });
 

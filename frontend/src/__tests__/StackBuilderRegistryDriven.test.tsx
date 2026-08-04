@@ -132,14 +132,15 @@ describe('R18-C1 T3 — industries and templates render from the registry API', 
     expect(screen.getByRole('checkbox', { name: 'Commercial lending' })).toBeInTheDocument();
   });
 
-  it('disables non-live-ingest industries and hides roadmap system labels', () => {
+  it('keeps non-live-ingest industries visible but unwired', () => {
     const fetchSystemDefaults = vi.fn(async () => []);
     render(<Harness fetchSystemDefaults={fetchSystemDefaults} />);
 
     for (const name of ['Manufacturing', 'Logistics & supply chain', 'Technology']) {
       const pill = screen.getByRole('checkbox', { name });
-      expect(pill).toBeDisabled();
+      expect(pill).toBeEnabled();
       fireEvent.click(pill);
+      expect(pill).toHaveAttribute('aria-checked', 'false');
     }
 
     expect(screen.getByTestId('industry').textContent).toBe('');

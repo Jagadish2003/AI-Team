@@ -187,7 +187,7 @@ export default function ConnectorDetailPanel({
   const isConnected = connector.status === 'connected';
   const isConfigured = connector.configured;
   const isUnavailable = connector.roadmap === true || connector.status === 'coming_soon';
-  const displayStatus = connector.status === 'coming_soon' ? 'not_configured' : connector.status;
+  const displayStatus = isUnavailable ? 'not_configured' : connector.status;
   const viewerOnlyScope = isViewerOnlyScopeUser();
 
   // MSP-B13 (AT-744): AWS/Azure Event connectors onboard through the shared

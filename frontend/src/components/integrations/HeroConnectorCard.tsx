@@ -113,7 +113,7 @@ export default function HeroConnectorCard({
   const isConnected = connector.status === 'connected';
   const isConfigured = connector.configured;
   const isUnavailable = connector.roadmap === true || connector.status === 'coming_soon';
-  const displayStatus = connector.status === 'coming_soon' ? 'not_configured' : connector.status;
+  const displayStatus = isUnavailable ? 'not_configured' : connector.status;
   const primaryLabel =
     isUnavailable ? 'Connect'
     : isConnected && isConfigured ? 'Re-sync'

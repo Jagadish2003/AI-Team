@@ -132,14 +132,14 @@ function SkeletonPills({ label }: { label: string }) {
   );
 }
 
-const DISABLED_INDUSTRY_IDS = new Set([
+const UNWIRED_INDUSTRY_IDS = new Set([
   'manufacturing',
   'logistics_supply_chain',
   'technology',
 ]);
 
-function isDisabledIndustry(industry: IndustryListItem): boolean {
-  return DISABLED_INDUSTRY_IDS.has(industry.industry_id);
+function isUnwiredIndustry(industry: IndustryListItem): boolean {
+  return UNWIRED_INDUSTRY_IDS.has(industry.industry_id);
 }
 
 export default function DiscoveryFocusPage({
@@ -174,14 +174,14 @@ export default function DiscoveryFocusPage({
     const selectedIndustry = industries.find(
       ind => ind.industry_id === state.industryId,
     );
-    if (selectedIndustry && isDisabledIndustry(selectedIndustry)) {
+    if (selectedIndustry && isUnwiredIndustry(selectedIndustry)) {
       setIndustry(null);
     }
   }, [industries, setIndustry, state.industryId]);
 
   async function handleIndustrySelect(industryId: string) {
     const industry = industries.find(ind => ind.industry_id === industryId);
-    if (industry && isDisabledIndustry(industry)) return;
+    if (industry && isUnwiredIndustry(industry)) return;
 
     const next = state.industryId === industryId ? null : industryId;
     setIndustry(next);
@@ -260,18 +260,16 @@ export default function DiscoveryFocusPage({
               aria-label="Industry"
               className="flex flex-wrap gap-2"
             >
-              {industries.map(ind => {
-                const disabled = isDisabledIndustry(ind);
-                return (
-                  <PillTag
-                    key={ind.industry_id}
-                    label={ind.label}
-                    selected={!disabled && state.industryId === ind.industry_id}
-                    disabled={disabled}
-                    onToggle={() => handleIndustrySelect(ind.industry_id)}
-                  />
-                );
-              })}
+              {industries.map(ind => (
+                <PillTag
+                  key={ind.industry_id}
+                  label={ind.label}
+                  selected={
+                    !isUnwiredIndustry(ind) && state.industryId === ind.industry_id
+                  }
+                  onToggle={() => handleIndustrySelect(ind.industry_id)}
+                />
+              ))}
             </div>
           )}
         </section>
