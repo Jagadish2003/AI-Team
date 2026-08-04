@@ -129,7 +129,10 @@ __all__ = [
     "REASON_BUDGET_EXHAUSTED",
     "REASON_RANKED_OUT",
     "REASON_STALE",
+    "REASON_TOTAL_BUDGET",
     "SOURCE_TYPE_STRUCTURED",
+    "KindBudget",
+    "AssemblyBudgetReport",
 ]
 
 
@@ -154,6 +157,10 @@ class AssemblyPolicy:
     observed_first: bool = True            # observed strictly before inferred
     freshness_halflife_days: float = 30.0  # older context weighed down
     include_stale: bool = False            # R18-B2 T4: admit stale candidates?
+    # 2.0-B3 T2: the per-finding budget across ALL kinds. None leaves the per-kind
+    # caps as the only bound, which is the shipped default — the value is
+    # uncalibrated, and a guessed number here would trim every finding silently.
+    max_total_items: Optional[int] = None
 
     # ── 2.0-B3 T1: precedence as DECLARED configuration (AC1) ──────────────
     #
@@ -196,6 +203,7 @@ class AssemblyPolicy:
             confidence_floor=declaration.confidence_floor,
             freshness_halflife_days=declaration.freshness_halflife_days,
             include_stale=not declaration.exclude_stale,
+            max_total_items=declaration.max_total_items,
             observed_first=_ORIGIN_DIM in declaration.budget_partitions,
             declaration=declaration,
         )
@@ -247,6 +255,199 @@ class ContextPackage:
     # editable configuration, the log alone is no longer self-explaining. None when
     # no declaration was used (the R16-B2 in-code defaults).
     policy_declaration: Optional[dict] = None
+    # 2.0-B3 T2 (AC2): what the per-finding budgets cost this package, in one
+    # serialisable object. The selection_log always held the per-candidate decisions,
+    # but answering "did I lose context, and to which budget?" meant parsing every
+    # entry — so in practice nobody asked. Shaped for 2.0-B1's trace to render.
+    budget_report: Optional[dict] = None
+
+
+# ---------------------------------------------------------------------------
+# 2.0-B3 T2 — budgeted composition: the drop record (AC2)
+# ---------------------------------------------------------------------------
+
+#: A candidate trimmed to satisfy the per-finding TOTAL budget, after it had
+#: already won its per-kind competition. Distinct from ``budget_exhausted``
+#: (crowded out within its own kind) because the remedy differs: this one says the
+#: finding as a whole was too big, not that this kind was oversubscribed.
+REASON_TOTAL_BUDGET = "total_budget"
+
+
+@dataclass(frozen=True)
+class KindBudget:
+    """One kind's budget outcome — budget, what fit, what did not, and why.
+
+    Mirrors MSP-B7's ``BudgetReport`` deliberately: that module established the
+    repo's loud-degradation shape (budget / processed / deferred / breached /
+    reason), and a reader who has seen one should recognise the other.
+    """
+
+    kind: str
+    budget: int
+    considered: int          # candidates that reached the ranking (post floor/stale)
+    selected: int
+    dropped_by_budget: int   # ranked below the cut, or crowded out by a better tier
+    dropped_below_floor: int
+    dropped_stale: int
+    dropped_by_total_budget: int = 0  # trimmed afterwards by the per-finding total
+
+    @property
+    def offered(self) -> int:
+        """Every candidate this kind was handed, including those excluded pre-ranking."""
+        return self.considered + self.dropped_below_floor + self.dropped_stale
+
+    @property
+    def dropped(self) -> int:
+        return (
+            self.dropped_by_budget
+            + self.dropped_below_floor
+            + self.dropped_stale
+            + self.dropped_by_total_budget
+        )
+
+    @property
+    def breached(self) -> bool:
+        """True iff the BUDGET is what cost this kind context.
+
+        Deliberately not "anything was dropped": a below-floor or stale exclusion is
+        a quality decision that would have happened with unlimited budget, and
+        reporting those as a budget breach would send a reader to widen a budget that
+        was never the constraint.
+        """
+        return (self.dropped_by_budget + self.dropped_by_total_budget) > 0
+
+    @property
+    def reason(self) -> Optional[str]:
+        if not self.breached:
+            return None
+        parts = []
+        if self.dropped_by_budget:
+            parts.append(
+                f"{self.dropped_by_budget} dropped against the {self.kind} budget of "
+                f"{self.budget}"
+            )
+        if self.dropped_by_total_budget:
+            parts.append(
+                f"{self.dropped_by_total_budget} trimmed by the per-finding total budget"
+            )
+        return "; ".join(parts)
+
+    def _replace_trimmed(self, trimmed: int) -> "KindBudget":
+        """This kind's outcome with the total-budget trim recorded.
+
+        No arithmetic on ``dropped_by_budget``: the trim RE-LABELS its log entries to
+        ``total_budget`` before the report is derived, so they have already left that
+        count. Subtracting here as well double-corrected it — a per-kind budget that
+        genuinely dropped 5 reported 2, which made ``offered`` stop reconciling with
+        ``selected + dropped``. A report that does not add up is worse than none.
+        """
+        if not trimmed:
+            return self
+        return KindBudget(
+            kind=self.kind,
+            budget=self.budget,
+            considered=self.considered,
+            selected=self.selected,
+            dropped_by_budget=self.dropped_by_budget,
+            dropped_below_floor=self.dropped_below_floor,
+            dropped_stale=self.dropped_stale,
+            dropped_by_total_budget=trimmed,
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": self.kind,
+            "budget": self.budget,
+            "offered": self.offered,
+            "considered": self.considered,
+            "selected": self.selected,
+            "dropped": self.dropped,
+            "dropped_by_budget": self.dropped_by_budget,
+            "dropped_by_total_budget": self.dropped_by_total_budget,
+            "dropped_below_floor": self.dropped_below_floor,
+            "dropped_stale": self.dropped_stale,
+            "breached": self.breached,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True)
+class AssemblyBudgetReport:
+    """What the per-finding budgets cost this package (2.0-B3 T2 / AC2).
+
+    The point is that a truncated context is never SILENT. The selection_log has
+    always carried per-candidate decisions, but reading it required parsing every
+    entry to answer "did I lose context, and to which budget?" — so in practice
+    nobody asked. This is that answer, in one object, JSON-serialisable for the
+    run record and shaped for 2.0-B1's trace to render.
+    """
+
+    per_kind: Tuple[KindBudget, ...] = ()
+    total_budget: Optional[int] = None
+    total_selected: int = 0
+
+    @property
+    def total_dropped(self) -> int:
+        return sum(k.dropped for k in self.per_kind)
+
+    @property
+    def breached(self) -> bool:
+        """True iff a budget — per-kind or total — cost this finding context."""
+        return any(k.breached for k in self.per_kind)
+
+    @property
+    def reason(self) -> Optional[str]:
+        if not self.breached:
+            return None
+        return "; ".join(k.reason for k in self.per_kind if k.reason)
+
+    def to_dict(self) -> dict:
+        return {
+            "total_budget": self.total_budget,
+            "total_selected": self.total_selected,
+            "total_dropped": self.total_dropped,
+            "breached": self.breached,
+            "reason": self.reason,
+            "per_kind": [k.to_dict() for k in self.per_kind],
+        }
+
+
+def _relabel_dropped(log: List[dict], candidate_id: str) -> None:
+    """Mark an already-included log entry as dropped by the total budget.
+
+    Mutates the entry in place rather than appending a second one: two entries for
+    one candidate would make the log self-contradictory ("included" AND "excluded"),
+    and every reader would then need to know which wins.
+    """
+    for entry in log:
+        if entry.get("candidate_id") == candidate_id:
+            entry["decision"] = DECISION_EXCLUDED
+            entry["reason"] = REASON_TOTAL_BUDGET
+            return
+
+
+def _kind_budget(kind: str, budget: int, log: List[dict], selected: int) -> KindBudget:
+    """Derive one kind's budget outcome from its own selection log.
+
+    Derived from the log rather than counted alongside it, so the report and the
+    log can never disagree about what happened — a report that drifted from the
+    log would be worse than no report.
+    """
+    below = sum(1 for e in log if e.get("reason") == REASON_BELOW_FLOOR)
+    stale = sum(1 for e in log if e.get("reason") == REASON_STALE)
+    by_budget = sum(
+        1 for e in log
+        if e.get("reason") in (REASON_BUDGET_EXHAUSTED, REASON_RANKED_OUT)
+    )
+    return KindBudget(
+        kind=kind,
+        budget=budget,
+        considered=len(log) - below - stale,
+        selected=selected,
+        dropped_by_budget=by_budget,
+        dropped_below_floor=below,
+        dropped_stale=stale,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -817,6 +1018,79 @@ def assemble_context(
         evidence_candidates, policy.max_evidence_chunks, policy, reference
     )
 
+    # 2.0-B3 T2 (AC2) — the per-finding TOTAL budget, applied after each kind has
+    # won its own competition. The per-kind caps sum to more than a prompt should
+    # carry, so this is the bound that reflects what a finding can actually afford.
+    #
+    # Deterministic by construction: kinds yield in the DECLARED reverse
+    # ``kind_precedence`` order, and within a kind the already-ranked tail is trimmed
+    # first — so the item dropped is always the lowest-ranked item of the most
+    # substitutable kind. No arbitrary choice anywhere.
+    by_kind = {
+        KIND_ENTITY: list(selected_entities),
+        KIND_RELATIONSHIP: list(selected_relationships),
+        KIND_EVIDENCE: list(selected_evidence),
+    }
+    logs_by_kind = {
+        KIND_ENTITY: log_entities,
+        KIND_RELATIONSHIP: log_relationships,
+        KIND_EVIDENCE: log_evidence,
+    }
+    trimmed_by_kind = {k: 0 for k in by_kind}
+    total_budget = getattr(policy, "max_total_items", None)
+    if total_budget is not None:
+        precedence = (
+            policy.declaration.kind_precedence
+            if policy.declaration is not None
+            else (KIND_ENTITY, KIND_RELATIONSHIP, KIND_EVIDENCE)
+        )
+        overflow = sum(len(v) for v in by_kind.values()) - int(total_budget)
+        for kind in reversed(precedence):
+            if overflow <= 0:
+                break
+            items = by_kind.get(kind) or []
+            give = min(overflow, len(items))
+            if not give:
+                continue
+            # Re-log the trimmed tail so the drop is recorded, never silent (AC2).
+            for candidate in items[len(items) - give:]:
+                _relabel_dropped(logs_by_kind[kind], candidate.candidate_id)
+            by_kind[kind] = items[: len(items) - give]
+            trimmed_by_kind[kind] += give
+            overflow -= give
+        if overflow > 0:
+            # Every kind emptied and still over: only reachable with a budget of 0,
+            # which the loader refuses. Logged rather than ignored.
+            logger.warning(
+                "context_assembly: total budget %s could not be satisfied — %d item(s) "
+                "still over after trimming every kind", total_budget, overflow,
+            )
+
+    selected_entities = by_kind[KIND_ENTITY]
+    selected_relationships = by_kind[KIND_RELATIONSHIP]
+    selected_evidence = by_kind[KIND_EVIDENCE]
+
+    budget_report = AssemblyBudgetReport(
+        per_kind=tuple(
+            _kind_budget(kind, budget, logs_by_kind[kind], len(by_kind[kind]))._replace_trimmed(
+                trimmed_by_kind[kind]
+            )
+            for kind, budget in (
+                (KIND_ENTITY, policy.max_entities),
+                (KIND_RELATIONSHIP, policy.max_relationships),
+                (KIND_EVIDENCE, policy.max_evidence_chunks),
+            )
+        ),
+        total_budget=total_budget,
+        total_selected=sum(len(v) for v in by_kind.values()),
+    )
+    if budget_report.breached:
+        # Loud, at info: a truncated context is a fact an operator may need when a
+        # narrative looks thin, and it must not require log-level archaeology.
+        logger.info(
+            "context_assembly: budget shaped this package — %s", budget_report.reason
+        )
+
     return ContextPackage(
         entities=[_unwrap(c) for c in selected_entities],
         relationships=[_unwrap(c) for c in selected_relationships],
@@ -826,4 +1100,5 @@ def assemble_context(
         policy_declaration=(
             policy.declaration.to_dict() if policy.declaration is not None else None
         ),
+        budget_report=budget_report.to_dict(),
     )

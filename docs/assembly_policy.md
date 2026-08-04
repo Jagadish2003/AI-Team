@@ -110,6 +110,83 @@ Two additions make a stored decision interpretable:
 Bump `version` in the declaration when a change would alter composition for
 unchanged inputs.
 
+## Budgeted composition (2.0-B3 T2 / AC2)
+
+R16-B2 already selected deterministically under the per-kind caps and logged a reason
+per candidate. What was missing was the ability to *answer* the question the log
+technically contained: **did this finding lose context, and to which budget?**
+Answering it meant parsing every entry, so in practice nobody asked.
+
+### The report
+
+`ContextPackage.budget_report` (surfaced onward as `GraphContext.budget_report`) is
+that answer in one JSON-serialisable object, deliberately mirroring MSP-B7's
+`BudgetReport` shape — that module established this repo's loud-degradation vocabulary
+(budget / processed / deferred / breached / reason) and a reader who has seen one
+should recognise the other.
+
+Per kind: `budget`, `offered`, `considered`, `selected`, and the drops split by cause —
+`dropped_by_budget`, `dropped_by_total_budget`, `dropped_below_floor`, `dropped_stale`.
+The split matters because the remedies differ: widen a budget, lower a floor, or
+refresh a stale artifact. One aggregate "dropped" number would send a reader to the
+wrong lever.
+
+**`breached` means a BUDGET cost context** — not merely that something was dropped. A
+below-floor or stale exclusion would have happened with unlimited budget, so counting
+those as a breach would send an operator to widen a budget that was never the
+constraint.
+
+**The report is derived from the selection log**, not counted alongside it, so the two
+cannot disagree. `offered == selected + dropped` for every kind, and a test asserts
+it: an early version subtracted one count twice and reported 2 drops where 5 had
+happened. A report that does not add up is worse than none, because it will be quoted.
+
+### The per-finding total budget
+
+`caps.total_items` bounds a finding across *all* kinds — which is what actually bounds
+an LLM prompt, since the per-kind caps sum to 45 and a prompt should rarely carry that
+much.
+
+It ships as **`null` (disabled)**, and that is deliberate rather than unfinished: no
+measurement of real prompt size against narrative quality exists yet, and a hand-set
+number here would silently trim every finding on the strength of a guess — the same
+objection this codebase raises to any un-calibrated threshold. The per-kind caps remain
+in force, so over-budget selection and its drop record are exercised in production
+regardless. Setting an integer enables it; `0` is refused, because an empty context for
+every finding is a mistake rather than a policy.
+
+When it binds, the trim is deterministic in both dimensions:
+
+* **which kind yields** — kinds give up items in reverse `kind_precedence` order, so
+  the most substitutable kind (declared last) shrinks first. Graph structure is
+  declared first because a finding stripped of its entities loses the subject its
+  evidence is about;
+* **which item yields** — the already-ranked *tail* of that kind, so the item lost is
+  always the weakest, never a mid-list item chosen by accident of iteration.
+
+Both are declared, so changing either is a config edit — the T1 discipline carried into
+T2.
+
+### Nothing is dropped silently
+
+A trimmed candidate's existing log entry is **re-labelled** to `total_budget` rather
+than having a second entry appended. Two entries for one candidate would make the log
+self-contradictory — "included" *and* "excluded" — and every reader would then need to
+know which wins. `total_budget` is a distinct reason from `budget_exhausted` because it
+says something different: the finding as a whole was too big, not that one kind was
+oversubscribed.
+
+A breach logs at `info` naming the reason, so a thin narrative can be explained without
+log-level archaeology.
+
+### Not yet wired: B1's trace
+
+The ticket notes the drop record "feeds B1's trace". **2.0-B1 is not on this branch** —
+`app/trace_graph.py` and `app/retrieval_trace.py` live on the unmerged `R2.0_B1`. The
+report is therefore built as a first-class serialisable artifact shaped for that trace
+to render, and the wiring is left to whichever merges second rather than half-built
+here against a module that is absent.
+
 ## Backwards compatibility
 
 Additive. `AssemblyPolicy()` with no declaration behaves exactly as it did before

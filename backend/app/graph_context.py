@@ -73,6 +73,15 @@ class GraphContext(BaseModel):
     # for this run's graph context — surfaced for auditability (why each entity /
     # edge was kept or dropped). Empty when assembly logged nothing.
     selection_log: List[Dict[str, Any]] = Field(default_factory=list)
+    # 2.0-B3 T2 (AC2): what the per-finding budgets cost this context — the budget,
+    # what fit, what was dropped, and to which budget. Surfaced here because the
+    # selection_log above technically contained it but nobody could answer "did I
+    # lose context?" without parsing every entry. Empty when assembly reported none.
+    #
+    # This is the artifact 2.0-B1's trace is meant to render ("a record of what was
+    # dropped and why ... traceable in B1"). B1 is not on this branch, so the wiring
+    # is deliberately left to it rather than half-built here.
+    budget_report: Dict[str, Any] = Field(default_factory=dict)
 
 
 def _entity_get(entity: Any, key: str, default: Any = None) -> Any:
@@ -304,4 +313,5 @@ def build_graph_context(
         truncation_note=truncation_note,
         relationship_count=len(shown_relationships),
         selection_log=package.selection_log,
+        budget_report=package.budget_report or {},
     )
