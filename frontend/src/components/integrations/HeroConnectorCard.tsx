@@ -112,10 +112,12 @@ export default function HeroConnectorCard({
 }) {
   const isConnected = connector.status === 'connected';
   const isConfigured = connector.configured;
+  const isUnavailable = connector.roadmap === true || connector.status === 'coming_soon';
+  const displayStatus = connector.status === 'coming_soon' ? 'not_configured' : connector.status;
   const primaryLabel =
-    isConnected && isConfigured ? 'Re-sync'
+    isUnavailable ? 'Connect'
+    : isConnected && isConfigured ? 'Re-sync'
     : isConnected ? 'Configure & Sync'
-    : connector.status === 'coming_soon' ? 'Coming soon'
     : 'Connect';
   const primaryVariant = isConnected ? 'tertiary' : 'primary';
 
@@ -137,7 +139,7 @@ export default function HeroConnectorCard({
         </div>
         <div className="mt-1 flex items-center justify-between gap-2">
           <div className="truncate text-sm text-muted">{connector.category}</div>
-          <div className="shrink-0"><Badge status={connector.status} /></div>
+          <div className="shrink-0"><Badge status={displayStatus} /></div>
         </div>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-3 xl:mt-4 xl:gap-4">
@@ -169,9 +171,9 @@ export default function HeroConnectorCard({
             e.stopPropagation();
             onPrimary();
           }}
-          disabled={connector.status === 'coming_soon'}
+          disabled={isUnavailable}
           variant={primaryVariant}
-          className="min-w-0 px-2"
+          className={`min-w-0 px-2 ${isUnavailable ? '!bg-slate-500/10 !text-muted !border-border !opacity-100' : ''}`}
         >
           {primaryLabel}
         </Button>

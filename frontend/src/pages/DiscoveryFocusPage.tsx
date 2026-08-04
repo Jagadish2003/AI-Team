@@ -132,6 +132,16 @@ function SkeletonPills({ label }: { label: string }) {
   );
 }
 
+const DISABLED_INDUSTRY_IDS = new Set([
+  'manufacturing',
+  'logistics_supply_chain',
+  'technology',
+]);
+
+function isDisabledIndustry(industry: IndustryListItem): boolean {
+  return DISABLED_INDUSTRY_IDS.has(industry.industry_id);
+}
+
 export default function DiscoveryFocusPage({
   setupState,
   industries,
@@ -158,11 +168,21 @@ export default function DiscoveryFocusPage({
   const selectedTemplates = templates.filter(template =>
     selectedTemplateIds.includes(template.template_id),
   );
-  const selectedIndustry =
-    industries.find(ind => ind.industry_id === state.industryId) ?? null;
-  const roadmapSystems = selectedIndustry?.roadmap_systems ?? [];
+
+  React.useEffect(() => {
+    if (!state.industryId) return;
+    const selectedIndustry = industries.find(
+      ind => ind.industry_id === state.industryId,
+    );
+    if (selectedIndustry && isDisabledIndustry(selectedIndustry)) {
+      setIndustry(null);
+    }
+  }, [industries, setIndustry, state.industryId]);
 
   async function handleIndustrySelect(industryId: string) {
+    const industry = industries.find(ind => ind.industry_id === industryId);
+    if (industry && isDisabledIndustry(industry)) return;
+
     const next = state.industryId === industryId ? null : industryId;
     setIndustry(next);
     if (!next) return;
@@ -240,28 +260,16 @@ export default function DiscoveryFocusPage({
               aria-label="Industry"
               className="flex flex-wrap gap-2"
             >
-              {industries.map(ind => (
-                <PillTag
-                  key={ind.industry_id}
-                  label={ind.label}
-                  selected={state.industryId === ind.industry_id}
-                  onToggle={() => handleIndustrySelect(ind.industry_id)}
-                />
-              ))}
-            </div>
-          )}
-          {roadmapSystems.length > 0 && (
-            <div className="mt-4 flex flex-wrap gap-2" aria-label="Roadmap systems">
-              {roadmapSystems.map(system => {
+              {industries.map(ind => {
+                const disabled = isDisabledIndustry(ind);
                 return (
-                  <span
-                    key={system.system_id}
-                    title={system.reason}
-                    className="integration-coming-soon-status-pill inline-flex items-center gap-2 whitespace-nowrap rounded-full border text-xs font-medium leading-none"
-                  >
-                    <span>{system.label}</span>
-                    <span>Coming soon</span>
-                  </span>
+                  <PillTag
+                    key={ind.industry_id}
+                    label={ind.label}
+                    selected={!disabled && state.industryId === ind.industry_id}
+                    disabled={disabled}
+                    onToggle={() => handleIndustrySelect(ind.industry_id)}
+                  />
                 );
               })}
             </div>
