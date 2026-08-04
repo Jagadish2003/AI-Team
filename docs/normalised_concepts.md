@@ -213,6 +213,59 @@ ingestion does not ship cannot conform, because there is nothing to conform.
 * **No mappers.** Turning a ServiceNow incident into a `WorkItem` is T2/T3. This
   ticket makes the target exist, versioned, with conformance declarable.
 * **No detector porting.** AC2/AC3 (two detectors ported, one running across three
-  families) are separate tickets.
+  families) are separate tickets. **AC2 is now delivered — see the next section.**
 * **No CI conformance-fixture gate.** AC4 is separate. The declaration mechanism here
   is what that gate will read.
+
+---
+
+## Detector portability (2.0-B4 T3 / AT-812 — AC2)
+
+**AC2:** *two existing detectors, ported to normalised concepts, produce identical
+findings on golden fixtures.* This is the proof that the concept set is not just a
+data model but a *portable* one — a detector re-expressed against concepts behaves
+exactly as its connector-bound original.
+
+Two shipped detectors are ported in
+[`backend/discovery/concepts/portable_detectors.py`](../backend/discovery/concepts/portable_detectors.py):
+
+| Original (connector-bound) | Concept-native port | Concepts it reads |
+|---|---|---|
+| `APPROVAL_BOTTLENECK` — [`detectors/approval_delay.py`](../backend/discovery/detectors/approval_delay.py) | `detect_approval_bottleneck` | `Approval` |
+| `PERMISSION_BOTTLENECK` — [`detectors/permission_bottleneck.py`](../backend/discovery/detectors/permission_bottleneck.py) | `detect_permission_bottleneck` | `Approval` + the `ActorGroup` its `approver_group` points at |
+
+The originals read `sf_data['approval_processes'][i]['avg_delay_days']` — bound, by the
+field names they know, to Salesforce. The ports read a concept stream: a flat list of
+`ConceptSignal` filtered to `Approval` gates and their approver `ActorGroup`s. They name
+no source and no source field path (a test sweeps the module to prove it), and they emit
+nothing when handed the raw connector dicts — they respond only to concept instances.
+
+**Same logic, only the input is normalised.** The ports import the threshold constants
+from the original modules rather than re-declaring them, so the calibration is provably
+identical and cannot drift: change a threshold in the original and the port changes with
+it. The one thing that differs is the shape the detector reads.
+
+**Where the discriminating numbers live.** `approver_count` — what `PERMISSION_BOTTLENECK`
+keys on — is read from the normalised `ActorGroup.member_count`, a first-class concept
+aggregate, and the mapper drops the source's individual approver roster entirely (groups,
+never individuals). The source's own pre-computed scores (`avg_delay_days`,
+`bottleneck_score`, `pending_count`) ride on the `Approval.attributes` bag — B0's `payload`
+rule: the source computed them, so the faithful mapping carries them rather than fabricating
+per-approval detail the source never recorded. The port never reaches into a connector dict
+for any of them.
+
+The mapper is [`backend/discovery/concepts/mappers.py`](../backend/discovery/concepts/mappers.py)
+(`map_service_cloud_approvals`). It is a *proof* mapper over a detector-visible shape, and
+deliberately does **not** flip the Salesforce connector's conformance to `supported` — the
+conformance registry tracks the shipping ingest mapper, which is T2's remit.
+
+The proof — [`backend/tests/unit/test_r2_0_b4_t3_detector_portability.py`](../backend/tests/unit/test_r2_0_b4_t3_detector_portability.py)
+— feeds the golden fixture
+([`concepts/fixtures/portability_approvals_golden.json`](../backend/discovery/concepts/fixtures/portability_approvals_golden.json))
+to both the original and the port and asserts `DetectorResult` lists are byte-identical, across
+every firing branch (combined-delay, severe-delay, concentration-only, the `approver_count == 0`
+guard, and a non-firing negative control). An explicit expected firing set is asserted against
+**both** sides, so a shared bug that agreed on the wrong answer would still fail.
+
+**Not in this ticket.** AC3 (one concept-native detector running unchanged across three source
+families) is a separate ticket; it builds on this port and the T2 per-connector mappers.
