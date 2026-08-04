@@ -25,6 +25,7 @@ import { profileNameFromEmail } from '../utils/profileName';
 import { runScopedErrorMessage } from '../utils/apiErrors';
 import { useResource, useDataCache } from '../lib/dataCache';
 import { cacheKeys } from '../lib/cacheKeys';
+import { showRelease2ArcAUi } from '../config/releaseFlags';
 
 export default function ExecutiveReportPage() {
   const { push } = useToast();
@@ -154,7 +155,7 @@ export default function ExecutiveReportPage() {
           userName: profileNameFromEmail(auth?.user?.email),
           generatedAt,
           runId,
-          outcomeSection: report?.outcomeSection ?? null,
+          outcomeSection: showRelease2ArcAUi ? report?.outcomeSection ?? null : null,
         },
         {
           filename: `AgentIQ-Executive-Report-${stamp}.pdf`,
@@ -293,7 +294,9 @@ export default function ExecutiveReportPage() {
           {/* Key Insights — full width */}
           <KeyInsights />
 
-          <ExecutiveOutcomeSection section={report?.outcomeSection ?? null} />
+          {showRelease2ArcAUi && (
+            <ExecutiveOutcomeSection section={report?.outcomeSection ?? null} />
+          )}
 
           {/* Top Quick Wins + Agent Roadmap Highlights — side by side */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(420px,520px)]">
