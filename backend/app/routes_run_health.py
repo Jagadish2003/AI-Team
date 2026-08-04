@@ -76,6 +76,37 @@ def get_pack_health() -> dict:
     return packs_view(org_id)
 
 
+@router.get("/degradation")
+def get_degradation(
+    run_id: str = Query(default=None, description="Run to report on; latest when omitted."),
+) -> dict:
+    """2.0-D4 T5 (AC6) — what did not work, in one uniform shape.
+
+    Connector outages, model-provider unavailability and storage pressure all
+    report here in the SAME shape — what was attempted, what was delivered, what
+    is missing, a named reason and a remedy — so a consumer renders them without
+    special-casing each subsystem.
+
+    Unlike the run-scoped surfaces, this one DOES probe the live environment,
+    because "can this deployment embed content right now?" is a question about
+    now rather than about a past run.
+    """
+    org_id = get_current_org_id()
+    resolved = None
+    if run_id:
+        try:
+            from .run_store import read_run
+
+            resolved = read_run(run_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not read run %s for degradation: %s", run_id, exc)
+
+    from .run_completeness import build_run_completeness
+
+    completeness = build_run_completeness(resolved or {}, include_environment=True)
+    return {"org_id": org_id, "completeness": completeness.to_dict()}
+
+
 @router.get("/volume")
 def get_volume_envelope(
     run_id: str = Query(default=None, description="Run to report on; latest when omitted."),
