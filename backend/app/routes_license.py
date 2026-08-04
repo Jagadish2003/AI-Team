@@ -35,6 +35,11 @@ from .licensing import (
     LicenseStatus,
     validate_license,
 )
+from .middleware.audit import (
+    LICENSE_INSTALLED,
+    OUTCOME_SUCCESS,
+    log_event as audit_log_event,
+)
 from .middleware.tenancy import get_current_org_id
 from .org_display_name import resolve_org_display_name
 from .rbac import require_role
@@ -288,6 +293,22 @@ def update_license_key(body: UpdateKeyRequest) -> LicenseStatusResponse:
     # gate/banner re-validate the key directly and never read this cache, but
     # keeping the two writes adjacent avoids any stale-cache surprise.)
     persist_validated_status(result, org_id=org_id)
+    # 2.0-D4 T1: license install is a state-changing action D4 names explicitly, so
+    # it belongs in the AUDIT stream and not only in telemetry. The two stores are
+    # not interchangeable — telemetry is operational and audit is the access-
+    # controlled, retained, immutable record an auditor reads — and before this an
+    # auditor querying audit_log for a licence change found nothing. The key itself
+    # is never recorded: only who installed what entitlement, and the outcome.
+    audit_log_event(
+        LICENSE_INSTALLED,
+        org_id=org_id,
+        target=result.get("customer") or org_id,
+        outcome=OUTCOME_SUCCESS,
+        status=result.get("status"),
+        expires_at=result.get("expires_at"),
+        term_months=(result.get("payload") or {}).get("term_months"),
+        deployment_type=result.get("deployment_type"),
+    )
     record_event(
         "license.updated",
         {
