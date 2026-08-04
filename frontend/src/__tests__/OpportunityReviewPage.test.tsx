@@ -337,7 +337,7 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     await act(async () => { fireEvent.click(rejectBtn); });
     await waitFor(() => {
       expect(mockSetDecision).toHaveBeenCalledWith('opp_001', 'REJECTED');
-      expect(mockPush).toHaveBeenCalledWith('Opportunity rejected.', 'success');
+      expect(mockPush).toHaveBeenCalledWith('Opportunity rejected.', 'error');
     });
   });
 

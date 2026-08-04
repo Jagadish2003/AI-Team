@@ -161,11 +161,11 @@ export default function OpportunityReviewPage() {
         return;
       }
 
-      const successMessage =
-        decision === "APPROVED"
-          ? "Opportunity approved."
-          : "Opportunity rejected.";
-      push(successMessage, "success");
+      const isApproved = decision === "APPROVED";
+      push(
+        isApproved ? "Opportunity approved." : "Opportunity rejected.",
+        isApproved ? "success" : "error",
+      );
 
       const result = await setDecision(selectedId, decision);
       if (!result.ok) {
