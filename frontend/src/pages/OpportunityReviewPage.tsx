@@ -156,10 +156,23 @@ export default function OpportunityReviewPage() {
 
   const handleDecision = useCallback(
     async (decision: Decision) => {
-      if (!selectedId) return;
+      if (!selectedId) {
+        push("Select an opportunity before setting a decision.", "error");
+        return;
+      }
+
       const result = await setDecision(selectedId, decision);
-      if (!result.ok) push(result.error || "Unable to update decision.");
-      else push(`Decision set to ${decision}.`);
+      if (!result.ok) {
+        push(result.error || "Unable to update decision.", "error");
+        return;
+      }
+
+      push(
+        decision === "APPROVED"
+          ? "Opportunity approved."
+          : "Opportunity rejected.",
+        "success",
+      );
     },
     [push, selectedId, setDecision],
   );

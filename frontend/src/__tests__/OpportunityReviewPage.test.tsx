@@ -87,6 +87,7 @@ const mockSaveOverride = vi.fn().mockResolvedValue({ ok: true });
 const mockSelect = vi.fn().mockImplementation((id: string) => { mockSelectedId = id; });
 const mockRefetch = vi.fn();
 const mockNavigate = vi.fn();
+const mockPush = vi.hoisted(() => vi.fn());
 const mockFetchLearningSignals = vi.hoisted(() => vi.fn());
 
 function learningSignals(active = true) {
@@ -162,7 +163,7 @@ vi.mock('../context/RunContext', () => ({
 }));
 
 vi.mock('../components/common/Toast', () => ({
-  useToast: () => ({ push: vi.fn() }),
+  useToast: () => ({ push: mockPush }),
 }));
 
 vi.mock('../api/learningApi', () => ({
@@ -309,6 +310,17 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     await act(async () => { fireEvent.click(approveBtn); });
     await waitFor(() => {
       expect(mockSetDecision).toHaveBeenCalledWith('opp_001', 'APPROVED');
+      expect(mockPush).toHaveBeenCalledWith('Opportunity approved.', 'success');
+    });
+  });
+
+  it('AC6: Reject button calls setDecision with REJECTED and shows toast', async () => {
+    renderPage();
+    const rejectBtn = screen.getByRole('button', { name: /reject/i });
+    await act(async () => { fireEvent.click(rejectBtn); });
+    await waitFor(() => {
+      expect(mockSetDecision).toHaveBeenCalledWith('opp_001', 'REJECTED');
+      expect(mockPush).toHaveBeenCalledWith('Opportunity rejected.', 'success');
     });
   });
 
