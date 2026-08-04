@@ -173,6 +173,43 @@ def test_seq_is_none_when_counter_unavailable(monkeypatch):
     assert p["seq"] is None
 
 
+def test_ledger_emit_pins_event_attribution_to_transition_org(monkeypatch):
+    """OAuth callbacks can have ambient org 'default'; billing belongs to state org."""
+    import app.billing_chain as bc
+    import app.telemetry as telemetry
+    from app.middleware import tenancy
+
+    written = []
+
+    class _Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def add(self, event):
+            written.append(event)
+
+        def commit(self):
+            pass
+
+    monkeypatch.setattr(telemetry, "_ensure_telemetry_table", lambda: None)
+    monkeypatch.setattr(telemetry, "get_db_session", lambda: _Session())
+    monkeypatch.setattr(bc, "next_seq", lambda org: 1)
+    monkeypatch.setattr(bl, "resolve_system_identity", lambda org, cid: cid)
+
+    token = tenancy._current_org_id.set("default")
+    try:
+        bl.emit_system_connected("org-A", "salesforce", was_connected=False)
+    finally:
+        tenancy._current_org_id.reset(token)
+
+    event = written[0]
+    assert event.org_id == "org-A"
+    assert event.connector_id == "salesforce"
+
+
 def test_emit_is_fire_and_forget(monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("telemetry store unavailable")

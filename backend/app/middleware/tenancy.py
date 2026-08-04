@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Callable
 
@@ -214,6 +215,24 @@ def resolve_event_org_id(explicit_org_id: str | None = None) -> str:
         UNATTRIBUTED_ORG,
     )
     return UNATTRIBUTED_ORG
+
+
+@contextmanager
+def event_org_context(org_id: str):
+    """Temporarily attribute events emitted inside the block to ``org_id``.
+
+    ``resolve_event_org_id`` normally lets the ambient request context win over a
+    payload org_id. Some request handlers act for a specific org while the
+    ambient context is different; OAuth callbacks are the billing case because
+    the signed state names the connecting org, while the request can otherwise
+    resolve to the dev/default org. This helper scopes event attribution only and
+    restores the previous context after the block.
+    """
+    token = _current_org_id.set(org_id)
+    try:
+        yield
+    finally:
+        _current_org_id.reset(token)
 
 
 def resolve_request_org_id(request: Request) -> str:

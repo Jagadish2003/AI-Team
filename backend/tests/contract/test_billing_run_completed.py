@@ -90,6 +90,7 @@ def test_emit_billing_run_completed_full_shape(monkeypatch):
     assert p["ai_mode"] == "hosted"
     assert p["provider"] == "hosted"
     assert p["connected_system_count"] == 3
+    assert p["connected_system_count_status"] == "resolved"
     assert p["pack_ids"] == ["service_cloud"]
     assert p["deployment_type"] == "saas"
     assert p["started_at"] == "2026-01-01T00:00:00+00:00"
@@ -151,7 +152,52 @@ def test_connected_system_count_defensive_on_error(monkeypatch):
         org_id="o", run_id="r", pack_id="pk", deployment_type=None, started_at="t0"
     )
     p = [pl for et, pl in events if et == "billing.run_completed"][0]
-    assert p["connected_system_count"] is None
+    assert p["connected_system_count"] == -1
+    assert p["connected_system_count_status"] == "unavailable"
+    assert p["deployment_type"] == "unknown"
+
+
+def test_record_event_projects_billing_run_into_generic_columns(monkeypatch):
+    """Direct telemetry_events queries get useful generic billing columns."""
+    import app.telemetry as telemetry
+
+    written = []
+
+    class _Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def add(self, event):
+            written.append(event)
+
+        def commit(self):
+            pass
+
+    monkeypatch.setattr(telemetry, "_ensure_telemetry_table", lambda: None)
+    monkeypatch.setattr(telemetry, "get_db_session", lambda: _Session())
+
+    telemetry.record_event(
+        "billing.run_completed",
+        {
+            "org_id": "org-A",
+            "run_id": "run-1",
+            "source": "run_pipeline",
+            "ai_mode": "hosted",
+            "provider": "hosted",
+            "connected_system_count": 3,
+            "pack_ids": ["service_cloud"],
+            "deployment_type": "saas",
+        },
+    )
+
+    event = written[0]
+    assert event.org_id == "org-A"
+    assert event.run_id == "run-1"
+    assert event.pack_id == "service_cloud"
+    assert event.count == 3
 
 
 def test_emit_is_fire_and_forget(monkeypatch):

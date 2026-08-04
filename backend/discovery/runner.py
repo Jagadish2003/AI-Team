@@ -999,9 +999,16 @@ def _emit_billing_run_completed(
         try:
             from app.license_limits import count_connected_systems
 
-            connected_system_count: Optional[int] = count_connected_systems(org_id)
+            connected_system_count = count_connected_systems(org_id)
+            connected_system_count_status = "resolved"
         except Exception:
-            connected_system_count = None
+            logger.warning(
+                "billing.run_completed connected-system count failed for org %s",
+                org_id,
+                exc_info=True,
+            )
+            connected_system_count = -1
+            connected_system_count_status = "unavailable"
         # R-1.9.1-L2 / T4 (AC4): stamp a per-org monotonic sequence number so a
         # billing event deleted from the store before report generation shows up
         # as a gap in the usage report's hash chain. Defensive — a counter hiccup
@@ -1020,8 +1027,9 @@ def _emit_billing_run_completed(
                 "ai_mode": ai_mode,
                 "provider": provider,
                 "connected_system_count": connected_system_count,
+                "connected_system_count_status": connected_system_count_status,
                 "pack_ids": [pack_id] if pack_id else [],
-                "deployment_type": deployment_type,
+                "deployment_type": deployment_type or "unknown",
                 "started_at": started_at,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "seq": _seq,

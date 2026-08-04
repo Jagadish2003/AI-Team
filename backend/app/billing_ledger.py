@@ -134,17 +134,18 @@ def _emit(event_type: str, org_id: str, connector_id: str, system_identity: Opti
             seq: Optional[int] = billing_chain.next_seq(org_id)
         except Exception:
             seq = None
-        record_event(
-            event_type,
-            {
-                "connector": connector_id,
-                "system_identity": identity,
-                "occurred_at": datetime.now(timezone.utc).isoformat(),
-                "org_id": org_id,
-                "seq": seq,
-                "source": _SOURCE,
-            },
-        )
+        payload = {
+            "connector": connector_id,
+            "system_identity": identity,
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "org_id": org_id,
+            "seq": seq,
+            "source": _SOURCE,
+        }
+        from app.middleware.tenancy import event_org_context
+
+        with event_org_context(org_id):
+            record_event(event_type, payload)
     except Exception:  # pragma: no cover — metering must never break a request
         logger.warning(
             "%s emit failed for %s/%s", event_type, org_id, connector_id, exc_info=True

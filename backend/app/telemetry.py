@@ -981,6 +981,25 @@ def record_event(event_type: str, payload: Optional[dict] = None) -> None:
                 _unattr = "_unattributed"
             org_id = payload.get("org_id") or _unattr
 
+        connector_id = payload.get("connector_id")
+        if connector_id is None and event_type in {
+            "billing.system_connected",
+            "billing.system_disconnected",
+        }:
+            connector_id = payload.get("connector")
+
+        pack_id = payload.get("pack_id")
+        if pack_id is None and event_type == "billing.run_completed":
+            pack_ids = payload.get("pack_ids")
+            if isinstance(pack_ids, list) and pack_ids:
+                pack_id = pack_ids[0]
+
+        count = payload.get("count")
+        if count is None and event_type == "billing.run_completed":
+            connected_system_count = payload.get("connected_system_count")
+            if isinstance(connected_system_count, int):
+                count = connected_system_count
+
         payload_str = json.dumps(payload)
 
         tel_event = TelemetryEvent(
@@ -989,11 +1008,11 @@ def record_event(event_type: str, payload: Optional[dict] = None) -> None:
             event_type=event_type,
             source=payload.get("source", "telemetry"),
             run_id=payload.get("run_id"),
-            connector_id=payload.get("connector_id"),
-            pack_id=payload.get("pack_id"),
+            connector_id=connector_id,
+            pack_id=pack_id,
             duration_ms=payload.get("duration_ms"),
             success=payload.get("success"),
-            count=payload.get("count"),
+            count=count,
             error_code=payload.get("error_code"),
             payload=payload_str,
             timestamp=datetime.now(timezone.utc),
