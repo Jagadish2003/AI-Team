@@ -102,6 +102,12 @@ interface Props {
   registryError: string | null;
   onRetryRegistry: () => void;
   fetchSystemDefaults: (industryId: string) => Promise<SystemDefaultItem[]>;
+  // Optional guidance panel for the selected template, rendered BELOW the
+  // Industry / template pickers. It sits here rather than above the step because
+  // the template that produces it is chosen in the section directly above — a
+  // guide rendered at the top of the page appeared off-screen from its own
+  // trigger, so selecting a template meant scrolling back up to read the result.
+  guide?: React.ReactNode;
 }
 
 // Compact inline "load failed → retry" block for the industry / template
@@ -134,6 +140,7 @@ export default function DiscoveryFocusPage({
   registryError,
   onRetryRegistry,
   fetchSystemDefaults,
+  guide,
 }: Props) {
   const {
     state,
@@ -302,6 +309,10 @@ export default function DiscoveryFocusPage({
           )}
         </section>
       </div>
+
+      {/* Template guidance — directly below the template picker that produces it,
+          and above the Continue footer so it is read before moving on. */}
+      {guide}
 
       <div className="rounded-xl border border-border bg-panel p-4 shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">

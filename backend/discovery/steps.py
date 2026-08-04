@@ -13,11 +13,13 @@ cycle (``discovery.runner`` already imports ``app.db``; this module never
 imports back into ``app``).
 
 The list order matches the exact order ``runner.run()`` emits the steps:
-``sf_crm`` (Salesforce CRM) -> ``sn`` (ServiceNow) -> ``jira`` -> ``slack`` ->
-``teams`` -> ``confluence`` -> ``sharepoint`` -> ``github`` -> ``java_app`` ->
-``dotnet_app`` (each connected conversation / knowledge / operational source, in
-ingest order) -> ``sf_ncino`` (the pack-specific second Salesforce pass for the
-declared product) -> ``detect`` -> ``enrich`` -> ``complete``.
+``sf_crm`` (Salesforce CRM) -> ``sn`` (ServiceNow) -> ``jira`` ->
+``azure_events`` -> ``aws_events`` (the native MSP-B1/B2 cloud event connectors)
+-> ``slack`` -> ``teams`` -> ``confluence`` -> ``sharepoint`` -> ``github`` ->
+``java_app`` -> ``dotnet_app`` (each connected conversation / knowledge /
+operational source, in ingest order) -> ``sf_ncino`` / ``sf_fsc`` (the
+pack-specific second Salesforce pass for each declared product) -> ``detect`` ->
+``enrich`` -> ``complete``.
 
 Every connected SOURCE emits its own step at the START of its ingest, so the
 Discovery Progress list shows exactly ONE source in-progress (a spinner) at a
@@ -35,6 +37,8 @@ DISCOVERY_STEPS: List[str] = [
     "sf_crm",      # before salesforce.ingest()
     "sn",          # before servicenow.ingest()
     "jira",        # before jira_mod.ingest()
+    "azure_events",  # before _ingest_azure_events() (MSP-B2 native Azure connector)
+    "aws_events",    # before _ingest_aws_events() (MSP-B1 native AWS connector)
     "slack",       # before _ingest_slack_corroboration() (Slack change-based ingest)
     "teams",       # before _ingest_teams_corroboration()
     "confluence",  # before _ingest_confluence_corroboration()
@@ -43,6 +47,7 @@ DISCOVERY_STEPS: List[str] = [
     "java_app",    # before _ingest_java_app_corroboration()
     "dotnet_app",  # before _ingest_dotnet_app_corroboration()
     "sf_ncino",    # after ncino_ingest() — pack-specific second Salesforce pass
+    "sf_fsc",      # after fsc_ingest() — Financial Services Cloud second pass (2.0-D1 T2)
     "detect",      # after _run_detector_phase()
     "enrich",      # before entity extraction / LLM enrichment
     "complete",    # at the final return

@@ -22,6 +22,7 @@ import {
   projectionBasisSummary,
 } from '../components/projection/ProjectionBasis';
 import { recommendationHeadline } from '../components/projection/ProjectionRecommendation';
+import { showRelease2ArcAUi } from '../config/releaseFlags';
 
 export interface ExecutiveReportPdfData {
   confidence: string;
@@ -438,14 +439,14 @@ export async function downloadExecutiveReportPdf(
     wrapped('No quick wins identified for this discovery run.', 9.5, 'normal', MUTED);
   } else {
     data.quickWins.forEach((o) => {
-      const basisSummary = projectionBasisSummary(o.projection);
-      const thinEvidenceText = isThinProjectionEvidence(o.projection)
+      const basisSummary = showRelease2ArcAUi ? projectionBasisSummary(o.projection) : null;
+      const thinEvidenceText = showRelease2ArcAUi && isThinProjectionEvidence(o.projection)
         ? 'Thin evidence - projection band is wider because evidence is limited.'
         : null;
       // 2.0-A1 T5: the export carries the same intervention-language statement
       // the screens show. AC3 covers exports explicitly, and a PDF is the
       // artefact most likely to be quoted in a board paper.
-      const recommendation = recommendationHeadline(o.projection);
+      const recommendation = showRelease2ArcAUi ? recommendationHeadline(o.projection) : null;
       const recommendationLines = recommendation
         ? (pdf.splitTextToSize(sanitize(recommendation), CW - 10) as string[])
         : [];
