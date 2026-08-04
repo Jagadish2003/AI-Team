@@ -88,6 +88,12 @@ from .routes_outcomes import register_outcome_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
+from .middleware.audit import (
+    EVIDENCE_DECISION_RECORDED,
+    OPPORTUNITY_DECISION_RECORDED,
+    OUTCOME_SUCCESS,
+    log_event as audit_log_event,
+)
 from .middleware.tenancy import get_current_org_id, register_tenancy
 from .middleware.license_gate import register_license_gate
 from .retrieval.default_resolvers import register_default_content_resolvers
@@ -745,6 +751,15 @@ def set_evidence_decision(
     }
     audit = run_kv_get("audit", run_id, default_audit())
     run_kv_set("audit", run_id, [audit_event, *audit])
+    # 2.0-D4 T1: same reasoning as the opportunity override — the run-scoped entry
+    # is a view, the audit_log row is the durable record of the human decision.
+    audit_log_event(
+        EVIDENCE_DECISION_RECORDED,
+        run_id=run_id,
+        target=evidence_id,
+        outcome=OUTCOME_SUCCESS,
+        decision=decision,
+    )
     return e
 
 
@@ -1014,6 +1029,21 @@ def set_opp_override(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
     }
     audit = run_kv_get("audit", run_id, default_audit())
     run_kv_set("audit", run_id, [event, *audit])
+    # 2.0-D4 T1: the run-scoped entry above feeds the run's audit VIEW, but it lives
+    # in the `audit` run-KV blob, which materialization rewrites and replay resets —
+    # so it is not a durable record that a human made this call. D4 names "analyst
+    # decisions" as a state-changing action, so the organisation-wide immutable
+    # audit_log gets its own row.
+    audit_log_event(
+        OPPORTUNITY_DECISION_RECORDED,
+        run_id=run_id,
+        target=opp_id,
+        outcome=OUTCOME_SUCCESS,
+        action="override_saved",
+        is_locked=override["isLocked"],
+        has_rationale_override=bool(override.get("rationaleOverride")),
+        override_reason=override.get("overrideReason") or None,
+    )
     # with_display so the override response carries the same stable matrix offset
     # as the list endpoint (keeps the bubble coordinate-stable on override save).
     # R18-C1 T4: same template terminology as the list endpoint.
