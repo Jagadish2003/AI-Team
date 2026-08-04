@@ -36,6 +36,8 @@ except Exception:  # pragma: no cover - import shim
 
 from app.azure_environments import AzureEnvironment
 
+from .azure_app_insights import assert_read_allowed
+
 logger = logging.getLogger(__name__)
 
 # API versions (non-secret; overridable per client).
@@ -295,6 +297,10 @@ class _HttpStreamClient:
             f"{environment.resource_manager.rstrip('/')}/subscriptions/"
             f"{subscription_id}/{self._path}"
         )
+        # 2.0-D3 T1 / AC2: refuse an out-of-scope surface at the point of the call,
+        # so the scope commitment holds even if this generic client is later
+        # re-pointed at metrics, telemetry, or a Log Analytics/KQL endpoint.
+        assert_read_allowed(url)
         params = {"api-version": self._api_version}
         if self._params_builder is not None:
             params.update(self._params_builder(since_iso))
