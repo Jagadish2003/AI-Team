@@ -281,8 +281,14 @@ class TestAC6SelectionLog:
     def test_log_entry_shape(self):
         _, log = select_candidates([_cand("x", confidence=0.9)], cap=1, policy=AssemblyPolicy())
         entry = log[0]
+        # ``source_type`` joined the shape in 2.0-B3 T1, when source type became a
+        # precedence dimension: a log showing confidence and freshness but not source
+        # type cannot explain why a high-confidence conversation ranked below a
+        # weaker structured record, and an unexplainable decision defeats the point
+        # of logging it. Additive — the log is an internal prompt-context field
+        # (``GraphContext.selection_log``), not an API shape.
         assert set(entry) == {
-            "candidate_id", "kind", "origin", "decision", "reason",
+            "candidate_id", "kind", "origin", "source_type", "decision", "reason",
             "confidence", "freshness_days",
         }
         assert entry["origin"] in (OBSERVED, INFERRED)

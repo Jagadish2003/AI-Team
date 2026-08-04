@@ -65,12 +65,14 @@ try:  # Repo-root import style (tests add both roots to sys.path).
         GRAPH_CONTEXT_MAX_RELATIONSHIPS,
     )
     from backend.app.provenance import INFERRED, OBSERVED
+    from backend.app.assembly_policy_config import SOURCE_TYPE_STRUCTURED
 except ModuleNotFoundError:  # Runtime inside backend/ where app is top-level.
     from app.graph_constants import (
         GRAPH_CONTEXT_MAX_ENTITIES,
         GRAPH_CONTEXT_MAX_RELATIONSHIPS,
     )
     from app.provenance import INFERRED, OBSERVED
+    from app.assembly_policy_config import SOURCE_TYPE_STRUCTURED
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +98,17 @@ REASON_RANKED_OUT = "ranked_out"
 # 'excluded: stale' so freshness exclusions are visible, never silent (AC6).
 REASON_STALE = "stale"
 
+# 2.0-B3 T1 — declared-dimension names, mirrored from app.assembly_policy_config so
+# this module can build a rank key without importing the loader on every call (the
+# loader imports nothing from here, and keeping the direction one-way avoids a
+# cycle). The loader's KNOWN_DIMENSIONS is the authority; a contract test pins the
+# two lists together so they cannot drift.
+_ORIGIN_DIM = "origin"
+_SOURCE_TYPE_DIM = "source_type"
+_CONFIDENCE_DIM = "confidence"
+_FRESHNESS_DIM = "freshness"
+_CANDIDATE_ID_DIM = "candidate_id"
+
 
 def _reason_included(position: int) -> str:
     """The Section-3 inclusion reason, carrying the 1-based rank position."""
@@ -116,6 +129,7 @@ __all__ = [
     "REASON_BUDGET_EXHAUSTED",
     "REASON_RANKED_OUT",
     "REASON_STALE",
+    "SOURCE_TYPE_STRUCTURED",
 ]
 
 
@@ -141,6 +155,53 @@ class AssemblyPolicy:
     freshness_halflife_days: float = 30.0  # older context weighed down
     include_stale: bool = False            # R18-B2 T4: admit stale candidates?
 
+    # ── 2.0-B3 T1: precedence as DECLARED configuration (AC1) ──────────────
+    #
+    # ``declaration`` is the loaded ``config/assembly_policy.json``. When present
+    # it OWNS precedence: which dimensions form hard budget tiers, the soft
+    # ranking order within a tier, and the rank tables for origin and source type.
+    # Reordering ``ranking`` in that file changes composition with no code change.
+    #
+    # None keeps the R16-B2 behaviour exactly — the fields above, ranked
+    # confidence -> freshness -> id with observed as a hard tier — so every
+    # existing caller and test is unaffected and this stays additive. Prefer
+    # :meth:`declared` over constructing with a declaration by hand.
+    declaration: Optional[Any] = None
+
+    @classmethod
+    def declared(
+        cls, declaration: Optional[Any] = None, **overrides: Any
+    ) -> "AssemblyPolicy":
+        """Build a policy from the declared configuration (2.0-B3 T1 / AC1).
+
+        Loads ``config/assembly_policy.json`` unless a parsed declaration is
+        supplied. The caps, floor and freshness half-life come from the declaration
+        too, so there is ONE place a deployment states them; ``overrides`` remains
+        available for a caller with a legitimate per-call bound (a narrower budget
+        for a small prompt, say) without editing the shared file.
+
+        Raises ``AssemblyPolicyConfigError`` when the declaration is missing or
+        invalid — never silently falls back to the in-code defaults, because a
+        deployment that believes it configured precedence and did not would compose
+        findings differently from what its operators think.
+        """
+        if declaration is None:
+            from .assembly_policy_config import load_declared_policy
+
+            declaration = load_declared_policy()
+        base = dict(
+            max_entities=declaration.max_entities,
+            max_relationships=declaration.max_relationships,
+            max_evidence_chunks=declaration.max_evidence_chunks,
+            confidence_floor=declaration.confidence_floor,
+            freshness_halflife_days=declaration.freshness_halflife_days,
+            include_stale=not declaration.exclude_stale,
+            observed_first=_ORIGIN_DIM in declaration.budget_partitions,
+            declaration=declaration,
+        )
+        base.update(overrides)
+        return cls(**base)
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -162,6 +223,13 @@ class Candidate:
     payload: Any = None
     freshness_days: Optional[float] = None  # precomputed age in days, if known
     is_stale: bool = False                  # R18-B2 T4: source changed, not refreshed
+    # 2.0-B3 T1: what KIND OF SOURCE this came from — structured | prose | code |
+    # conversation. The dimension that makes "structured records outrank
+    # conversational content" enforceable rather than merely stated; before this
+    # there was nothing to rank a Slack thread against a ServiceNow incident by
+    # except confidence. Empty means undeclared, which sorts LAST among declared
+    # source types (an item earns precedence by declaring what it is).
+    source_type: str = ""
 
 
 @dataclass
@@ -173,6 +241,12 @@ class ContextPackage:
     evidence: List[Any] = field(default_factory=list)        # empty until retrieval (1.8)
     policy_used: AssemblyPolicy = field(default_factory=AssemblyPolicy)
     selection_log: List[dict] = field(default_factory=list)  # why each item was in/out
+    # 2.0-B3 T1: the DECLARATION that produced this package, serialised. A
+    # selection_log read six months later has to be interpretable against the
+    # precedence in force when it was written — and since that precedence is now
+    # editable configuration, the log alone is no longer self-explaining. None when
+    # no declaration was used (the R16-B2 in-code defaults).
+    policy_declaration: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -280,11 +354,86 @@ def _rank_key(candidate: Candidate, reference: Optional[datetime], halflife_days
     Sorted ASCENDING this yields confidence DESC, freshness DESC, then
     ``candidate_id`` ASC. The id is the stable tiebreaker (AC5): two candidates
     with equal confidence and equal freshness always order identically.
+
+    This is the R16-B2 key, retained verbatim as the behaviour used when no policy
+    declaration is present. When one IS present, :func:`_declared_rank_key` builds
+    the key from the declared ``ranking`` order instead (2.0-B3 T1 / AC1).
     """
     return (
         -_confidence(candidate),
         -_freshness_score(candidate, reference, halflife_days),
         candidate.candidate_id,
+    )
+
+
+def _dimension_value(
+    candidate: Candidate,
+    dimension: str,
+    declaration: Any,
+    reference: Optional[datetime],
+    halflife_days: float,
+):
+    """One dimension's sort value for a candidate — ascending means "better first".
+
+    The single place a declared dimension name becomes a comparable value. Adding a
+    dimension means adding a branch here and a name to ``KNOWN_DIMENSIONS``; the
+    loader refuses an unknown name, so a config typo fails at load rather than
+    silently dropping a precedence rule.
+    """
+    if dimension == _CONFIDENCE_DIM:
+        return -_confidence(candidate)
+    if dimension == _FRESHNESS_DIM:
+        return -_freshness_score(candidate, reference, halflife_days)
+    if dimension == _CANDIDATE_ID_DIM:
+        return candidate.candidate_id
+    if dimension == _ORIGIN_DIM:
+        value = OBSERVED if _is_observed(candidate) else INFERRED
+        table = declaration.rank_table(_ORIGIN_DIM)
+        return table.get(value, declaration.unknown_rank(_ORIGIN_DIM))
+    if dimension == _SOURCE_TYPE_DIM:
+        table = declaration.rank_table(_SOURCE_TYPE_DIM)
+        return table.get(
+            (candidate.source_type or "").strip().lower(),
+            declaration.unknown_rank(_SOURCE_TYPE_DIM),
+        )
+    # Unreachable via the loader (it validates names), so this is a guard against a
+    # declaration constructed in code that bypassed validation.
+    raise ValueError(f"unknown assembly-policy dimension {dimension!r}")
+
+
+def _declared_rank_key(
+    candidate: Candidate,
+    declaration: Any,
+    reference: Optional[datetime],
+    halflife_days: float,
+):
+    """Ranking key built from the DECLARED ``ranking`` order (2.0-B3 T1 / AC1).
+
+    Lexicographic over the declared dimensions, so the first entry dominates and
+    reordering the declaration reorders composition — with no code change. The
+    loader guarantees the sequence ends in ``candidate_id``, which is what keeps the
+    key a total order and the package byte-identical run to run.
+    """
+    return tuple(
+        _dimension_value(candidate, dim, declaration, reference, halflife_days)
+        for dim in declaration.ranking
+    )
+
+
+def _partition_key(
+    candidate: Candidate, declaration: Any, reference: Optional[datetime], halflife: float
+):
+    """The HARD tier a candidate belongs to, best tier first.
+
+    Everything in a better tier fills the budget before anything in a worse tier is
+    considered, so a worse-tier candidate can never displace a better-tier one that
+    fit. This is R16-B2 AC3 ("an inferred item can never displace an observed item")
+    generalised: which dimensions are hard is now declared rather than implied by a
+    single ``observed_first`` boolean.
+    """
+    return tuple(
+        _dimension_value(candidate, dim, declaration, reference, halflife)
+        for dim in declaration.budget_partitions
     )
 
 
@@ -299,6 +448,11 @@ def _log_entry(
         "candidate_id": candidate.candidate_id,
         "kind": candidate.kind,
         "origin": OBSERVED if _is_observed(candidate) else INFERRED,
+        # 2.0-B3 T1: recorded because source type is now a precedence dimension.
+        # A log that showed confidence and freshness but not the source type could
+        # not explain why a high-confidence conversation ranked below a weaker
+        # structured record — the decision would look arbitrary.
+        "source_type": candidate.source_type or "",
         "decision": decision,
         "reason": reason,
         "confidence": _confidence(candidate),
@@ -350,23 +504,47 @@ def select_candidates(
         else:
             eligible.append(candidate)
 
-    # Rule 2 — partition into observed and inferred.
-    observed = [c for c in eligible if _is_observed(c)]
-    inferred = [c for c in eligible if not _is_observed(c)]
-
-    # Rule 4 — rank deterministically within each partition.
-    keyf = lambda c: _rank_key(c, reference, halflife)  # noqa: E731
-    observed.sort(key=keyf)
-    inferred.sort(key=keyf)
-
-    # Rule 3 — observed fills the budget first; inferred only fills what's left.
-    # Concatenating observed ahead of inferred makes "observed beats inferred"
-    # structural: an inferred item can never displace an observed item that fit
-    # (AC3). With observed_first off, the two partitions compete on rank alone.
-    if policy.observed_first:
-        ordered = observed + inferred
-    else:
+    # Rules 2–4 — tier, then rank within tier.
+    #
+    # 2.0-B3 T1: when a policy DECLARATION is present it owns both steps — which
+    # dimensions form hard budget tiers (``budget_partitions``) and the soft order
+    # within a tier (``ranking``). Sorting by (tier, rank) as one lexicographic key
+    # is exactly equivalent to grouping into tiers and concatenating them best-first,
+    # so a worse-tier candidate still cannot displace a better-tier one that fit
+    # (R16-B2 AC3, generalised). With no declaration the original R16-B2 path runs
+    # unchanged.
+    declaration = getattr(policy, "declaration", None)
+    if declaration is not None:
+        keyf = lambda c: (  # noqa: E731
+            _partition_key(c, declaration, reference, halflife)
+            + _declared_rank_key(c, declaration, reference, halflife)
+        )
         ordered = sorted(eligible, key=keyf)
+        # The best tier, used only to describe WHY a candidate past the cap missed
+        # out (budget_exhausted vs ranked_out) on the selection log.
+        observed = (
+            [c for c in eligible if _is_observed(c)]
+            if _ORIGIN_DIM in declaration.budget_partitions
+            else []
+        )
+    else:
+        # Rule 2 — partition into observed and inferred.
+        observed = [c for c in eligible if _is_observed(c)]
+        inferred = [c for c in eligible if not _is_observed(c)]
+
+        # Rule 4 — rank deterministically within each partition.
+        keyf = lambda c: _rank_key(c, reference, halflife)  # noqa: E731
+        observed.sort(key=keyf)
+        inferred.sort(key=keyf)
+
+        # Rule 3 — observed fills the budget first; inferred only fills what's left.
+        # Concatenating observed ahead of inferred makes "observed beats inferred"
+        # structural: an inferred item can never displace an observed item that fit
+        # (AC3). With observed_first off, the two partitions compete on rank alone.
+        if policy.observed_first:
+            ordered = observed + inferred
+        else:
+            ordered = sorted(eligible, key=keyf)
 
     # Rule 5 — apply the hard cap.
     cap = max(0, cap)
@@ -460,6 +638,11 @@ def _entities_to_candidates(graph: Any) -> List[Candidate]:
                 ),
                 source_timestamp=_get(ent, "source_timestamp"),
                 freshness_days=_coerce_float(_get(ent, "freshness_days")),
+                # 2.0-B3 T1: the graph IS the structured record — it is resolved
+                # from source-system records, never from prose or chat. An explicit
+                # source_type on the item still wins, so a producer that knows
+                # better can say so.
+                source_type=_get_first(ent, ("source_type",), SOURCE_TYPE_STRUCTURED),
                 payload=ent,
             )
         )
@@ -503,6 +686,7 @@ def _relationships_to_candidates(graph: Any) -> List[Candidate]:
                 confidence=float(_get(rel, "confidence", 0.0) or 0.0),
                 source_timestamp=_get(rel, "source_timestamp"),
                 freshness_days=_coerce_float(_get(rel, "freshness_days")),
+                source_type=_get_first(rel, ("source_type",), SOURCE_TYPE_STRUCTURED),
                 payload=rel,
             )
         )
@@ -571,6 +755,15 @@ def _evidence_to_candidates(
                 source_timestamp=_get(chunk, "source_timestamp"),
                 freshness_days=_coerce_float(_get(chunk, "freshness_days")),
                 is_stale=bool(_get(chunk, "is_stale", False)),
+                # 2.0-B3 T1: the retrieval substrate already labels every chunk
+                # prose / code / conversation — the same vocabulary the declared
+                # source_type_ranks table is keyed on, so the precedence rule reads
+                # the producer's own classification rather than guessing from the
+                # source system. Left empty when the chunk does not say, which sorts
+                # last among declared types.
+                source_type=str(
+                    _get_first(chunk, ("source_type", "content_type"), "") or ""
+                ),
                 payload=chunk,
             )
         )
@@ -630,4 +823,7 @@ def assemble_context(
         evidence=[_unwrap(c) for c in selected_evidence],
         policy_used=policy,
         selection_log=log_entities + log_relationships + log_evidence,
+        policy_declaration=(
+            policy.declaration.to_dict() if policy.declaration is not None else None
+        ),
     )

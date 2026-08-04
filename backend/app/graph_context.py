@@ -247,10 +247,30 @@ def build_graph_context(
             evidence_source = retrieval_evidence_source(org_id)
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("graph_context: retrieval evidence source unavailable: %s", exc)
+    # 2.0-B3 T1 (AC1): the assembly policy comes from the DECLARATION
+    # (app/config/assembly_policy.json), so editing precedence there changes what
+    # this run composes with no code deploy. Without this the declaration would be
+    # inert and AC1 would hold only in the abstract.
+    #
+    # Degrades rather than raises, unlike the loader's own contract: graph context
+    # is a non-blocking enrichment step (a failure here must never cost a run its
+    # findings), so a broken declaration falls back to the R16-B2 in-code defaults
+    # and says so LOUDLY at error level — naming the consequence, because a silent
+    # fallback would mean composing against precedence nobody chose.
+    try:
+        policy = AssemblyPolicy.declared()
+    except Exception as exc:  # noqa: BLE001 — enrichment must not fail the run.
+        logger.error(
+            "graph_context: declared assembly policy unusable (%s) — falling back to "
+            "the built-in R16-B2 precedence for run %s; source-type precedence and "
+            "any configured caps/floor are NOT in effect",
+            exc, run_id,
+        )
+        policy = AssemblyPolicy()
     package = assemble_context(
         opportunity={"run_id": run_id},
         graph={"entities": safe_entities, "relationships": safe_relationships},
-        policy=AssemblyPolicy(),
+        policy=policy,
         evidence_source=evidence_source,
     )
     shown_entities = package.entities          # selected, ordered, <= 15
