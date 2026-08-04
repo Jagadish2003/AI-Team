@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowRight, ChevronDown, Zap } from "lucide-react";
+import { AlertCircle, ArrowRight, ChevronDown, Zap } from "lucide-react";
 import PageShell from "../components/common/PageShell";
 import OpportunityToolbar, {
   ConfidenceFilter,
@@ -21,6 +21,10 @@ import { useAnalystReviewContext } from "../context/AnalystReviewContext";
 import { useConnectorContext } from "../context/ConnectorContext";
 import { useRunContext } from "../context/RunContext";
 import { useToast } from "../components/common/Toast";
+import { fetchLearningSignals } from "../api/learningApi";
+import { useResource } from "../lib/dataCache";
+import { cacheKeys } from "../lib/cacheKeys";
+import type { LearningSignalSetResponse } from "../types/learning";
 import {
   getBlueprintLabel,
   isSalesforceConnected,
@@ -45,6 +49,11 @@ export default function OpportunityReviewPage() {
   const nav = useNavigate();
   const [searchParams] = useSearchParams();
   const requestedOppId = searchParams.get("oppId");
+  const { data: learningSignals } = useResource<LearningSignalSetResponse>(
+    runId ? cacheKeys.learningSignals : null,
+    fetchLearningSignals,
+    { enabled: Boolean(runId) },
+  );
 
   const [q, setQ] = useState("");
   const [tier, setTier] = useState<TierFilter>("All");
@@ -53,6 +62,9 @@ export default function OpportunityReviewPage() {
   const [detailPanelOpen, setDetailPanelOpen] = useState(true);
   const pageDescription =
     "Prioritize, approve, and understand automation opportunities from one review workspace.";
+  const learningState = learningSignals?.activation;
+  const learningInactive =
+    Boolean(learningState) && learningState?.isActive === false;
 
   const salesforceConnected = isSalesforceConnected(connectors);
   const blueprintLabel = getBlueprintLabel(salesforceConnected);
@@ -195,6 +207,33 @@ export default function OpportunityReviewPage() {
           onDecision={setDecisionF}
           totalShown={filtered.length}
         />
+
+        {learningInactive && (
+          <div
+            data-testid="learning-inactive-state"
+            className="mt-3 flex items-start gap-3 rounded-lg border border-amber-500/35 bg-amber-400/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200"
+          >
+            <AlertCircle
+              size={18}
+              className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-300"
+              aria-hidden="true"
+            />
+            <div className="min-w-0">
+              <div className="font-semibold">Learning not yet active</div>
+              <div className="mt-0.5 leading-relaxed">
+                {learningState?.message ??
+                  "Learning is not yet active for this workspace."}
+                {learningState?.remaining.decisions ? (
+                  <span>
+                    {" "}
+                    {learningState.remaining.decisions} more informing decision
+                    {learningState.remaining.decisions === 1 ? "" : "s"} needed.
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="mt-4 h-[560px] lg:h-[720px]">
           <OpportunityMatrix

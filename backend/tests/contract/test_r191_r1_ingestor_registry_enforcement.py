@@ -2,9 +2,10 @@
 
 AC1 requires every registry system_default and every connectable catalog tile to
 reference a connector whose ingestion actually ships. The guard below discovers
-implemented ingestors from the codebase, then checks the registry and catalog
-configuration against that implementation set. If a roadmap connector is flipped
-to shipped/connectable before its ingestor lands, CI fails here.
+implemented ingestors from the codebase, derives which catalog ids are backed at
+test time, and asserts that derived set matches SHIPPED_CONNECTOR_IDS. If a
+roadmap connector gains an ingestor without a catalog-state update, or a tile is
+flipped to shipped before its ingestor lands, CI fails here.
 
 2.0-D1 T5 — THE PACK-LEVEL GATE
 -------------------------------
@@ -172,6 +173,16 @@ def _catalog_ids() -> set[str]:
     }
 
 
+def _dynamically_backed_catalog_ids(implemented: set[str] | None = None) -> set[str]:
+    """Catalog ids whose implementation is present according to AST discovery."""
+    implemented = _implemented_connector_ids() if implemented is None else implemented
+    return {
+        connector_id
+        for connector_id in _catalog_ids()
+        if not _missing_implementation(connector_id, implemented)
+    }
+
+
 def _format_failures(rows: Iterable[tuple[str, str, str]]) -> str:
     return ", ".join(
         f"{surface}:{owner}:{connector_id}"
@@ -218,6 +229,33 @@ def test_connectable_catalog_tiles_have_shipped_ingestors():
         "Connectable catalog tiles must reference shipped ingestors discovered "
         "from backend/discovery/ingest/ and backend/connectors/db/. Missing: "
         f"{missing_ingestors}"
+    )
+
+
+def test_shipped_connector_ids_match_dynamic_ingestor_discovery():
+    implemented = _implemented_connector_ids()
+    dynamically_backed_catalog_ids = _dynamically_backed_catalog_ids(implemented)
+    shipped_catalog_ids = set(connector_roadmap.SHIPPED_CONNECTOR_IDS)
+
+    assert dynamically_backed_catalog_ids == shipped_catalog_ids, (
+        "R191-R1 AC1 requires SHIPPED_CONNECTOR_IDS to match the catalog ids "
+        "backed by ingestors discovered from backend/discovery/ingest/ and "
+        "backend/connectors/db/. Difference: "
+        f"{sorted(dynamically_backed_catalog_ids ^ shipped_catalog_ids)}; "
+        f"raw discovered ingestor ids: {sorted(implemented)}"
+    )
+
+
+def test_dynamic_cross_check_detects_unclassified_new_roadmap_ingestor():
+    implemented = _implemented_connector_ids() | {"sap"}
+    newly_backed = (
+        _dynamically_backed_catalog_ids(implemented)
+        - set(connector_roadmap.SHIPPED_CONNECTOR_IDS)
+    )
+
+    assert "sap" in newly_backed, (
+        "The AC1 guard must go red if a roadmap ingestor appears before the "
+        "catalog allow-list/roadmap targets are updated."
     )
 
 
