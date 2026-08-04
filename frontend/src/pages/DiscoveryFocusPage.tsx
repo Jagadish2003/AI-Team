@@ -169,23 +169,13 @@ export default function DiscoveryFocusPage({
     selectedTemplateIds.includes(template.template_id),
   );
 
-  React.useEffect(() => {
-    if (!state.industryId) return;
-    const selectedIndustry = industries.find(
-      ind => ind.industry_id === state.industryId,
-    );
-    if (selectedIndustry && isUnwiredIndustry(selectedIndustry)) {
-      setIndustry(null);
-    }
-  }, [industries, setIndustry, state.industryId]);
-
   async function handleIndustrySelect(industryId: string) {
     const industry = industries.find(ind => ind.industry_id === industryId);
-    if (industry && isUnwiredIndustry(industry)) return;
 
     const next = state.industryId === industryId ? null : industryId;
     setIndustry(next);
     if (!next) return;
+    if (industry && isUnwiredIndustry(industry)) return;
 
     // AC9: choosing an industry applies its registry-calibrated system defaults
     // through the API path (editable, never confirmed here). Failure to fetch
@@ -264,9 +254,7 @@ export default function DiscoveryFocusPage({
                 <PillTag
                   key={ind.industry_id}
                   label={ind.label}
-                  selected={
-                    !isUnwiredIndustry(ind) && state.industryId === ind.industry_id
-                  }
+                  selected={state.industryId === ind.industry_id}
                   onToggle={() => handleIndustrySelect(ind.industry_id)}
                 />
               ))}

@@ -132,7 +132,7 @@ describe('R18-C1 T3 — industries and templates render from the registry API', 
     expect(screen.getByRole('checkbox', { name: 'Commercial lending' })).toBeInTheDocument();
   });
 
-  it('keeps non-live-ingest industries visible but unwired', () => {
+  it('selects non-live-ingest industries visually without loading defaults', () => {
     const fetchSystemDefaults = vi.fn(async () => []);
     render(<Harness fetchSystemDefaults={fetchSystemDefaults} />);
 
@@ -140,10 +140,10 @@ describe('R18-C1 T3 — industries and templates render from the registry API', 
       const pill = screen.getByRole('checkbox', { name });
       expect(pill).toBeEnabled();
       fireEvent.click(pill);
-      expect(pill).toHaveAttribute('aria-checked', 'false');
+      expect(pill).toHaveAttribute('aria-checked', 'true');
     }
 
-    expect(screen.getByTestId('industry').textContent).toBe('');
+    expect(screen.getByTestId('industry').textContent).toBe('technology');
     expect(fetchSystemDefaults).not.toHaveBeenCalled();
     expect(screen.queryByText('SAP')).not.toBeInTheDocument();
     expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
