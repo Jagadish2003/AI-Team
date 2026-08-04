@@ -1087,6 +1087,56 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
     )
 
 
+def _with_run_completeness(report: Dict[str, Any], run: Dict[str, Any]) -> Dict[str, Any]:
+    """2.0-D4 T5 — stamp the run's completeness onto an executive report.
+
+    Applied on the SERVE path, and to the stored report as well as a freshly
+    composed one, so a report materialised before this shipped still tells the
+    truth about its run. Same retrofit shape the outcome section uses.
+
+    This is the surface the subtask singles out: the executive report is the
+    artifact most likely to reach someone who will never open a health panel. If
+    a partial run's report reads identically to a complete one, none of the rest
+    of this work matters.
+
+    ``sourcesAnalyzed`` is corrected here too. It counted the sources the run was
+    CONFIGURED with, so a run whose ServiceNow died reported the same "2
+    connected" as a clean one — the precise failure this subtask exists to stop.
+    """
+    if not isinstance(report, dict):
+        return report
+    try:
+        from .run_completeness import build_run_completeness
+
+        # No live model/storage probing on a read of a historical run: the
+        # question here is what THIS run delivered, not what the environment
+        # looks like right now.
+        completeness = build_run_completeness(run, include_environment=False)
+        stamped = {**report, "runCompleteness": completeness.to_dict()}
+
+        sources = stamped.get("sourcesAnalyzed")
+        if isinstance(sources, dict):
+            succeeded = run.get("succeeded")
+            if isinstance(succeeded, (list, tuple)):
+                stamped["sourcesAnalyzed"] = {
+                    **sources,
+                    # What actually contributed, not what was configured.
+                    "totalConnected": len(succeeded),
+                    "sourcesRequested": len(_requested_system_ids(run)),
+                    "sourcesFailed": len(completeness.degraded_components),
+                }
+        return stamped
+    except Exception as exc:  # noqa: BLE001 - a report must still render
+        logger.warning("Could not stamp run completeness: %s", exc)
+        return report
+
+
+def _requested_system_ids(run: Dict[str, Any]) -> List[str]:
+    inputs = run.get("inputs") or {}
+    systems = inputs.get("systems")
+    return [str(s) for s in systems] if isinstance(systems, (list, tuple)) else []
+
+
 @app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def get_exec_report(run_id: str) -> Dict[str, Any]:
     try:
@@ -1109,7 +1159,9 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
                     run_id,
                 ),
             }
-        return apply_run_terminology(with_exec_report_display_titles(er), run_id)
+        return apply_run_terminology(
+            with_exec_report_display_titles(_with_run_completeness(er, run)), run_id
+        )
 
     inputs = run.get("inputs") or {}
     connected_sources = inputs.get("connectedSources") or []
@@ -1149,7 +1201,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
     from .outcome_surfaces import build_executive_outcome_section
 
     return apply_run_terminology(
-        {
+        _with_run_completeness({
             "confidence": "Moderate",
             "sourcesAnalyzed": sources_analyzed,
             "topQuickWins": quick_wins,
@@ -1164,7 +1216,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
                 get_current_org_id(),
                 run_id,
             ),
-        },
+        }, run),
         run_id,
     )
 
