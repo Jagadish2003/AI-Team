@@ -314,6 +314,23 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     });
   });
 
+  it('AC6: shows the approval toast immediately without waiting for save', async () => {
+    let resolveDecision!: (value: { ok: boolean }) => void;
+    mockSetDecision.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveDecision = resolve; }),
+    );
+
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    expect(mockPush).toHaveBeenCalledWith('Opportunity approved.', 'success');
+    expect(mockSetDecision).toHaveBeenCalledWith('opp_001', 'APPROVED');
+
+    await act(async () => {
+      resolveDecision({ ok: true });
+    });
+  });
+
   it('AC6: Reject button calls setDecision with REJECTED and shows toast', async () => {
     renderPage();
     const rejectBtn = screen.getByRole('button', { name: /reject/i });

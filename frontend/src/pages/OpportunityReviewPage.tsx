@@ -161,18 +161,17 @@ export default function OpportunityReviewPage() {
         return;
       }
 
-      const result = await setDecision(selectedId, decision);
-      if (!result.ok) {
-        push(result.error || "Unable to update decision.", "error");
-        return;
-      }
-
-      push(
+      const successMessage =
         decision === "APPROVED"
           ? "Opportunity approved."
-          : "Opportunity rejected.",
-        "success",
-      );
+          : "Opportunity rejected.";
+      push(successMessage, "success");
+
+      const result = await setDecision(selectedId, decision);
+      if (!result.ok) {
+        push(result.error || "Unable to save decision. Your change was reverted.", "error");
+        return;
+      }
     },
     [push, selectedId, setDecision],
   );
