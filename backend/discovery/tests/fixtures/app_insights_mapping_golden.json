@@ -1,0 +1,422 @@
+{
+  "_comment": "2.0-D3 T2 golden fixtures for the Application Insights B0 mapper. Each case is a representative RAW Azure payload plus the ENTIRE expected normalised OperationalEvent — every detector-visible field, the full curated payload, and the components the deterministic signature is built from. Expectations were written from the task specification, not dumped from the implementation, so a disagreement is a real signal rather than a tautology.",
+  "_signature_note": "event_signature is validated by recomputing it through the shared signature service from `signature_components` (never by pinning a hash), so the fixtures stay valid across a documented EVENT_SIGNATURE_VERSION bump while still proving the mapper feeds the service the right components.",
+  "_surfaces": "Every raw payload is shaped as it arrives on a surface MSP-B2 ALREADY reads: the Azure Monitor common alert schema, or the Azure ResourceHealth event shape. D3 adds no surface.",
+
+  "cases": [
+    {
+      "name": "app_insights_availability_alert",
+      "_covers": "availability signal, condition ACTIVE -> error",
+      "mapper": "map_app_insights",
+      "org_id": "acme",
+      "raw": {
+        "schemaId": "azureMonitorCommonAlertSchema",
+        "data": {
+          "essentials": {
+            "alertId": "/subscriptions/s1/providers/Microsoft.AlertsManagement/alerts/ai-avail-1",
+            "alertRule": "checkout-api-availability",
+            "severity": "Sev1",
+            "signalType": "Metric",
+            "monitorCondition": "Fired",
+            "monitoringService": "Platform",
+            "alertTargetIDs": [
+              "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api"
+            ],
+            "firedDateTime": "2026-07-20T09:15:00Z",
+            "description": "Availability test failed from 3 of 5 locations"
+          },
+          "alertContext": {
+            "conditionType": "WebtestLocationAvailabilityCriteria",
+            "condition": {
+              "allOf": [
+                { "metricName": "availabilityResults/availabilityPercentage", "operator": "LessThan", "threshold": "90", "metricValue": 40.0 }
+              ]
+            }
+          }
+        }
+      },
+      "expected": {
+        "source_system": "azure_app_insights",
+        "provider_family": "azure",
+        "signal_id": "/subscriptions/s1/providers/Microsoft.AlertsManagement/alerts/ai-avail-1",
+        "event_type": "ApplicationInsights/Availability",
+        "event_class": "error",
+        "resource_type": "monitoring",
+        "severity": "critical",
+        "resource_provider": "azure",
+        "resource_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api",
+        "observed_at": "2026-07-20T09:15:00Z",
+        "message": "Availability test failed from 3 of 5 locations",
+        "payload": {
+          "app_insights_signal_kind": "availability",
+          "app_insights_component_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api",
+          "app_insights_component_name": "checkout-api",
+          "alert_rule": "checkout-api-availability",
+          "monitor_condition": "Fired",
+          "signal_type": "Metric",
+          "monitoring_service": "Platform",
+          "condition_type": "WebtestLocationAvailabilityCriteria",
+          "metric_name": "availabilityResults/availabilityPercentage",
+          "severity_raw": "Sev1"
+        },
+        "signature_components": {
+          "source_system": "azure_app_insights",
+          "event_class": "error",
+          "resource_type": "monitoring",
+          "event_type": "ApplicationInsights/Availability",
+          "resource_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api"
+        }
+      }
+    },
+
+    {
+      "name": "app_insights_application_failure_alert",
+      "_covers": "application-failure signal (Smart Detection failure anomaly), ACTIVE -> error",
+      "mapper": "map_app_insights",
+      "org_id": "acme",
+      "raw": {
+        "schemaId": "azureMonitorCommonAlertSchema",
+        "data": {
+          "essentials": {
+            "alertId": "/subscriptions/s1/providers/Microsoft.AlertsManagement/alerts/ai-appfail-1",
+            "alertRule": "failureAnomalies",
+            "severity": "Sev2",
+            "signalType": "Log",
+            "monitorCondition": "Fired",
+            "monitoringService": "Smart Detector",
+            "alertTargetIDs": [
+              "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api"
+            ],
+            "firedDateTime": "2026-07-20T10:02:00Z",
+            "description": "Abnormal rise in the rate of failed requests"
+          },
+          "alertContext": { "conditionType": "FailureAnomaliesCriteria" }
+        }
+      },
+      "expected": {
+        "source_system": "azure_app_insights",
+        "provider_family": "azure",
+        "signal_id": "/subscriptions/s1/providers/Microsoft.AlertsManagement/alerts/ai-appfail-1",
+        "event_type": "ApplicationInsights/ApplicationFailure",
+        "event_class": "error",
+        "resource_type": "monitoring",
+        "severity": "high",
+        "resource_provider": "azure",
+        "resource_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api",
+        "observed_at": "2026-07-20T10:02:00Z",
+        "message": "Abnormal rise in the rate of failed requests",
+        "payload": {
+          "app_insights_signal_kind": "application_failure",
+          "app_insights_component_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api",
+          "app_insights_component_name": "checkout-api",
+          "alert_rule": "failureAnomalies",
+          "monitor_condition": "Fired",
+          "signal_type": "Log",
+          "monitoring_service": "Smart Detector",
+          "condition_type": "FailureAnomaliesCriteria",
+          "severity_raw": "Sev2"
+        },
+        "signature_components": {
+          "source_system": "azure_app_insights",
+          "event_class": "error",
+          "resource_type": "monitoring",
+          "event_type": "ApplicationInsights/ApplicationFailure",
+          "resource_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api"
+        }
+      }
+    },
+
+    {
+      "name": "app_insights_dependency_failure_alert",
+      "_covers": "dependency-failure signal, ACTIVE -> error. In scope because it describes an operational failure; the individual dependency CALLS are telemetry and excluded.",
+      "mapper": "map_app_insights",
+      "org_id": "acme",
+      "raw": {
+        "schemaId": "azureMonitorCommonAlertSchema",
+        "data": {
+          "essentials": {
+            "alertId": "/subscriptions/s1/providers/Microsoft.AlertsManagement/alerts/ai-depfail-1",
+            "alertRule": "checkout-api-dependency-failures",
+            "severity": "Sev2",
+            "signalType": "Metric",
+            "monitorCondition": "Fired",
+            "monitoringService": "Platform",
+            "alertTargetIDs": [
+              "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api"
+            ],
+            "firedDateTime": "2026-07-20T11:30:00Z",
+            "description": "Dependency call failure count exceeded threshold"
+          },
+          "alertContext": {
+            "conditionType": "SingleResourceMultipleMetricCriteria",
+            "condition": {
+              "allOf": [
+                { "metricName": "dependencies/failed", "operator": "GreaterThan", "threshold": "10", "metricValue": 148.0 }
+              ]
+            }
+          }
+        }
+      },
+      "expected": {
+        "source_system": "azure_app_insights",
+        "provider_family": "azure",
+        "signal_id": "/subscriptions/s1/providers/Microsoft.AlertsManagement/alerts/ai-depfail-1",
+        "event_type": "ApplicationInsights/DependencyFailure",
+        "event_class": "error",
+        "resource_type": "monitoring",
+        "severity": "high",
+        "resource_provider": "azure",
+        "resource_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api",
+        "observed_at": "2026-07-20T11:30:00Z",
+        "message": "Dependency call failure count exceeded threshold",
+        "payload": {
+          "app_insights_signal_kind": "dependency_failure",
+          "app_insights_component_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api",
+          "app_insights_component_name": "checkout-api",
+          "alert_rule": "checkout-api-dependency-failures",
+          "monitor_condition": "Fired",
+          "signal_type": "Metric",
+          "monitoring_service": "Platform",
+          "condition_type": "SingleResourceMultipleMetricCriteria",
+          "metric_name": "dependencies/failed",
+          "severity_raw": "Sev2"
+        },
+        "signature_components": {
+          "source_system": "azure_app_insights",
+          "event_class": "error",
+          "resource_type": "monitoring",
+          "event_type": "ApplicationInsights/DependencyFailure",
+          "resource_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api"
+        }
+      }
+    },
+
+    {
+      "name": "app_insights_health_transition",
+      "_covers": "health-transition signal -> state_change (a health-state move IS a state change)",
+      "mapper": "map_app_insights",
+      "org_id": "acme",
+      "raw": {
+        "eventDataId": "ai-health-1",
+        "correlationId": "ai-health-corr-1",
+        "eventTimestamp": "2026-07-20T13:00:00Z",
+        "subscriptionId": "s1",
+        "level": "Warning",
+        "operationName": { "value": "Microsoft.ResourceHealth/healthevent/action" },
+        "category": { "value": "ResourceHealth" },
+        "status": { "value": "Active" },
+        "properties": {
+          "title": "Application health degraded",
+          "currentHealthStatus": "Degraded",
+          "previousHealthStatus": "Available",
+          "impactStartTime": "2026-07-20T12:55:00Z",
+          "impactedResources": [
+            { "resourceId": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api" }
+          ]
+        }
+      },
+      "expected": {
+        "source_system": "azure_app_insights",
+        "provider_family": "azure",
+        "signal_id": "ai-health-1",
+        "event_type": "ApplicationInsights/HealthTransition",
+        "event_class": "state_change",
+        "resource_type": "monitoring",
+        "severity": "medium",
+        "resource_provider": "azure",
+        "resource_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api",
+        "observed_at": "2026-07-20T13:00:00Z",
+        "message": "Application health degraded",
+        "payload": {
+          "app_insights_signal_kind": "health_transition",
+          "app_insights_component_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api",
+          "app_insights_component_name": "checkout-api",
+          "current_health_status": "Degraded",
+          "previous_health_status": "Available",
+          "health_status": "Active"
+        },
+        "signature_components": {
+          "source_system": "azure_app_insights",
+          "event_class": "state_change",
+          "resource_type": "monitoring",
+          "event_type": "ApplicationInsights/HealthTransition",
+          "resource_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api"
+        }
+      }
+    },
+
+    {
+      "name": "app_insights_availability_resolved",
+      "_covers": "the SAME availability condition, RESOLVED -> state_change (a transition, not an active failure). Deliberately paired with app_insights_availability_alert to pin that the two carry different classes and therefore different signatures.",
+      "mapper": "map_app_insights",
+      "org_id": "acme",
+      "raw": {
+        "schemaId": "azureMonitorCommonAlertSchema",
+        "data": {
+          "essentials": {
+            "alertId": "/subscriptions/s1/providers/Microsoft.AlertsManagement/alerts/ai-avail-1-resolved",
+            "alertRule": "checkout-api-availability",
+            "severity": "Sev1",
+            "signalType": "Metric",
+            "monitorCondition": "Resolved",
+            "monitoringService": "Platform",
+            "alertTargetIDs": [
+              "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api"
+            ],
+            "firedDateTime": "2026-07-20T09:45:00Z",
+            "description": "Availability test recovered"
+          },
+          "alertContext": { "conditionType": "WebtestLocationAvailabilityCriteria" }
+        }
+      },
+      "expected": {
+        "source_system": "azure_app_insights",
+        "provider_family": "azure",
+        "signal_id": "/subscriptions/s1/providers/Microsoft.AlertsManagement/alerts/ai-avail-1-resolved",
+        "event_type": "ApplicationInsights/Availability",
+        "event_class": "state_change",
+        "resource_type": "monitoring",
+        "severity": "critical",
+        "resource_provider": "azure",
+        "resource_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api",
+        "observed_at": "2026-07-20T09:45:00Z",
+        "message": "Availability test recovered",
+        "payload": {
+          "app_insights_signal_kind": "availability",
+          "app_insights_component_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api",
+          "app_insights_component_name": "checkout-api",
+          "alert_rule": "checkout-api-availability",
+          "monitor_condition": "Resolved",
+          "signal_type": "Metric",
+          "monitoring_service": "Platform",
+          "condition_type": "WebtestLocationAvailabilityCriteria",
+          "severity_raw": "Sev1"
+        },
+        "signature_components": {
+          "source_system": "azure_app_insights",
+          "event_class": "state_change",
+          "resource_type": "monitoring",
+          "event_type": "ApplicationInsights/Availability",
+          "resource_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api"
+        }
+      }
+    },
+
+    {
+      "name": "app_insights_unclassified_signal",
+      "_covers": "in scope (explicit component reference) but declaring no recognised kind. signal_kind is absent from the payload -- never guessed into one of the four -- and event_type appends the customer's own alert-rule name, so two DIFFERENT unknown conditions on one application do not fold into one signature (folding is only justified once the kind is known).",
+      "mapper": "map_app_insights",
+      "org_id": "acme",
+      "raw": {
+        "schemaId": "azureMonitorCommonAlertSchema",
+        "data": {
+          "essentials": {
+            "alertId": "/subscriptions/s1/providers/Microsoft.AlertsManagement/alerts/ai-unk-1",
+            "alertRule": "custom-rule-7",
+            "severity": "Sev3",
+            "signalType": "Metric",
+            "monitorCondition": "Fired",
+            "monitoringService": "Platform",
+            "alertTargetIDs": [
+              "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api"
+            ],
+            "firedDateTime": "2026-07-20T12:00:00Z",
+            "description": "threshold crossed"
+          },
+          "alertContext": {}
+        }
+      },
+      "expected": {
+        "source_system": "azure_app_insights",
+        "provider_family": "azure",
+        "signal_id": "/subscriptions/s1/providers/Microsoft.AlertsManagement/alerts/ai-unk-1",
+        "event_type": "ApplicationInsights/Signal/custom-rule-7",
+        "event_class": "state_change",
+        "resource_type": "monitoring",
+        "severity": "medium",
+        "resource_provider": "azure",
+        "resource_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api",
+        "observed_at": "2026-07-20T12:00:00Z",
+        "message": "threshold crossed",
+        "payload": {
+          "app_insights_component_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api",
+          "app_insights_component_name": "checkout-api",
+          "alert_rule": "custom-rule-7",
+          "monitor_condition": "Fired",
+          "signal_type": "Metric",
+          "monitoring_service": "Platform",
+          "severity_raw": "Sev3"
+        },
+        "signature_components": {
+          "source_system": "azure_app_insights",
+          "event_class": "state_change",
+          "resource_type": "monitoring",
+          "event_type": "ApplicationInsights/Signal/custom-rule-7",
+          "resource_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api"
+        }
+      }
+    },
+
+    {
+      "name": "app_insights_explicit_monitored_application",
+      "_covers": "Azure supplies an EXPLICIT monitored-application reference alongside the component, so the normalised resource is the application itself (an App Service -> resource_type compute), not the component and never the alert rule. The component is still carried in the payload.",
+      "mapper": "map_app_insights",
+      "org_id": "acme",
+      "raw": {
+        "schemaId": "azureMonitorCommonAlertSchema",
+        "data": {
+          "essentials": {
+            "alertId": "/subscriptions/s1/providers/Microsoft.AlertsManagement/alerts/ai-avail-2",
+            "alertRule": "checkout-api-availability",
+            "severity": "Sev0",
+            "signalType": "Metric",
+            "monitorCondition": "Fired",
+            "monitoringService": "Platform",
+            "alertTargetIDs": [
+              "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api"
+            ],
+            "firedDateTime": "2026-07-20T14:00:00Z",
+            "description": "Availability test failed from all locations"
+          },
+          "alertContext": {
+            "conditionType": "WebtestLocationAvailabilityCriteria",
+            "properties": {
+              "monitoredApplicationResourceId": "/subscriptions/s1/resourceGroups/prod/providers/Microsoft.Web/sites/checkout-api"
+            }
+          }
+        }
+      },
+      "expected": {
+        "source_system": "azure_app_insights",
+        "provider_family": "azure",
+        "signal_id": "/subscriptions/s1/providers/Microsoft.AlertsManagement/alerts/ai-avail-2",
+        "event_type": "ApplicationInsights/Availability",
+        "event_class": "error",
+        "resource_type": "compute",
+        "severity": "critical",
+        "resource_provider": "azure",
+        "resource_id": "/subscriptions/s1/resourceGroups/prod/providers/Microsoft.Web/sites/checkout-api",
+        "observed_at": "2026-07-20T14:00:00Z",
+        "message": "Availability test failed from all locations",
+        "payload": {
+          "app_insights_signal_kind": "availability",
+          "app_insights_component_id": "/subscriptions/s1/resourceGroups/prod/providers/microsoft.insights/components/checkout-api",
+          "app_insights_component_name": "checkout-api",
+          "alert_rule": "checkout-api-availability",
+          "monitor_condition": "Fired",
+          "signal_type": "Metric",
+          "monitoring_service": "Platform",
+          "condition_type": "WebtestLocationAvailabilityCriteria",
+          "severity_raw": "Sev0"
+        },
+        "signature_components": {
+          "source_system": "azure_app_insights",
+          "event_class": "error",
+          "resource_type": "compute",
+          "event_type": "ApplicationInsights/Availability",
+          "resource_id": "/subscriptions/s1/resourceGroups/prod/providers/Microsoft.Web/sites/checkout-api"
+        }
+      }
+    }
+  ]
+}

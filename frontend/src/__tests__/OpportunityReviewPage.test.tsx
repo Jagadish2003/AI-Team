@@ -86,6 +86,59 @@ const mockSaveOverride = vi.fn().mockResolvedValue({ ok: true });
 const mockSelect = vi.fn().mockImplementation((id: string) => { mockSelectedId = id; });
 const mockRefetch = vi.fn();
 const mockNavigate = vi.fn();
+const mockFetchLearningSignals = vi.hoisted(() => vi.fn());
+
+function learningSignals(active = true) {
+  return {
+    schemaVersion: '1.0.0',
+    orgId: 'org_test',
+    configVersion: '1.0.0',
+    collectedAt: new Date().toISOString(),
+    isActive: active,
+    inactiveReason: active
+      ? null
+      : 'Learning is not yet active: 3 of 10 informing decisions recorded.',
+    counts: {
+      total: active ? 12 : 3,
+      weighted: active ? 12 : 3,
+      outcomes: 0,
+      decisions: active ? 12 : 3,
+      distinctIdentities: active ? 12 : 3,
+    },
+    thresholds: {
+      minimumDecisions: 10,
+      minimumSignals: 10,
+      minimumDistinctIdentities: 5,
+    },
+    activation: {
+      status: active ? 'active' : 'learning_not_yet_active',
+      isActive: active,
+      message: active
+        ? null
+        : 'Learning is not yet active: 3 of 10 informing decisions recorded.',
+      currentCount: active ? 12 : 3,
+      threshold: 10,
+      counts: {
+        weightedSignals: active ? 12 : 3,
+        decisions: active ? 12 : 3,
+        outcomes: 0,
+        distinctIdentities: active ? 12 : 3,
+      },
+      thresholds: {
+        minimumDecisions: 10,
+        minimumSignals: 10,
+        minimumDistinctIdentities: 5,
+      },
+      remaining: {
+        decisions: active ? 0 : 7,
+        weightedSignals: active ? 0 : 7,
+        distinctIdentities: active ? 0 : 2,
+      },
+      basis: 'provisional',
+      policy: 'decision_floor_plus_distinct_identity',
+    },
+  };
+}
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
@@ -109,6 +162,10 @@ vi.mock('../context/RunContext', () => ({
 
 vi.mock('../components/common/Toast', () => ({
   useToast: () => ({ push: vi.fn() }),
+}));
+
+vi.mock('../api/learningApi', () => ({
+  fetchLearningSignals: () => mockFetchLearningSignals(),
 }));
 
 vi.mock('../components/common/TopNav', () => ({
@@ -171,6 +228,7 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     mockOpportunities = [OPP_1, OPP_2];
     mockSelectedId = OPP_1.id;
     mockSalesforceConnected = false;
+    mockFetchLearningSignals.mockResolvedValue(learningSignals(true));
   });
 
   // ── Route and redirect tests ────────────────────────────────────────────────
@@ -188,6 +246,17 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
   it('AC3: /opportunity-map redirects and renders Opportunity Review', () => {
     renderPage('/opportunity-map');
     expect(screen.getByText('Opportunity Review')).toBeTruthy();
+  });
+
+  it('A3 AC4: shows cold-start learning state when learning is inactive', async () => {
+    mockFetchLearningSignals.mockResolvedValueOnce(learningSignals(false));
+    renderPage('/opportunity-review');
+    expect(await screen.findByTestId('learning-inactive-state')).toHaveTextContent(
+      /Learning is not yet active/i,
+    );
+    expect(screen.getByTestId('learning-inactive-state')).toHaveTextContent(
+      /7 more informing decisions needed/i,
+    );
   });
 
   // ── Selection tests ─────────────────────────────────────────────────────────

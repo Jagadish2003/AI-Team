@@ -395,11 +395,16 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
         # technology already anchors github as a connectable default (T2); the
         # pack that actually scores its PR/commit/branch signal was missing
         # from the hint list, leaving this industry an honest-pack-list gap
-        # (the story's own example for this sub-goal). The 1.9 cloud-ops/
-        # sec-ops packs the story also names are NOT present in this codebase
-        # (no such pack_id exists in pack_config.PACK_REGISTRY) — anchor-on-
-        # shipped means they are deliberately omitted, not guessed at.
-        pack_hints=["service_cloud", "sqlserver_opsignal", "github_engineering"],
+        # (the story's own example for this sub-goal). The 1.9 cloud-ops and
+        # security-ops packs now ship in PACK_REGISTRY, so technology carries
+        # those operational packs too.
+        pack_hints=[
+            "service_cloud",
+            "sqlserver_opsignal",
+            "github_engineering",
+            "cloud_ops",
+            "security_ops",
+        ],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests"]),

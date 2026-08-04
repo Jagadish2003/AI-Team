@@ -209,6 +209,7 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
         // assignment, etc.). Invalidate the run scope so the Blueprint roadmap and
         // any other run-scoped consumer refresh instantly — no manual reload.
         cache.invalidate(cacheKeys.runScope(runId));
+        cache.invalidate(cacheKeys.learningScope);
         return { ok: true };
       } catch (e: any) {
         setOpportunities(before);

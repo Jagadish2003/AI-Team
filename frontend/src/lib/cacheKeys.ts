@@ -59,6 +59,8 @@ export const cacheKeys = {
   outcomePortfolio: 'outcomes/portfolio',
   opportunityOutcome: (opportunityIdentity: string) =>
     `outcomes/opportunity/${opportunityIdentity}`,
+  learningScope: 'learning',
+  learningSignals: 'learning/signals',
 
   // ── Run Health dashboard ─────────────────────────────────────────────────
   /** Prefix covering every run-health panel — invalidate to refresh them all. */
