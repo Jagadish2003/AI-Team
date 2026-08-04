@@ -29,6 +29,7 @@ import {
   getBlueprintLabel,
   isSalesforceConnected,
 } from "../utils/blueprintNaming";
+import { showRelease2ArcAUi } from "../config/releaseFlags";
 
 export default function OpportunityReviewPage() {
   const {
@@ -50,9 +51,9 @@ export default function OpportunityReviewPage() {
   const [searchParams] = useSearchParams();
   const requestedOppId = searchParams.get("oppId");
   const { data: learningSignals } = useResource<LearningSignalSetResponse>(
-    runId ? cacheKeys.learningSignals : null,
+    showRelease2ArcAUi && runId ? cacheKeys.learningSignals : null,
     fetchLearningSignals,
-    { enabled: Boolean(runId) },
+    { enabled: showRelease2ArcAUi && Boolean(runId) },
   );
 
   const [q, setQ] = useState("");
@@ -64,7 +65,7 @@ export default function OpportunityReviewPage() {
     "Prioritize, approve, and understand automation opportunities from one review workspace.";
   const learningState = learningSignals?.activation;
   const learningInactive =
-    Boolean(learningState) && learningState?.isActive === false;
+    showRelease2ArcAUi && Boolean(learningState) && learningState?.isActive === false;
 
   const salesforceConnected = isSalesforceConnected(connectors);
   const blueprintLabel = getBlueprintLabel(salesforceConnected);
@@ -306,15 +307,21 @@ export default function OpportunityReviewPage() {
           </section>
         )}
 
-        {selected && (
+        {showRelease2ArcAUi && selected && (
           <OpportunityOutcomePanel opportunityIdentity={selectedOutcomeIdentity} />
         )}
 
+        {showRelease2ArcAUi && (
         <div className="mt-4">
           <OutcomePortfolioPanel />
         </div>
+        )}
 
-        <div className="mt-4 grid grid-cols-1 gap-4 lg:h-[460px] lg:grid-cols-3 lg:items-stretch">
+        <div
+          className={`mt-4 grid grid-cols-1 gap-4 lg:h-[460px] lg:items-stretch ${
+            showRelease2ArcAUi ? "lg:grid-cols-3" : "lg:grid-cols-2"
+          }`}
+        >
           <TopQuickWins
             quickWins={quickWins}
             selectedId={selectedId}
@@ -327,34 +334,36 @@ export default function OpportunityReviewPage() {
             onSelect={handleSelect}
           />
 
-          <ReasoningOverride
-            opp={selected}
-            audit={audit}
-            onSave={async (rationaleOverride, overrideReason, isLocked) => {
-              if (!selectedId) return;
-              const r = await saveOverride(
-                selectedId,
-                rationaleOverride,
-                overrideReason,
-                isLocked,
-              );
-              if (!r.ok) push(r.error || "Unable to save override.");
-              else push("Override saved.");
-            }}
-            onViewEvidence={() => {
-              if (selected) {
-                select(selected.id);
-                nav("/partial-results");
-              }
-            }}
-            onDecision={async (d) => {
-              if (!selectedId) return;
-              const result = await setDecision(selectedId, d);
-              if (!result.ok)
-                push(result.error || "Unable to update decision.");
-              else push(`Decision set to ${d}.`);
-            }}
-          />
+          {showRelease2ArcAUi && (
+            <ReasoningOverride
+              opp={selected}
+              audit={audit}
+              onSave={async (rationaleOverride, overrideReason, isLocked) => {
+                if (!selectedId) return;
+                const r = await saveOverride(
+                  selectedId,
+                  rationaleOverride,
+                  overrideReason,
+                  isLocked,
+                );
+                if (!r.ok) push(r.error || "Unable to save override.");
+                else push("Override saved.");
+              }}
+              onViewEvidence={() => {
+                if (selected) {
+                  select(selected.id);
+                  nav("/partial-results");
+                }
+              }}
+              onDecision={async (d) => {
+                if (!selectedId) return;
+                const result = await setDecision(selectedId, d);
+                if (!result.ok)
+                  push(result.error || "Unable to update decision.");
+                else push(`Decision set to ${d}.`);
+              }}
+            />
+          )}
         </div>
 
     </PageShell>
