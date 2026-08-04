@@ -15,6 +15,7 @@ import {
   TemplateNoteBlock,
 } from '../components/stack_builder';
 import { useSetupState } from '../components/stack_builder';
+import { showRoadmapComingSoonLabels } from '../config/releaseFlags';
 
 // R16-C2 T5 — Tile boundary copy (Section 3).
 // Each subtext now states what the focus EMPHASISES and draws an explicit
@@ -160,7 +161,12 @@ export default function DiscoveryFocusPage({
   );
   const selectedIndustry =
     industries.find(ind => ind.industry_id === state.industryId) ?? null;
-  const roadmapSystems = selectedIndustry?.roadmap_systems ?? [];
+  // R191-R1 "Coming soon" labelling is withdrawn behind this flag. The registry
+  // still keeps unshipped systems OUT of `system_defaults`/`recommended_systems`,
+  // so they remain unselectable — only the label is hidden.
+  const roadmapSystems = showRoadmapComingSoonLabels
+    ? selectedIndustry?.roadmap_systems ?? []
+    : [];
 
   async function handleIndustrySelect(industryId: string) {
     const next = state.industryId === industryId ? null : industryId;

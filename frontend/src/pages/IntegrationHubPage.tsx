@@ -63,6 +63,7 @@ import { computeConfidence } from '../utils/confidence';
 import { Connector, OutboundSetupRequest } from '../types/connector';
 import { fetchLicenseLimits } from '../api/licenseApi';
 import type { LicenseLimitsResponse } from '../types/license';
+import { showRoadmapComingSoonLabels } from '../config/releaseFlags';
 
 // ── Category → system ID membership ─────────────────────────────────────────
 // Mirrors SYSTEM_CATEGORY in routes_workspace_catalog.py exactly.
@@ -389,7 +390,11 @@ export default function IntegrationHubPage() {
     // R191-R1 T5 (AT-726): a roadmap connector (SAP/D365 and other unshipped
     // tiles) is not connectable. The tile's action is already disabled; this
     // guards the handler and surfaces the honest reason if it is ever reached.
-    if (c.roadmap) {
+    // The "Coming soon" labelling is withdrawn behind this flag; the backend
+    // connect guard still refuses a roadmap connect with its own named reason,
+    // and every roadmap tile is disabled by the ENABLED_CONNECTOR_IDS gate, so
+    // this handler is unreachable for them either way.
+    if (showRoadmapComingSoonLabels && c.roadmap) {
       const target = c.roadmapTarget && /\d/.test(c.roadmapTarget) ? c.roadmapTarget : null;
       push(
         target

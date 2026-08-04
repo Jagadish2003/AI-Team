@@ -129,15 +129,18 @@ describe('R18-C1 T3 — industries and templates render from the registry API', 
     expect(screen.getByRole('checkbox', { name: 'Commercial lending' })).toBeInTheDocument();
   });
 
-  it('keeps roadmap Coming soon labels readable in light theme', () => {
+  it('shows no roadmap "Coming soon" labelling, and never offers the unshipped system', () => {
+    // The R191-R1 roadmap labelling is withdrawn from the UI (see
+    // config/releaseFlags.ts). What must survive is the anchor-on-shipped rule
+    // itself: an industry's unshipped system stays OUT of its selectable
+    // defaults, so hiding the label cannot make SAP choosable for a run.
     render(<Harness />);
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Manufacturing' }));
 
-    expect(screen.getByText('SAP')).toBeInTheDocument();
-    expect(screen.getByText('Coming soon').parentElement).toHaveClass(
-      'integration-coming-soon-status-pill',
-    );
+    expect(screen.queryByText('Coming soon')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Roadmap systems')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /SAP/i })).not.toBeInTheDocument();
   });
 });
 

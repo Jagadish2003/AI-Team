@@ -9,6 +9,7 @@ import { useNetworkProfileOptional } from '../../context/NetworkProfileContext';
 import { isViewerRole } from '../../utils/roles';
 import { useResource } from '../../lib/dataCache';
 import { cacheKeys } from '../../lib/cacheKeys';
+import { showRoadmapComingSoonLabels } from '../../config/releaseFlags';
 
 // Connectors whose Connect button is ENABLED on the Integration Hub. This is a
 // UI gate only — the OAuth backends for the other connectors (Slack AT-420,
@@ -91,7 +92,12 @@ export default function ConnectorTile({
   // R191-R1 T5 (AT-726): a roadmap connector (SAP/D365 and any tile whose
   // ingestion does not ship yet) is never connectable. Keep the release target
   // available for metadata/tooltips, but use one clean visible label everywhere.
-  const isRoadmap = connector.roadmap === true;
+  //
+  // The customer-facing labelling is withdrawn behind `showRoadmapComingSoonLabels`
+  // (see config/releaseFlags.ts). With it off, the tile falls back to its ordinary
+  // status badge and the pre-existing ENABLED_CONNECTOR_IDS product gate — which
+  // already excludes every roadmap connector, so nothing becomes connectable.
+  const isRoadmap = showRoadmapComingSoonLabels && connector.roadmap === true;
   const roadmapTarget = connector.roadmapTarget ?? null;
   const roadmapIsVersioned = Boolean(roadmapTarget && /\d/.test(roadmapTarget));
   const comingLabel = 'Coming soon';
