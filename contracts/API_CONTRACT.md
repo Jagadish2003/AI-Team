@@ -1,7 +1,30 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.17
+Version: v1.19
 Date: 2026-07-31
 
+> v1.19 - 2.0-A3 T3 (Adjustment explainability): a rank-adjusted opportunity's
+> `_ranking` object now carries `reason` — STRUCTURED data (direction,
+> ranksMoved, decisionCount, decisionsByAction, outcomeCount,
+> outcomesByVerdict, wasCapped, cappedBy, evidenceStrength) plus
+> `contributingDecisions` and `contributingOutcomes`, each with a resolvable
+> `href`, and a rendered `summary` sentence. A finding that did not move
+> carries no `reason`. New route GET /api/learning/adjustment/explain/
+> {runId}/{opportunityId} (analyst+; 404 for an unadjusted finding). The
+> reason is namespaced under `_ranking` and never appears inside or beside
+> confidence, corroboration or the evidence trace. Additive; pre-v1.19
+> consumers are unaffected.
+>
+> v1.18 - 2.0-A3 T2 (Bounded ranking adjustment): opportunities returned by
+> GET /api/runs/{runId}/opportunities and the roadmap stages now carry an
+> additive `_ranking` object: `baseRank`, `baseImpact`, `adjustedRank`,
+> `moved`, `adjusted`, and the `caps` in force; when a learned adjustment
+> applied it also carries `effectiveImpact`, `appliedDelta`, `requestedDelta`,
+> `wasCapped` and `cappedBy`. Base scoring is unchanged — `impact`, `effort`,
+> `tier`, `confidence`, evidence and corroboration are untouched, and the
+> stored order remains the base order. New read routes under
+> /api/learning/adjustment (state, history, recompute, preview, base-order).
+> Additive; pre-v1.18 consumers are unaffected.
+>
 > v1.17 - 2.0-A2 T7 (No outcome without action): outcome measurement writes
 > now require a current customer-recorded action on the opportunity lifecycle.
 > Reopened opportunities clear that action and invalidate dependent stored

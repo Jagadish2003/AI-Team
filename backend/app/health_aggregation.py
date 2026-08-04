@@ -177,6 +177,59 @@ def _read_checkpoint(org_id: str, connector_id: str):
     return read_checkpoint(org_id, connector_id)
 
 
+def _read_stream_checkpoint(org_id: str, connector_id: str) -> Optional[Dict[str, Any]]:
+    """Newest live PER-STREAM checkpoint for a connector, or None.
+
+    Some connectors do not checkpoint under their bare connector id: a connector
+    reading several independent tables keeps one row per stream under the
+    ``{connector_id}:{stream}`` convention (ServiceNow ships six — ``cmdb_ci``,
+    ``cmdb_rel_ci``, ``sn_si_incident`` and the three Vulnerability Response
+    streams — each advancing on its own cadence). Looking up only the bare
+    ``servicenow`` id found nothing and the panel reported "Not available" for a
+    connector that was in fact checkpointing normally.
+
+    The connector's checkpoint age is the age of its MOST RECENT stream: the panel
+    answers "is this source still advancing", and the newest stream is the honest
+    evidence of that. ``STALLED_CHECKPOINT_SECONDS`` therefore fires only when
+    EVERY stream has gone quiet, which is the condition worth an operator's
+    attention — one lagging table on an otherwise-live connector is not.
+
+    ``is_deleted`` rows are excluded, matching ``read_checkpoint``: a reset
+    checkpoint genuinely has no position, and must not be resurrected here.
+
+    Returns the position/timestamp of the newest stream plus the stream count, or
+    None when the connector has no per-stream rows at all — never a fabricated
+    value. A read failure propagates, in keeping with this module's rule that a
+    backing-store failure is never converted into a false-healthy answer.
+    """
+    # Matched with a plain prefix comparison rather than LIKE: connector ids
+    # legitimately contain '_' (aws_events, ops_event_bridge), which is a LIKE
+    # single-character wildcard, so a LIKE pattern would also match unrelated ids.
+    prefix = f"{connector_id}:"
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT connector_id, value, captured_at FROM ingestion_checkpoints "
+            "WHERE org_id = %s AND left(connector_id, %s) = %s AND is_deleted = FALSE "
+            "ORDER BY captured_at DESC",
+            (org_id, len(prefix), prefix),
+        )
+        rows = cur.fetchall() or []
+        con.commit()
+    finally:
+        con.close()
+    if not rows:
+        return None
+    newest_id, newest_value, newest_captured = rows[0][0], rows[0][1], rows[0][2]
+    return {
+        "value": newest_value,
+        "captured_at": newest_captured,
+        "stream_id": newest_id,
+        "stream_count": len(rows),
+    }
+
+
 _CONNECTED_STATES = {"connected", "live", "needs_refresh", "refresh_failed", "needs_auth"}
 
 
@@ -192,12 +245,15 @@ def _connector_entry(
         return None
 
     checkpoint = _read_checkpoint(org_id, connector_id)
+    # A connector that checkpoints per stream has no bare-id row; fall back to its
+    # newest live stream so its age is reported rather than read as "Not available".
+    stream_checkpoint = None if checkpoint is not None else _read_stream_checkpoint(org_id, connector_id)
     auth_mode = _auth_mode(org_id, connector_id)
 
     status = str(record.get("status") or "").strip().lower()
     configured = bool(record.get("configured"))
     has_credential = auth_mode is not None
-    has_checkpoint = checkpoint is not None
+    has_checkpoint = checkpoint is not None or stream_checkpoint is not None
 
     # "Every CONNECTED system in the org": include a connector once the org has
     # established some connection state for it (configured, a live-ish status, a
@@ -255,7 +311,22 @@ def _connector_entry(
         if isinstance(degraded, int) and degraded > 0:
             last_error = f"{degraded} record(s) degraded during last ingestion"
 
-    checkpoint_captured_at = getattr(checkpoint, "captured_at", None) if checkpoint else None
+    # Checkpoint position/age come from the bare-id row when there is one, else
+    # from the connector's newest per-stream row. `checkpoint_streams` records how
+    # many streams that age represents, so the panel can say the age belongs to a
+    # multi-stream connector instead of implying a single cursor.
+    if checkpoint is not None:
+        checkpoint_captured_at = getattr(checkpoint, "captured_at", None)
+        checkpoint_position = getattr(checkpoint, "value", None)
+        checkpoint_streams = None
+    elif stream_checkpoint is not None:
+        checkpoint_captured_at = _to_iso(stream_checkpoint.get("captured_at"))
+        checkpoint_position = stream_checkpoint.get("value")
+        checkpoint_streams = stream_checkpoint.get("stream_count")
+    else:
+        checkpoint_captured_at = None
+        checkpoint_position = None
+        checkpoint_streams = None
 
     return {
         "connector_id": connector_id,
@@ -264,9 +335,10 @@ def _connector_entry(
         "connection_state": record.get("status") or ("connected" if is_connected else "disconnected"),
         "auth_mode": auth_mode,
         "last_successful_ingestion": last_successful_ingestion,
-        "checkpoint_position": getattr(checkpoint, "value", None) if checkpoint else None,
+        "checkpoint_position": checkpoint_position,
         "checkpoint_captured_at": checkpoint_captured_at,
         "checkpoint_age_seconds": _age_seconds(checkpoint_captured_at),
+        "checkpoint_streams": checkpoint_streams,
         "last_error": last_error,
     }
 

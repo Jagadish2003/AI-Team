@@ -26,11 +26,11 @@ Design notes
   (`GET /api/connectors`, the workspace-catalog, the connect guard) without a
   reseed and without hardcoding the state into the `connectors` seed.
 * `SHIPPED_CONNECTOR_IDS` is an explicit, justified allow-list — the same style
-  as `ENABLED_CONNECTOR_IDS` on the frontend tile. The *dynamically discovered*
-  CI cross-check against `backend/discovery/ingest/` (R191-R1 AC1, "the real
-  deliverable") is a separate, later task; this interim set keeps the catalog
-  honest in the meantime. When 2.0.1 ships an ingestor, adding its id here (and
-  dropping any `ROADMAP_TARGETS` entry) flips the tile to shipped — config only.
+  as `ENABLED_CONNECTOR_IDS` on the frontend tile. A CI cross-check in
+  `tests/contract/test_r191_r1_ingestor_registry_enforcement.py` derives the
+  catalog IDs backed by ingestors at test time and asserts they match this set.
+  When 2.0.1 ships an ingestor, adding its id here (and dropping any
+  `ROADMAP_TARGETS` entry) flips the tile to shipped — config only.
 """
 
 from __future__ import annotations
@@ -80,7 +80,8 @@ SHIPPED_CONNECTOR_IDS = frozenset(
 # must NOT be mistaken for roadmap and wrongly blocked from connecting. Every id
 # here is a real `connectors.json` catalog tile whose ingestion does not ship
 # (verified by `test_catalog_is_fully_classified`, which cross-checks the seed).
-# The dynamically-discovered ingestor cross-check is R191-R1 AC1 (a later task).
+# R191-R1 AC1's dynamic ingestor discovery test enforces that newly backed
+# catalog ids cannot remain outside SHIPPED_CONNECTOR_IDS.
 # Canonical release-target constant for the SAP/D365 demand-gated tiles. Public
 # (no leading underscore) and imported by the Stack Builder registry
 # (discovery/packs/industry_registry.py) so the target string lives in ONE place —

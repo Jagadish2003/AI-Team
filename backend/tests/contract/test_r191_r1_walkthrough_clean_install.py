@@ -12,10 +12,16 @@ import json
 import os
 import re
 import subprocess
+import sys
+import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
+import psycopg2
 import pytest
+from psycopg2 import sql as pg_sql
+from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT, parse_dsn
 
 from app import connector_roadmap
 from discovery.packs.industry_registry import INDUSTRY_REGISTRY
@@ -25,6 +31,7 @@ AUTH = {"Authorization": "Bearer dev-token-change-me"}
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 REPO_ROOT = BACKEND_ROOT.parent
 CATALOG_SEED = BACKEND_ROOT / "database" / "seed" / "connectors.json"
+SEED_LOADER = BACKEND_ROOT / "database" / "seed_loader.py"
 
 EXPECTED_INDUSTRIES = {
     "financial_services",
@@ -98,6 +105,141 @@ FORBIDDEN_FRONTEND_CACHE_PATTERNS = {
         r"\bSYSTEM_DEFAULT_ASSUMPTIONS\s*[:=]\s*[{[]"
     ),
 }
+
+CLEAN_INSTALL_API_ASSERTIONS = r"""
+import json
+import os
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from app import connector_roadmap
+from app.main import app
+from app.rbac import seed_owner
+
+token = os.environ.get("DEV_JWT", "dev-token-change-me")
+headers = {"Authorization": f"Bearer {token}", "X-Org-Id": "default"}
+
+with TestClient(app) as client:
+    seed_owner("default", token)
+
+    connectors_resp = client.get("/api/connectors", headers=headers)
+    assert connectors_resp.status_code == 200, connectors_resp.text
+    industries_resp = client.get("/api/stack-builder/industries", headers=headers)
+    assert industries_resp.status_code == 200, industries_resp.text
+
+    connectors = {row["id"]: row for row in connectors_resp.json()}
+    seed_ids = {
+        row["id"]
+        for row in json.loads(
+            (Path("database") / "seed" / "connectors.json").read_text(encoding="utf-8")
+        )
+    }
+    assert seed_ids <= set(connectors), sorted(seed_ids - set(connectors))
+
+    for connector_id in seed_ids:
+        tile = connectors[connector_id]
+        expected_roadmap = connector_roadmap.is_roadmap(connector_id)
+        assert tile["roadmap"] is expected_roadmap, connector_id
+        assert tile["roadmapTarget"] == (
+            connector_roadmap.roadmap_target(connector_id)
+            if expected_roadmap
+            else None
+        ), connector_id
+
+    assert connectors["sap"]["roadmap"] is True
+    assert connectors["sap"]["roadmapTarget"] == "2.0.1"
+    assert connectors["dynamics365"]["roadmap"] is True
+    assert connectors["dynamics365"]["roadmapTarget"] == "2.0.1"
+    assert connectors["salesforce"]["roadmap"] is False
+
+    industries = {row["industry_id"]: row for row in industries_resp.json()}
+    for industry_id in ("manufacturing", "logistics_supply_chain"):
+        roadmap = {
+            row["system_id"]: row
+            for row in industries[industry_id]["roadmap_systems"]
+        }
+        assert roadmap["sap"]["target_release"] == "2.0.1"
+        assert roadmap["dynamics365"]["target_release"] == "2.0.1"
+
+    technology = industries["technology"]
+    assert "github_engineering" in technology["pack_hints"]
+    assert "cloud_ops" in technology["pack_hints"]
+    assert "security_ops" in technology["pack_hints"]
+    tech_roadmap = {
+        row["system_id"]: row for row in technology["roadmap_systems"]
+    }
+    assert tech_roadmap["gitlab"]["target_release"] == "unscheduled"
+"""
+
+
+def _dsn_parts(url: str) -> dict[str, str]:
+    return parse_dsn(url)
+
+
+def _db_name_of(url: str) -> str:
+    return _dsn_parts(url).get("dbname", "")
+
+
+def _with_db_name(url: str, new_db: str) -> str:
+    parts = _dsn_parts(url)
+    user = parts.get("user", "")
+    password = parts.get("password", "")
+    host = parts.get("host", "localhost")
+    port = parts.get("port", "5432")
+    auth = ""
+    if user:
+        auth = quote(user, safe="")
+        if password:
+            auth += ":" + quote(password, safe="")
+        auth += "@"
+    return f"postgresql://{auth}{host}:{port}/{new_db}"
+
+
+def _maintenance_connection(template_url: str):
+    last_exc: Exception | None = None
+    for maint_db in ("postgres", "template1"):
+        try:
+            con = psycopg2.connect(_with_db_name(template_url, maint_db))
+            con.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+            return con
+        except psycopg2.Error as exc:
+            last_exc = exc
+    raise RuntimeError(f"could not connect to maintenance database: {last_exc}")
+
+
+def _create_database(template_url: str, database_name: str) -> None:
+    con = _maintenance_connection(template_url)
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                pg_sql.SQL("CREATE DATABASE {}").format(
+                    pg_sql.Identifier(database_name)
+                )
+            )
+    finally:
+        con.close()
+
+
+def _drop_database(template_url: str, database_name: str) -> None:
+    con = _maintenance_connection(template_url)
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                """
+                SELECT pg_terminate_backend(pid)
+                FROM pg_stat_activity
+                WHERE datname = %s AND pid <> pg_backend_pid()
+                """,
+                (database_name,),
+            )
+            cur.execute(
+                pg_sql.SQL("DROP DATABASE IF EXISTS {}").format(
+                    pg_sql.Identifier(database_name)
+                )
+            )
+    finally:
+        con.close()
 
 
 def _seed_catalog_ids() -> set[str]:
@@ -325,6 +467,8 @@ def test_ac4_registry_calibration_invariants_hold():
     assert github.priority == "optional"
     assert "sqlserver_opsignal" in technology.pack_hints
     assert "github_engineering" in technology.pack_hints
+    assert "cloud_ops" in technology.pack_hints
+    assert "security_ops" in technology.pack_hints
     assert all(pack_id in PACK_REGISTRY for pack_id in technology.pack_hints)
 
 
@@ -381,6 +525,62 @@ def test_clean_install_catalog_seed_receives_runtime_roadmap_overlay(client):
             if expected_roadmap
             else None
         )
+
+
+def test_seed_loader_blank_database_serves_catalog_and_stack_builder_roadmap_flags():
+    base_url = os.environ["DATABASE_URL"]
+    base_db_name = _db_name_of(base_url)
+    temp_db_name = f"{base_db_name}_r191_seed_{uuid.uuid4().hex[:8]}"
+    temp_url = _with_db_name(base_url, temp_db_name)
+
+    _create_database(base_url, temp_db_name)
+    try:
+        env = os.environ.copy()
+        env.update(
+            {
+                "DATABASE_URL": temp_url,
+                "TEST_DATABASE_URL": temp_url,
+                "DEV_JWT": "dev-token-change-me",
+                "INGEST_MODE": "offline",
+                "ANTHROPIC_API_KEY": "",
+                "AGENTIQ_DISABLE_BACKGROUND_JOBS": "1",
+                "EMAIL_PROVIDER": "noop",
+                "NETWORK_PROFILE": "standard",
+                "OAUTH_CALLBACK_ALLOW_UNAUTH": "",
+                "SEED_DIR": str(BACKEND_ROOT / "database" / "seed"),
+            }
+        )
+        env["PYTHONPATH"] = os.pathsep.join(
+            [
+                str(BACKEND_ROOT),
+                str(REPO_ROOT),
+                env.get("PYTHONPATH", ""),
+            ]
+        )
+
+        seed_result = subprocess.run(
+            [sys.executable, str(SEED_LOADER)],
+            cwd=BACKEND_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=120,
+        )
+        assert seed_result.returncode == 0, seed_result.stderr or seed_result.stdout
+
+        api_result = subprocess.run(
+            [sys.executable, "-c", CLEAN_INSTALL_API_ASSERTIONS],
+            cwd=BACKEND_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=120,
+        )
+        assert api_result.returncode == 0, api_result.stderr or api_result.stdout
+    finally:
+        _drop_database(base_url, temp_db_name)
 
 
 def test_frontend_stack_builder_has_no_cached_registry_arrays():

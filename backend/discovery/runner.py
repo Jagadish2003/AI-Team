@@ -538,6 +538,23 @@ def _ingest_ops_event_bridge(org_id: str, run_id: str) -> Dict[str, Any]:
     return {"records": collected, "health": health}
 
 
+def _cloud_event_step_ok(result: Dict[str, Any]) -> bool:
+    """Whether a native cloud-event ingest counts as a SUCCESSFUL discovery step.
+
+    The two native cloud connectors report a health ``status`` rather than raising
+    (both are non-blocking), so the Discovery Progress step outcome is derived from
+    it: ``ok``/``degraded`` are successes — degraded means partial data was ingested
+    and the reason is already carried in the run's ``cloudOpsRuntime`` health block,
+    so a red "failed" row would overstate it. ``unavailable`` (import/config/ingest
+    failure) and ``not_configured`` (selected for the run but no pinned
+    accounts/subscriptions) are failures: the connector delivered nothing, and a
+    green check on a source that produced no events is exactly the dishonest
+    reporting the progress list exists to prevent.
+    """
+    status = str((result.get("health") or {}).get("status") or "").strip().lower()
+    return status in {"ok", "degraded"}
+
+
 def _ingest_aws_events(org_id: str, run_id: str) -> Dict[str, Any]:
     """Drive the native MSP-B1 AWS Event Connector on the shared checkpoint path.
 
@@ -898,6 +915,42 @@ def _ingest_azure_events(org_id: str, run_id: str) -> Dict[str, Any]:
         if budget.get("breached"):
             health["status"] = "degraded"
             health.setdefault("reason", "run_event_budget_exhausted")
+    # 2.0-D3 T4: the budget's own counters can only report events it SAW, so a poll
+    # the budget stopped before it fetched anything leaves `breached` False — which
+    # would report a run that skipped whole subscriptions as a clean one. The
+    # connector's deferral report names those polls; mirrors the AWS `poll` block.
+    try:
+        deferrals = ingestor.deferral_report()
+    except Exception:  # noqa: BLE001 — health reporting is never run-critical
+        deferrals = {}
+    if deferrals and not deferrals.get("complete", True):
+        health["deferrals"] = dict(deferrals)
+        health["status"] = "degraded"
+        health.setdefault("reason", deferrals.get("reason", "run_event_budget_exhausted"))
+    # 2.0-D3 T1: the Application Insights picture for this poll. Derived from the
+    # emitted records (each in-scope record carries its scope on the WRAPPER), so no
+    # extra plumbing is needed and run health states what the bounded App Insights
+    # read actually produced rather than leaving it implicit inside the connector.
+    # Omitted entirely when the poll met no App Insights signal, so a run with no
+    # App Insights estate reports exactly the health block it reported before D3.
+    app_insights_records = [r for r in collected if r.get("app_insights")]
+    if app_insights_records:
+        by_kind: Dict[str, int] = {}
+        components: set = set()
+        for record in app_insights_records:
+            scope = record.get("app_insights") or {}
+            # An in-scope record whose kind could not be established is counted as
+            # 'unclassified' rather than folded into a real kind — the same honesty
+            # the classifier itself applies (see azure_app_insights.py).
+            kind = scope.get("signal_kind") or "unclassified"
+            by_kind[kind] = by_kind.get(kind, 0) + 1
+            if scope.get("component_id"):
+                components.add(str(scope["component_id"]))
+        health["app_insights"] = {
+            "records": len(app_insights_records),
+            "components": sorted(components),
+            "by_signal_kind": dict(sorted(by_kind.items())),
+        }
     if result.error is not None:
         health["reason"] = type(result.error).__name__
         logger.warning(
@@ -1900,7 +1953,13 @@ def run(
     # OpsEventStream folds duplicate signatures — so native + bridge never
     # double-count. Non-blocking, exactly like the bridge.
     if _any_cloud_ops and "azure_events" in _systems:
+        update_run_step(run_id, "azure_events")
         azure_events_data = _ingest_azure_events(org_id, run_id)
+        update_run_step(
+            run_id,
+            "azure_events",
+            ok=_cloud_event_step_ok(azure_events_data),
+        )
 
     # MSP-B1: the NATIVE AWS Event Connector — the AWS half of the B1/B2 pair, and
     # the live counterpart of the B8 bridge for AWS. Identical gating and posture
@@ -1910,7 +1969,13 @@ def run(
     # assembly seam — where the OpsEventStream folds duplicate signatures, so a
     # native event and its bridged twin never double-count. Non-blocking.
     if _any_cloud_ops and "aws_events" in _systems:
+        update_run_step(run_id, "aws_events")
         aws_events_data = _ingest_aws_events(org_id, run_id)
+        update_run_step(
+            run_id,
+            "aws_events",
+            ok=_cloud_event_step_ok(aws_events_data),
+        )
 
     # Single-ingest: materialization now hands the runner ALL connected systems
     # (not just the ones a probe pre-pass confirmed had data), so guard against

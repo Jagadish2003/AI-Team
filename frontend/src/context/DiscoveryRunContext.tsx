@@ -19,7 +19,18 @@ type DiscoveryRunContextValue = {
   failedSteps: string[];
   startRun: (inputs: RunInputs) => Promise<void>;
   restartRun: () => Promise<void>;
+  // Silent revalidation — used by the focus/interval revalidation and the
+  // terminal-status transition. Never reports a busy state.
   refetch: () => void;
+  // A USER-INITIATED refresh (the Refresh button). Identical fetch to `refetch`,
+  // but tracked so the button can show a busy state and cannot be double-fired.
+  //
+  // Two signals are deliberately kept apart: `loading` is suppressed for a run
+  // already on screen (a refresh must not blank it into the loading panel), and a
+  // background revalidation must not spin the button. So neither could stand in
+  // for "the user asked for a refresh and it is still running".
+  refresh: () => void;
+  refreshing: boolean;
 };
 
 const Ctx = createContext<DiscoveryRunContextValue | null>(null);
@@ -55,12 +66,28 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
   const [currentStep, setCurrentStep] = useState<string | null>(null);
   const [failedSteps, setFailedSteps] = useState<string[]>([]);
   const [fetchCount, setFetchCount] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
 
   const startingRef = useRef(false);
   // The run id whose data we already hold. Used to tell a FIRST load (show the
   // loading state) from a refetch of a run we already have (must stay rendered).
   const loadedRunIdRef = useRef<string | null>(null);
   const refetch = useCallback(() => setFetchCount((c) => c + 1), []);
+  // The explicit Refresh action. Ignored while a refresh is already in flight, so
+  // repeated clicks cannot queue up extra request rounds. The guard is a ref, not
+  // the state value: state updaters may run twice in development (StrictMode), and
+  // triggering the fetch from inside one would double-increment fetchCount.
+  const refreshingRef = useRef(false);
+  const refresh = useCallback(() => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    setFetchCount((c) => c + 1);
+  }, []);
+  const endRefresh = useCallback(() => {
+    refreshingRef.current = false;
+    setRefreshing(false);
+  }, []);
 
   // Latest-value refs for the callbacks the effects below call.
   //
@@ -93,6 +120,7 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
       setComputing(false);
       setError(null);
       setLoading(false);
+      endRefresh();
       return;
     }
 
@@ -134,13 +162,18 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
         }
         setError(runScopedErrorMessage(e, 'Failed to load run'));
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          // Clear the Refresh button's busy state whether the round succeeded or
+          // failed — a failed refresh must not leave the button stuck.
+          endRefresh();
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [runId, fetchCount]);
+  }, [runId, fetchCount, endRefresh]);
 
   useEffect(() => {
     if (!runId || !computing) return;
@@ -226,8 +259,8 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
   }, [runId, refetch]);
 
   const value = useMemo(
-    () => ({ run, events, loading, error, started, computing, currentStep, failedSteps, startRun, restartRun, refetch }),
-    [run, events, loading, error, started, computing, currentStep, failedSteps, startRun, restartRun, refetch]
+    () => ({ run, events, loading, error, started, computing, currentStep, failedSteps, startRun, restartRun, refetch, refresh, refreshing }),
+    [run, events, loading, error, started, computing, currentStep, failedSteps, startRun, restartRun, refetch, refresh, refreshing]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

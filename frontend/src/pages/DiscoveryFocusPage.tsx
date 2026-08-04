@@ -102,6 +102,12 @@ interface Props {
   registryError: string | null;
   onRetryRegistry: () => void;
   fetchSystemDefaults: (industryId: string) => Promise<SystemDefaultItem[]>;
+  // Optional guidance panel for the selected template, rendered BELOW the
+  // Industry / template pickers. It sits here rather than above the step because
+  // the template that produces it is chosen in the section directly above — a
+  // guide rendered at the top of the page appeared off-screen from its own
+  // trigger, so selecting a template meant scrolling back up to read the result.
+  guide?: React.ReactNode;
 }
 
 // Compact inline "load failed → retry" block for the industry / template
@@ -134,6 +140,7 @@ export default function DiscoveryFocusPage({
   registryError,
   onRetryRegistry,
   fetchSystemDefaults,
+  guide,
 }: Props) {
   const {
     state,
@@ -250,10 +257,10 @@ export default function DiscoveryFocusPage({
                   <span
                     key={system.system_id}
                     title={system.reason}
-                    className="inline-flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-100"
+                    className="integration-coming-soon-status-pill inline-flex items-center gap-2 whitespace-nowrap rounded-full border text-xs font-medium leading-none"
                   >
                     <span>{system.label}</span>
-                    <span className="text-amber-200/80">Coming soon</span>
+                    <span>Coming soon</span>
                   </span>
                 );
               })}
@@ -302,6 +309,10 @@ export default function DiscoveryFocusPage({
           )}
         </section>
       </div>
+
+      {/* Template guidance — directly below the template picker that produces it,
+          and above the Continue footer so it is read before moving on. */}
+      {guide}
 
       <div className="rounded-xl border border-border bg-panel p-4 shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
