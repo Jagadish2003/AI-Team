@@ -119,6 +119,15 @@ INCIDENT_RESOLUTION_FIELDS: Tuple[str, ...] = (
     "closed_at",
 )
 
+# The scoped-application column on this instance's ``incident`` table that carries
+# the explicit Azure/cloud event-signature link. Read on the SAME incident query
+# (no extra scan) and carried through onto the incident payload verbatim, so
+# ``ops_recurrence_joins.extract_event_signatures`` — the single shared reader —
+# finds it. The field names there must stay in step with this tuple.
+INCIDENT_EVENT_SIGNATURE_FIELDS: Tuple[str, ...] = (
+    "x_1212781_github_0_event_signatures",
+)
+
 # MSP-B4 T4 — the only ServiceNow audit fields needed to reconstruct incident
 # assignment-group movement.  The query is bounded to incident records already
 # admitted by the current organization-scoped incident read.  Deliberately do
@@ -3342,6 +3351,12 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
     # surfaced on the incident payload.
     if "short_description" not in fields:
         fields.append("short_description")
+    # The explicit event-signature link column(s). Requested here so the field is
+    # actually returned by ServiceNow — an unrequested column is absent from the
+    # response under `sysparm_fields`, which is why the link never arrived.
+    for signature_field in INCIDENT_EVENT_SIGNATURE_FIELDS:
+        if signature_field not in fields:
+            fields.append(signature_field)
     first_assigned_field = os.getenv(FIRST_ASSIGNED_FIELD_ENV, "").strip()
     if first_assigned_field and first_assigned_field not in fields:
         fields.append(first_assigned_field)
@@ -3443,6 +3458,14 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
         )
         if escalation_field and record.get(escalation_field):
             incident["escalated_to"] = record.get(escalation_field)
+        # Carry the event-signature link column(s) through under their ServiceNow
+        # names. The incident payload is built as an explicit literal with no
+        # passthrough, so a requested-but-uncopied column is still dropped here —
+        # this is the second half of the mapping. Copied verbatim (no parsing or
+        # renaming); the shared reader validates the value's shape.
+        for signature_field in INCIDENT_EVENT_SIGNATURE_FIELDS:
+            if record.get(signature_field) is not None:
+                incident[signature_field] = record.get(signature_field)
         incidents.append(incident)
 
     assignment_groups: Dict[str, Dict[str, Any]] = {}
