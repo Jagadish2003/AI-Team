@@ -318,9 +318,7 @@ export default function OpportunityReviewPage() {
         )}
 
         <div
-          className={`mt-4 grid grid-cols-1 gap-4 lg:h-[460px] lg:items-stretch ${
-            showRelease2ArcAUi ? "lg:grid-cols-3" : "lg:grid-cols-2"
-          }`}
+          className="mt-4 grid grid-cols-1 gap-4 lg:h-[460px] lg:grid-cols-3 lg:items-stretch"
         >
           <TopQuickWins
             quickWins={quickWins}
@@ -334,36 +332,34 @@ export default function OpportunityReviewPage() {
             onSelect={handleSelect}
           />
 
-          {showRelease2ArcAUi && (
-            <ReasoningOverride
-              opp={selected}
-              audit={audit}
-              onSave={async (rationaleOverride, overrideReason, isLocked) => {
-                if (!selectedId) return;
-                const r = await saveOverride(
-                  selectedId,
-                  rationaleOverride,
-                  overrideReason,
-                  isLocked,
-                );
-                if (!r.ok) push(r.error || "Unable to save override.");
-                else push("Override saved.");
-              }}
-              onViewEvidence={() => {
-                if (selected) {
-                  select(selected.id);
-                  nav("/partial-results");
-                }
-              }}
-              onDecision={async (d) => {
-                if (!selectedId) return;
-                const result = await setDecision(selectedId, d);
-                if (!result.ok)
-                  push(result.error || "Unable to update decision.");
-                else push(`Decision set to ${d}.`);
-              }}
-            />
-          )}
+          <ReasoningOverride
+            opp={selected}
+            audit={audit}
+            onSave={async (rationaleOverride, overrideReason, isLocked) => {
+              if (!selectedId) return;
+              const r = await saveOverride(
+                selectedId,
+                rationaleOverride,
+                overrideReason,
+                isLocked,
+              );
+              if (!r.ok) push(r.error || "Unable to save override.");
+              else push("Override saved.");
+            }}
+            onViewEvidence={() => {
+              if (selected) {
+                select(selected.id);
+                nav("/partial-results");
+              }
+            }}
+            onDecision={async (d) => {
+              if (!selectedId) return;
+              const result = await setDecision(selectedId, d);
+              if (!result.ok)
+                push(result.error || "Unable to update decision.");
+              else push(`Decision set to ${d}.`);
+            }}
+          />
         </div>
 
     </PageShell>
