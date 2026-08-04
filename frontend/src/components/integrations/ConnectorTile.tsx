@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2, Unplug } from 'lucide-react';
-import { Connector } from '../../types/connector';
+import { Connector, ConnectorStatus } from '../../types/connector';
 import Badge from '../common/Badge';
 import Button from '../common/Button';
 import { fetchTokenStatus, TokenStatus } from '../../services/staticApi';
@@ -10,25 +10,8 @@ import { isViewerRole } from '../../utils/roles';
 import { useResource } from '../../lib/dataCache';
 import { cacheKeys } from '../../lib/cacheKeys';
 import { showRoadmapComingSoonLabels } from '../../config/releaseFlags';
+import { isConnectorEnabled, connectorBadgeStatus } from './connectorEnablement';
 
-// Connectors whose Connect button is ENABLED on the Integration Hub. This is a
-// UI gate only — the OAuth backends for the other connectors (Slack AT-420,
-// Teams AT-434, Confluence/SharePoint AT-462, GitHub) remain fully wired
-// (CONNECTOR_AUTH_CONFIGS + the generic auth-url → callback flow), so re-enabling
-// one later is just adding its id back to this list.
-//
-// Product decision (July 2026): the three systems of record plus GitHub are
-// connectable from the hub. R18-A4 (Slack & Teams Deep Content) adds the two chat
-// platforms and R18-A5 (Confluence & SharePoint Deep Content) adds the two
-// knowledge platforms — their OAuth backends (AT-420 Slack / AT-434 Teams /
-// AT-462 Confluence+SharePoint) and the reach + depth ingestion paths are fully
-// wired, and connecting them is what surfaces the deep-content consent copy and
-// starts conversation/page ingestion. Every other tile renders its action button
-// disabled with the "Connecting new sources is currently unavailable" tooltip.
-const ENABLED_CONNECTOR_IDS = [
-  'salesforce', 'servicenow', 'jira', 'github', 'slack', 'teams',
-  'confluence', 'sharepoint',
-];
 
 export default function ConnectorTile({
   connector,
@@ -85,9 +68,13 @@ export default function ConnectorTile({
   // the tile's OAuth Connect flow. Its tile action just opens that panel — enabled
   // for every role, since Analyst/Viewer open it to VIEW health (read-only) and
   // the panel enforces Owner-only edits. So it bypasses the OAuth-only enablement
-  // gate below.
+  // gate (see connectorEnablement.ts).
   const isMultiScope = Boolean(connector.multiScope);
-  const isEnabled = isMultiScope || ENABLED_CONNECTOR_IDS.includes(connector.id);
+  const isEnabled = isConnectorEnabled(connector);
+
+  // The status pill is derived from the SAME gate as the action, not from the raw
+  // catalog status — see connectorEnablement.ts for the rule.
+  const badgeStatus: ConnectorStatus = connectorBadgeStatus(connector);
 
   // R191-R1 T5 (AT-726): a roadmap connector (SAP/D365 and any tile whose
   // ingestion does not ship yet) is never connectable. Keep the release target
@@ -248,7 +235,7 @@ export default function ConnectorTile({
                 {comingLabel}
               </span>
             ) : (
-              <Badge status={connector.status} />
+              <Badge status={badgeStatus} />
             )}
           </div>
         </div>

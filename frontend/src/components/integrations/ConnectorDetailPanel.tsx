@@ -22,6 +22,7 @@ import OutboundAuthSetup from './OutboundAuthSetup';
 import { isStaticCredentialConnector } from './staticCredentialConnectors';
 import MultiScopeConnectorManager from './MultiScopeConnectorManager';
 import { isMultiScopeConnector } from './multiScopeConnectors';
+import { connectorBadgeStatus } from './connectorEnablement';
 import { useNetworkProfileOptional } from '../../context/NetworkProfileContext';
 
 // T41-7: Connection Health - configured read scope for this connector.
@@ -203,7 +204,7 @@ export default function ConnectorDetailPanel({
             </div>
             <div className="mt-1 break-words text-sm text-muted">{connector.category}</div>
           </div>
-          <Badge status={connector.status} />
+          <Badge status={connectorBadgeStatus(connector)} />
         </div>
         <div className="mt-4 border-t border-border" />
         <div className="mt-4">
@@ -223,7 +224,7 @@ export default function ConnectorDetailPanel({
           <div className="mt-1 break-words text-sm text-muted">{connector.category}</div>
         </div>
 
-        <Badge status={connector.status} />
+        <Badge status={connectorBadgeStatus(connector)} />
       </div>
 
       <div className="mt-3 flex items-center justify-between text-xs text-muted">

@@ -3,6 +3,7 @@ import { Connector } from '../../types/connector';
 import Badge from '../common/Badge';
 import Button from '../common/Button';
 import { connectorIcons, fallbackConnectorIcon } from './ConnectorIcons';
+import { connectorBadgeStatus } from './connectorEnablement';
 
 function parseMetricTarget(value: string) {
   const trimmed = value.trim();
@@ -137,7 +138,7 @@ export default function HeroConnectorCard({
         </div>
         <div className="mt-1 flex items-center justify-between gap-2">
           <div className="truncate text-sm text-muted">{connector.category}</div>
-          <div className="shrink-0"><Badge status={connector.status} /></div>
+          <div className="shrink-0"><Badge status={connectorBadgeStatus(connector)} /></div>
         </div>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-3 xl:mt-4 xl:gap-4">
