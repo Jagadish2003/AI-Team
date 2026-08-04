@@ -35,6 +35,7 @@ import { DataCacheProvider } from '../lib/dataCache';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import type { Decision } from '../types/common';
 import type { OpportunityCandidate } from '../types/analystReview';
+import { showRelease2ArcAUi } from '../config/releaseFlags';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -251,6 +252,10 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
   it('A3 AC4: shows cold-start learning state when learning is inactive', async () => {
     mockFetchLearningSignals.mockResolvedValueOnce(learningSignals(false));
     renderPage('/opportunity-review');
+    if (!showRelease2ArcAUi) {
+      expect(screen.queryByTestId('learning-inactive-state')).toBeNull();
+      return;
+    }
     expect(await screen.findByTestId('learning-inactive-state')).toHaveTextContent(
       /Learning is not yet active/i,
     );
@@ -291,28 +296,31 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
 
   // ── Decision / optimistic update tests ─────────────────────────────────────
 
+  it('AC6: renders the approve/reject panel without the Release 2 demo flag', () => {
+    renderPage();
+    expect(screen.getByText('Reasoning Override')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /reject/i })).toBeEnabled();
+  });
+
   it('AC6: Approve button calls setDecision with APPROVED', async () => {
     renderPage();
-    const approveBtn = screen.queryByRole('button', { name: /approve/i });
-    if (approveBtn) {
-      await act(async () => { fireEvent.click(approveBtn); });
-      await waitFor(() => {
-        expect(mockSetDecision).toHaveBeenCalledWith('opp_001', 'APPROVED');
-      });
-    }
+    const approveBtn = screen.getByRole('button', { name: /approve/i });
+    await act(async () => { fireEvent.click(approveBtn); });
+    await waitFor(() => {
+      expect(mockSetDecision).toHaveBeenCalledWith('opp_001', 'APPROVED');
+    });
   });
 
   it('AC7: after setDecision resolves, opportunities array contains updated decision', async () => {
     renderPage();
-    const approveBtn = screen.queryByRole('button', { name: /approve/i });
-    if (approveBtn) {
-      await act(async () => { fireEvent.click(approveBtn); });
-      await waitFor(() => {
-        // The mock setDecision mutates mockOpportunities (optimistic update simulation)
-        const updated = mockOpportunities.find((o) => o.id === 'opp_001');
-        expect(updated?.decision).toBe('APPROVED');
-      });
-    }
+    const approveBtn = screen.getByRole('button', { name: /approve/i });
+    await act(async () => { fireEvent.click(approveBtn); });
+    await waitFor(() => {
+      // The mock setDecision mutates mockOpportunities (optimistic update simulation)
+      const updated = mockOpportunities.find((o) => o.id === 'opp_001');
+      expect(updated?.decision).toBe('APPROVED');
+    });
   });
 
   // ── Blueprint button gating ─────────────────────────────────────────────────

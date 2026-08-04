@@ -30,6 +30,7 @@ import {
   isSalesforceConnected,
 } from "../utils/blueprintNaming";
 import { showRelease2ArcAUi } from "../config/releaseFlags";
+import type { Decision } from "../types/common";
 
 export default function OpportunityReviewPage() {
   const {
@@ -127,6 +128,41 @@ export default function OpportunityReviewPage() {
   );
   const selectedOutcomeIdentity =
     selected?.opportunity_identity ?? selected?.identifier ?? selected?.id ?? null;
+
+  const handleSaveOverride = useCallback(
+    async (
+      rationaleOverride: string,
+      overrideReason: string,
+      isLocked: boolean,
+    ) => {
+      if (!selectedId) return;
+      const result = await saveOverride(
+        selectedId,
+        rationaleOverride,
+        overrideReason,
+        isLocked,
+      );
+      if (!result.ok) push(result.error || "Unable to save override.");
+      else push("Override saved.");
+    },
+    [push, saveOverride, selectedId],
+  );
+
+  const handleViewEvidence = useCallback(() => {
+    if (!selected) return;
+    select(selected.id);
+    nav("/partial-results");
+  }, [nav, select, selected]);
+
+  const handleDecision = useCallback(
+    async (decision: Decision) => {
+      if (!selectedId) return;
+      const result = await setDecision(selectedId, decision);
+      if (!result.ok) push(result.error || "Unable to update decision.");
+      else push(`Decision set to ${decision}.`);
+    },
+    [push, selectedId, setDecision],
+  );
 
   const blueprintAction = selected ? (
     <div
@@ -290,18 +326,29 @@ export default function OpportunityReviewPage() {
             </div>
 
             {detailPanelOpen && (
-              <div className="h-[560px] border-t border-border">
-                <OpportunityDetail
-                  opp={selected}
-                  audit={audit}
-                  hideTitleBar={true}
-                  suppressPermissions={true}
-                  footer={blueprintAction}
-                  onNavigate={() => {
-                    select(selected.id);
-                    nav("/executive-report");
-                  }}
-                />
+              <div className="grid min-h-[560px] border-t border-border lg:h-[560px] lg:grid-cols-[minmax(0,1fr)_380px]">
+                <div className="min-h-[560px] min-w-0 border-b border-border lg:min-h-0 lg:border-b-0 lg:border-r">
+                  <OpportunityDetail
+                    opp={selected}
+                    audit={audit}
+                    hideTitleBar={true}
+                    suppressPermissions={true}
+                    footer={blueprintAction}
+                    onNavigate={() => {
+                      select(selected.id);
+                      nav("/executive-report");
+                    }}
+                  />
+                </div>
+                <div className="min-h-[460px] min-w-0 bg-bg/20 p-4 lg:min-h-0">
+                  <ReasoningOverride
+                    opp={selected}
+                    audit={audit}
+                    onSave={handleSaveOverride}
+                    onViewEvidence={handleViewEvidence}
+                    onDecision={handleDecision}
+                  />
+                </div>
               </div>
             )}
           </section>
@@ -318,7 +365,7 @@ export default function OpportunityReviewPage() {
         )}
 
         <div
-          className="mt-4 grid grid-cols-1 gap-4 lg:h-[460px] lg:grid-cols-3 lg:items-stretch"
+          className="mt-4 grid grid-cols-1 gap-4 lg:h-[460px] lg:grid-cols-2 lg:items-stretch"
         >
           <TopQuickWins
             quickWins={quickWins}
@@ -330,35 +377,6 @@ export default function OpportunityReviewPage() {
             ranked={ranked}
             selectedId={selectedId}
             onSelect={handleSelect}
-          />
-
-          <ReasoningOverride
-            opp={selected}
-            audit={audit}
-            onSave={async (rationaleOverride, overrideReason, isLocked) => {
-              if (!selectedId) return;
-              const r = await saveOverride(
-                selectedId,
-                rationaleOverride,
-                overrideReason,
-                isLocked,
-              );
-              if (!r.ok) push(r.error || "Unable to save override.");
-              else push("Override saved.");
-            }}
-            onViewEvidence={() => {
-              if (selected) {
-                select(selected.id);
-                nav("/partial-results");
-              }
-            }}
-            onDecision={async (d) => {
-              if (!selectedId) return;
-              const result = await setDecision(selectedId, d);
-              if (!result.ok)
-                push(result.error || "Unable to update decision.");
-              else push(`Decision set to ${d}.`);
-            }}
           />
         </div>
 
