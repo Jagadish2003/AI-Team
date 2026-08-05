@@ -67,7 +67,7 @@
       "detectorId": "shared_dependency_concentration",
       "title": "Incidents concentrate on a shared dependency",
       "primitive": "concentration_traversal",
-      "concepts": ["incident_workflow", "cmdb_dependency"],
+      "concepts": ["incident_workflow", "cmdb_dependency", "operational_event"],
       "parameters": {
         "max_depth": 2,
         "min_dependents": 3,

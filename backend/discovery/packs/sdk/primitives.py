@@ -9,11 +9,19 @@ re-implements. It is what makes ``detectors`` in a manifest checkable at all —
 "composed primitives with parameters" is meaningless without a contract to
 validate the parameters against.
 
-It deliberately contains **no detector implementation**. Binding each primitive id
-to executable platform detector machinery is the separate primitive-library task
-(2.0-C3 §2); when that lands it implements against these ids and contracts rather
-than declaring a second, drifting set. One vocabulary, two readers — the same
-discipline ``certification_criteria.py`` applies to the review checklist.
+It deliberately contains **no detector implementation**. The runnable half lives
+in :mod:`.primitive_library` (2.0-C3 T2 / AT-837), which implements against these
+ids and contracts rather than declaring a second, drifting set — a structural test
+pins that the declared ids and the implemented ids are exactly equal. One
+vocabulary, two halves: the same discipline ``certification_criteria.py`` applies
+to the review checklist.
+
+Versioning
+----------
+:data:`PRIMITIVE_LIBRARY_VERSION` versions this CONTRACT surface, not the
+implementation behind it. Adding a primitive or an optional parameter is a minor
+bump; changing or removing one is a major bump. Bumping it for an implementation
+change with no contract change would invalidate authored manifests for nothing.
 
 Why parameters are contracts, not free-form JSON
 ------------------------------------------------
