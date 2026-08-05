@@ -21,12 +21,15 @@
  *
  * Viewers get a read-only picker (PATCH is analyst+).
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '../common/Toast';
-import { ApiError, apiGet, apiPatch } from '../../lib/apiClient';
+import { ApiError, apiPatch } from '../../lib/apiClient';
 import { useAuthOptional } from '../../context/AuthContext';
 import { isViewerRole } from '../../utils/roles';
+import { useDataCache } from '../../lib/dataCache';
+import { cacheKeys } from '../../lib/cacheKeys';
 import PickerSkeleton from './PickerSkeleton';
+import { usePickerResource } from './usePickerResource';
 import ConversationContentConsentNotice from './ConversationContentConsentNotice';
 
 interface SlackChannel {
@@ -60,34 +63,36 @@ export default function SlackChannelPicker({ onSaved }: Props) {
   const auth = useAuthOptional();
   const isViewer = isViewerRole(auth?.user?.role);
 
-  const [available, setAvailable] = useState<SlackChannel[]>([]);
+  const cache = useDataCache();
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // True once the user has changed the selection without saving it. A background
+  // refresh must never overwrite an edit in progress (see the sync effect below).
+  const dirtyRef = useRef(false);
 
-  // Load selectable channels + current selection on mount.
+  // Channels on the SHARED cache: the skeleton is shown on the FIRST load only, so
+  // a re-render, a remount, or a background/connector-scope refresh keeps the
+  // current channel list on screen and updates it only if it actually changed.
+  const { data, firstLoad } = usePickerResource<SlackChannelsResponse>(
+    cacheKeys.connectorSlackChannels,
+    '/api/connectors/slack/channels',
+  );
+  const available: SlackChannel[] = data?.available ?? [];
+
+  // Mirror the saved selection into local state, EXCEPT while the user has an
+  // unsaved edit. Configured → the saved selection. Not configured yet →
+  // pre-select NONE (consistent with the Jira/Confluence/SharePoint/GitHub
+  // pickers). Until the customer saves a selection the ingestor still reads every
+  // accessible channel (the backwards-compatible default); the picker just doesn't
+  // pre-check them.
   useEffect(() => {
-    setLoading(true);
-    apiGet<SlackChannelsResponse>('/api/connectors/slack/channels')
-      .then((data) => {
-        const channels = data?.available ?? [];
-        setAvailable(channels);
-        // Configured → the saved selection. Not configured yet → pre-select NONE
-        // (consistent with the Jira/Confluence/SharePoint/GitHub pickers). Until
-        // the customer saves a selection the ingestor still reads every accessible
-        // channel (the backwards-compatible default); the picker just doesn't
-        // pre-check them.
-        setSelected(
-          data?.configured ? new Set(data.selected ?? []) : new Set(),
-        );
-      })
-      .catch(() => {
-        // Silent failure — an empty picker is a safe default.
-      })
-      .finally(() => setLoading(false));
-  }, []);
+    if (dirtyRef.current) return;
+    if (!data) return;
+    setSelected(data.configured ? new Set(data.selected ?? []) : new Set());
+  }, [data]);
 
   function toggleChannel(id: string) {
+    dirtyRef.current = true;
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -104,6 +109,13 @@ export default function SlackChannelPicker({ onSaved }: Props) {
         { channels: [...selected] },
       );
       setSelected(new Set(data.selected));
+      // Saved — the server selection is authoritative again, so let background
+      // refreshes drive it from here on. The response is written straight into the
+      // cache rather than invalidating the key: an invalidate refetches in the
+      // FOREGROUND, which would blank the picker into its skeleton right after a
+      // successful save.
+      dirtyRef.current = false;
+      cache.setData(cacheKeys.connectorSlackChannels, data);
       push(
         data.selected.length > 0
           ? `Reading ${data.selected.length} Slack channel${data.selected.length > 1 ? 's' : ''}.`
@@ -115,9 +127,9 @@ export default function SlackChannelPicker({ onSaved }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [selected, push, onSaved]);
+  }, [selected, push, onSaved, cache]);
 
-  if (loading) {
+  if (firstLoad) {
     return <PickerSkeleton label="Loading Slack channels" />;
   }
 

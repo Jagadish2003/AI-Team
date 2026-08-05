@@ -93,6 +93,21 @@ USAGE_REPORT_EXPORTED = "usage_report_exported"
 # in the portfolio without a corresponding audit row.
 OPPORTUNITY_LIFECYCLE_TRANSITIONED = "opportunity_lifecycle_transitioned"
 
+# 2.0-A3 T1 — an analyst decision recorded as a LEARNING signal (accept /
+# dismiss / defer-with-reason), keyed on the stable opportunity_identity. Note
+# this is distinct from the run-scoped review decision (APPROVED / REJECTED):
+# the review answers "is this finding real?", this answers "is this finding
+# worth our time?", and only the latter feeds ranking adaptation. Audited
+# because A3 requires every input to an adjusted ranking to be inspectable —
+# a ranking nobody can trace back to a decision is the invisible drift the
+# story exists to prevent.
+OPPORTUNITY_FEEDBACK_RECORDED = "opportunity_feedback_recorded"
+
+# 2.0-A3 T4: the org-level ranking-adjustment state changed. Recompute and
+# reset both emit this event because both alter the layer that can reorder
+# future findings.
+RANKING_ADJUSTMENT_CHANGED = "ranking_adjustment_changed"
+
 # ---------------------------------------------------------------------------
 # Registry — every accepted event type listed here.
 # log_event() accepts any string; this registry is for documentation and
@@ -117,6 +132,8 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     EVIDENCE_EXPORT_GENERATED,
     USAGE_REPORT_EXPORTED,
     OPPORTUNITY_LIFECYCLE_TRANSITIONED,
+    OPPORTUNITY_FEEDBACK_RECORDED,
+    RANKING_ADJUSTMENT_CHANGED,
 })
 
 # ---------------------------------------------------------------------------

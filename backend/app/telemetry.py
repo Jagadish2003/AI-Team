@@ -906,6 +906,30 @@ class OpportunityLifecycleTransitionPayload(TypedDict, total=False):
     run_id: NotRequired[Optional[str]]
 
 
+class RankingAdjustmentChangedPayload(TypedDict, total=False):
+    """ranking_adjustment.changed — 2.0-A3 / T4.
+
+    Emitted after the per-org ranking-adjustment state changes through explicit
+    recomputation or Owner reset. Registered before the emitter exists because
+    ``record_event()`` raises ``ValueError`` for an unregistered event type.
+
+    Carries governance metadata only: actor, org, change kind, before/after state
+    summaries, and counts. The audit log remains the primary governance record.
+    """
+
+    org_id: str
+    actor_id: str
+    change_kind: str
+    target: NotRequired[str]
+    previous_state: NotRequired[list]
+    current_state: NotRequired[list]
+    groups_changed: NotRequired[int]
+    opportunities_affected: NotRequired[int]
+    config_version: NotRequired[Optional[str]]
+    changed_at: NotRequired[str]
+    reason: NotRequired[Optional[str]]
+
+
 class BillingSystemLedgerPayload(TypedDict, total=False):
     """billing.system_connected / billing.system_disconnected — R-1.9.1-L2 / T2 (AC2).
 
@@ -1134,6 +1158,9 @@ register_event_type("export.evidence_generated", EvidenceExportGeneratedPayload)
 register_event_type(
     "opportunity.lifecycle_transitioned", OpportunityLifecycleTransitionPayload
 )
+# 2.0-A3 T4 — ranking-adjustment recompute/reset governance. Registered before
+# the first emission site exists: record_event() raises for an unregistered type.
+register_event_type("ranking_adjustment.changed", RankingAdjustmentChangedPayload)
 
 
 # ---------------------------------------------------------------------------
@@ -1320,6 +1347,7 @@ __all__ = [
     "RunCompletedEvent",
     "RunSignalSnapshotEvent",
     "OpportunityLifecycleTransitionPayload",  # 2.0-A2 / T1
+    "RankingAdjustmentChangedPayload",        # 2.0-A3 / T4
     "RunSignalSnapshotPayload",
     "RunStartedEvent",
     "TELEMETRY_EVENT_REGISTRY",

@@ -11,12 +11,15 @@
  * pre-selected — the ingestor reads every granted space until the customer picks.
  * Saving an empty selection means read nothing. Viewers get a read-only picker.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '../common/Toast';
-import { ApiError, apiGet, apiPatch } from '../../lib/apiClient';
+import { ApiError, apiPatch } from '../../lib/apiClient';
 import { useAuthOptional } from '../../context/AuthContext';
 import { isViewerRole } from '../../utils/roles';
+import { useDataCache } from '../../lib/dataCache';
+import { cacheKeys } from '../../lib/cacheKeys';
 import PickerSkeleton from './PickerSkeleton';
+import { usePickerResource } from './usePickerResource';
 
 interface ConfluenceSpace {
   key: string;
@@ -49,25 +52,30 @@ export default function ConfluenceSpacePicker({ onSaved }: Props) {
   const auth = useAuthOptional();
   const isViewer = isViewerRole(auth?.user?.role);
 
-  const [available, setAvailable] = useState<ConfluenceSpace[]>([]);
+  const cache = useDataCache();
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // True once the user has changed the selection without saving it — a background
+  // refresh must never overwrite an edit in progress.
+  const dirtyRef = useRef(false);
+
+  // Spaces on the SHARED cache: skeleton on the FIRST load only, so a re-render, a
+  // remount, or a background refresh keeps the current list on screen (see
+  // usePickerResource).
+  const { data, firstLoad } = usePickerResource<ConfluenceSpacesResponse>(
+    cacheKeys.connectorSpaces,
+    '/api/connectors/confluence/spaces',
+  );
+  const available: ConfluenceSpace[] = data?.available ?? [];
 
   useEffect(() => {
-    setLoading(true);
-    apiGet<ConfluenceSpacesResponse>('/api/connectors/confluence/spaces')
-      .then((data) => {
-        setAvailable(data?.available ?? []);
-        setSelected(data?.configured ? new Set(data.selected ?? []) : new Set());
-      })
-      .catch(() => {
-        // Silent failure — an empty picker is a safe default.
-      })
-      .finally(() => setLoading(false));
-  }, []);
+    if (dirtyRef.current) return;
+    if (!data) return;
+    setSelected(data.configured ? new Set(data.selected ?? []) : new Set());
+  }, [data]);
 
   function toggle(key: string) {
+    dirtyRef.current = true;
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -84,6 +92,11 @@ export default function ConfluenceSpacePicker({ onSaved }: Props) {
         { spaces: [...selected] },
       );
       setSelected(new Set(data.selected));
+      // The saved response is written into the cache rather than invalidating the
+      // key: an invalidate refetches in the FOREGROUND, which would blank the
+      // picker into its skeleton right after a successful save.
+      dirtyRef.current = false;
+      cache.setData(cacheKeys.connectorSpaces, data);
       push(
         data.selected.length > 0
           ? `Reading ${data.selected.length} Confluence space${data.selected.length > 1 ? 's' : ''}.`
@@ -95,9 +108,9 @@ export default function ConfluenceSpacePicker({ onSaved }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [selected, push, onSaved]);
+  }, [selected, push, onSaved, cache]);
 
-  if (loading) {
+  if (firstLoad) {
     return <PickerSkeleton label="Loading Confluence spaces" />;
   }
 

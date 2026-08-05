@@ -395,6 +395,62 @@ def _surface_operational_credential_health(
         )
 
 
+#: Run-scoped KV key holding the assembled cloud-event signature rows.
+#: Read-only surface: ``GET /api/runs/{runId}/cloud-ops/event-signatures``.
+KV_CLOUD_OPS_EVENT_SIGNATURES = "cloud_ops_event_signatures"
+
+
+def _persist_cloud_ops_event_signatures(run_id: str, block: Dict[str, Any]) -> None:
+    """Persist the assembled ``cloud_ops.event_signatures`` rows for this run.
+
+    The rows are the EXACT detector input ``build_cloud_ops_runtime`` produced —
+    stored verbatim, computed nowhere else, so this is a record of what the run
+    actually saw rather than a re-derivation. Until now the only trace a run left
+    of them was the count in the ``cloudOpsRuntime`` health block and the assembly
+    log line: ``build_org_context`` does not carry the cloud_ops block, nothing in
+    the app layer persists it, and ``AzureEventIngestor.produces_retrieval_content
+    = False`` means no per-event telemetry is emitted either. A signature VALUE
+    therefore only survived a run inside a FIRED finding's evidence — which cannot
+    exist until a ServiceNow incident already carries that signature. This write
+    breaks that circularity so the values can be read and stamped into ServiceNow.
+
+    Write-only, additive, and strictly after assembly: it reads ``block`` and
+    never mutates it, so no detector, corroboration, or scoring input changes.
+    Non-blocking — any KV problem is logged and swallowed, exactly like
+    :func:`_surface_operational_credential_health`.
+    """
+    rows = block.get("event_signatures")
+    if not isinstance(rows, list):
+        return
+    try:
+        try:
+            from app.db import run_kv_set
+        except ModuleNotFoundError:  # project-root execution uses backend as package
+            from backend.app.db import run_kv_set  # type: ignore
+
+        run_kv_set(
+            KV_CLOUD_OPS_EVENT_SIGNATURES,
+            run_id,
+            {
+                "runId": run_id,
+                "capturedAt": datetime.now(timezone.utc).isoformat(),
+                "count": len(rows),
+                "rows": rows,
+            },
+        )
+        logger.info(
+            "Persisted %d cloud-ops event signature row(s) for run %s "
+            "(read via GET /api/runs/%s/cloud-ops/event-signatures)",
+            len(rows), run_id, run_id,
+        )
+    except Exception as e:  # noqa: BLE001 — persisting the record is non-blocking.
+        logger.warning(
+            "Could not persist cloud-ops event signatures (non-blocking) "
+            "run=%s: [%s]",
+            run_id, type(e).__name__,
+        )
+
+
 def _ingest_ops_event_bridge(org_id: str, run_id: str) -> Dict[str, Any]:
     """Drive MSP-B8 on the shared checkpoint path and validate each batch.
 
@@ -480,6 +536,23 @@ def _ingest_ops_event_bridge(org_id: str, run_id: str) -> Dict[str, Any]:
             result.checkpoint_advanced,
         )
     return {"records": collected, "health": health}
+
+
+def _cloud_event_step_ok(result: Dict[str, Any]) -> bool:
+    """Whether a native cloud-event ingest counts as a SUCCESSFUL discovery step.
+
+    The two native cloud connectors report a health ``status`` rather than raising
+    (both are non-blocking), so the Discovery Progress step outcome is derived from
+    it: ``ok``/``degraded`` are successes — degraded means partial data was ingested
+    and the reason is already carried in the run's ``cloudOpsRuntime`` health block,
+    so a red "failed" row would overstate it. ``unavailable`` (import/config/ingest
+    failure) and ``not_configured`` (selected for the run but no pinned
+    accounts/subscriptions) are failures: the connector delivered nothing, and a
+    green check on a source that produced no events is exactly the dishonest
+    reporting the progress list exists to prevent.
+    """
+    status = str((result.get("health") or {}).get("status") or "").strip().lower()
+    return status in {"ok", "degraded"}
 
 
 def _ingest_aws_events(org_id: str, run_id: str) -> Dict[str, Any]:
@@ -842,6 +915,42 @@ def _ingest_azure_events(org_id: str, run_id: str) -> Dict[str, Any]:
         if budget.get("breached"):
             health["status"] = "degraded"
             health.setdefault("reason", "run_event_budget_exhausted")
+    # 2.0-D3 T4: the budget's own counters can only report events it SAW, so a poll
+    # the budget stopped before it fetched anything leaves `breached` False — which
+    # would report a run that skipped whole subscriptions as a clean one. The
+    # connector's deferral report names those polls; mirrors the AWS `poll` block.
+    try:
+        deferrals = ingestor.deferral_report()
+    except Exception:  # noqa: BLE001 — health reporting is never run-critical
+        deferrals = {}
+    if deferrals and not deferrals.get("complete", True):
+        health["deferrals"] = dict(deferrals)
+        health["status"] = "degraded"
+        health.setdefault("reason", deferrals.get("reason", "run_event_budget_exhausted"))
+    # 2.0-D3 T1: the Application Insights picture for this poll. Derived from the
+    # emitted records (each in-scope record carries its scope on the WRAPPER), so no
+    # extra plumbing is needed and run health states what the bounded App Insights
+    # read actually produced rather than leaving it implicit inside the connector.
+    # Omitted entirely when the poll met no App Insights signal, so a run with no
+    # App Insights estate reports exactly the health block it reported before D3.
+    app_insights_records = [r for r in collected if r.get("app_insights")]
+    if app_insights_records:
+        by_kind: Dict[str, int] = {}
+        components: set = set()
+        for record in app_insights_records:
+            scope = record.get("app_insights") or {}
+            # An in-scope record whose kind could not be established is counted as
+            # 'unclassified' rather than folded into a real kind — the same honesty
+            # the classifier itself applies (see azure_app_insights.py).
+            kind = scope.get("signal_kind") or "unclassified"
+            by_kind[kind] = by_kind.get(kind, 0) + 1
+            if scope.get("component_id"):
+                components.add(str(scope["component_id"]))
+        health["app_insights"] = {
+            "records": len(app_insights_records),
+            "components": sorted(components),
+            "by_signal_kind": dict(sorted(by_kind.items())),
+        }
     if result.error is not None:
         health["reason"] = type(result.error).__name__
         logger.warning(
@@ -1844,7 +1953,13 @@ def run(
     # OpsEventStream folds duplicate signatures — so native + bridge never
     # double-count. Non-blocking, exactly like the bridge.
     if _any_cloud_ops and "azure_events" in _systems:
+        update_run_step(run_id, "azure_events")
         azure_events_data = _ingest_azure_events(org_id, run_id)
+        update_run_step(
+            run_id,
+            "azure_events",
+            ok=_cloud_event_step_ok(azure_events_data),
+        )
 
     # MSP-B1: the NATIVE AWS Event Connector — the AWS half of the B1/B2 pair, and
     # the live counterpart of the B8 bridge for AWS. Identical gating and posture
@@ -1854,7 +1969,13 @@ def run(
     # assembly seam — where the OpsEventStream folds duplicate signatures, so a
     # native event and its bridged twin never double-count. Non-blocking.
     if _any_cloud_ops and "aws_events" in _systems:
+        update_run_step(run_id, "aws_events")
         aws_events_data = _ingest_aws_events(org_id, run_id)
+        update_run_step(
+            run_id,
+            "aws_events",
+            ok=_cloud_event_step_ok(aws_events_data),
+        )
 
     # Single-ingest: materialization now hands the runner ALL connected systems
     # (not just the ones a probe pre-pass confirmed had data), so guard against
@@ -2248,6 +2369,10 @@ def run(
                 len(runtime.block.get("oscillation_records") or ()),
                 len(runtime.block.get("event_signatures") or ()),
             )
+            # Objective 2: record the assembled signature rows so they survive the
+            # run. Read-only over `runtime.block`, after every detector input is
+            # final — nothing downstream observes this call.
+            _persist_cloud_ops_event_signatures(run_id, runtime.block)
         except Exception as exc:  # noqa: BLE001
             cloud_ops_runtime_health = {
                 "status": "unavailable",

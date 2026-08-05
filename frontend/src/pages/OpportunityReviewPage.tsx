@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowRight, ChevronDown, Zap } from "lucide-react";
+import { AlertCircle, ArrowRight, ChevronDown, Zap } from "lucide-react";
 import PageShell from "../components/common/PageShell";
 import OpportunityToolbar, {
   ConfidenceFilter,
@@ -21,10 +21,16 @@ import { useAnalystReviewContext } from "../context/AnalystReviewContext";
 import { useConnectorContext } from "../context/ConnectorContext";
 import { useRunContext } from "../context/RunContext";
 import { useToast } from "../components/common/Toast";
+import { fetchLearningSignals } from "../api/learningApi";
+import { useResource } from "../lib/dataCache";
+import { cacheKeys } from "../lib/cacheKeys";
+import type { LearningSignalSetResponse } from "../types/learning";
 import {
   getBlueprintLabel,
   isSalesforceConnected,
 } from "../utils/blueprintNaming";
+import { showRelease2ArcAUi } from "../config/releaseFlags";
+import type { Decision } from "../types/common";
 
 export default function OpportunityReviewPage() {
   const {
@@ -45,6 +51,11 @@ export default function OpportunityReviewPage() {
   const nav = useNavigate();
   const [searchParams] = useSearchParams();
   const requestedOppId = searchParams.get("oppId");
+  const { data: learningSignals } = useResource<LearningSignalSetResponse>(
+    showRelease2ArcAUi && runId ? cacheKeys.learningSignals : null,
+    fetchLearningSignals,
+    { enabled: showRelease2ArcAUi && Boolean(runId) },
+  );
 
   const [q, setQ] = useState("");
   const [tier, setTier] = useState<TierFilter>("All");
@@ -53,6 +64,9 @@ export default function OpportunityReviewPage() {
   const [detailPanelOpen, setDetailPanelOpen] = useState(true);
   const pageDescription =
     "Prioritize, approve, and understand automation opportunities from one review workspace.";
+  const learningState = learningSignals?.activation;
+  const learningInactive =
+    showRelease2ArcAUi && Boolean(learningState) && learningState?.isActive === false;
 
   const salesforceConnected = isSalesforceConnected(connectors);
   const blueprintLabel = getBlueprintLabel(salesforceConnected);
@@ -114,6 +128,53 @@ export default function OpportunityReviewPage() {
   );
   const selectedOutcomeIdentity =
     selected?.opportunity_identity ?? selected?.identifier ?? selected?.id ?? null;
+
+  const handleSaveOverride = useCallback(
+    async (
+      rationaleOverride: string,
+      overrideReason: string,
+      isLocked: boolean,
+    ) => {
+      if (!selectedId) return;
+      const result = await saveOverride(
+        selectedId,
+        rationaleOverride,
+        overrideReason,
+        isLocked,
+      );
+      if (!result.ok) push(result.error || "Unable to save override.");
+      else push("Override saved.");
+    },
+    [push, saveOverride, selectedId],
+  );
+
+  const handleViewEvidence = useCallback(() => {
+    if (!selected) return;
+    select(selected.id);
+    nav("/partial-results");
+  }, [nav, select, selected]);
+
+  const handleDecision = useCallback(
+    async (decision: Decision) => {
+      if (!selectedId) {
+        push("Select an opportunity before setting a decision.", "error");
+        return;
+      }
+
+      const isApproved = decision === "APPROVED";
+      push(
+        isApproved ? "Opportunity approved." : "Opportunity rejected.",
+        isApproved ? "success" : "error",
+      );
+
+      const result = await setDecision(selectedId, decision);
+      if (!result.ok) {
+        push(result.error || "Unable to save decision. Your change was reverted.", "error");
+        return;
+      }
+    },
+    [push, selectedId, setDecision],
+  );
 
   const blueprintAction = selected ? (
     <div
@@ -196,6 +257,33 @@ export default function OpportunityReviewPage() {
           totalShown={filtered.length}
         />
 
+        {learningInactive && (
+          <div
+            data-testid="learning-inactive-state"
+            className="mt-3 flex items-start gap-3 rounded-lg border border-amber-500/35 bg-amber-400/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200"
+          >
+            <AlertCircle
+              size={18}
+              className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-300"
+              aria-hidden="true"
+            />
+            <div className="min-w-0">
+              <div className="font-semibold">Learning not yet active</div>
+              <div className="mt-0.5 leading-relaxed">
+                {learningState?.message ??
+                  "Learning is not yet active for this workspace."}
+                {learningState?.remaining.decisions ? (
+                  <span>
+                    {" "}
+                    {learningState.remaining.decisions} more informing decision
+                    {learningState.remaining.decisions === 1 ? "" : "s"} needed.
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="mt-4 h-[560px] lg:h-[720px]">
           <OpportunityMatrix
             filtered={filtered}
@@ -267,15 +355,19 @@ export default function OpportunityReviewPage() {
           </section>
         )}
 
-        {selected && (
+        {showRelease2ArcAUi && selected && (
           <OpportunityOutcomePanel opportunityIdentity={selectedOutcomeIdentity} />
         )}
 
+        {showRelease2ArcAUi && (
         <div className="mt-4">
           <OutcomePortfolioPanel />
         </div>
+        )}
 
-        <div className="mt-4 grid grid-cols-1 gap-4 lg:h-[460px] lg:grid-cols-3 lg:items-stretch">
+        <div
+          className="mt-4 grid grid-cols-1 gap-4 lg:h-[460px] lg:grid-cols-3 lg:items-stretch"
+        >
           <TopQuickWins
             quickWins={quickWins}
             selectedId={selectedId}
@@ -291,30 +383,9 @@ export default function OpportunityReviewPage() {
           <ReasoningOverride
             opp={selected}
             audit={audit}
-            onSave={async (rationaleOverride, overrideReason, isLocked) => {
-              if (!selectedId) return;
-              const r = await saveOverride(
-                selectedId,
-                rationaleOverride,
-                overrideReason,
-                isLocked,
-              );
-              if (!r.ok) push(r.error || "Unable to save override.");
-              else push("Override saved.");
-            }}
-            onViewEvidence={() => {
-              if (selected) {
-                select(selected.id);
-                nav("/partial-results");
-              }
-            }}
-            onDecision={async (d) => {
-              if (!selectedId) return;
-              const result = await setDecision(selectedId, d);
-              if (!result.ok)
-                push(result.error || "Unable to update decision.");
-              else push(`Decision set to ${d}.`);
-            }}
+            onSave={handleSaveOverride}
+            onViewEvidence={handleViewEvidence}
+            onDecision={handleDecision}
           />
         </div>
 

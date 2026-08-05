@@ -35,6 +35,16 @@ _EVENT_FIELDS = frozenset(OperationalEvent.__dataclass_fields__)
 _MAX_EVENT_POINTERS = 10
 _MAX_WINDOW_TRACES = 20
 
+# 2.0-D3 T4 — how a folded signature reached this assembly. Three producers feed
+# it (the MSP-B8 staging bridge, the native MSP-B1 AWS connector, and the native
+# MSP-B2 Azure connector, the last of which now also carries Application Insights
+# signals), so the transport is derived from the event's own `source_system` rather
+# than assumed. `bridge:<provider>` is the prefix the bridge stamps.
+TRANSPORT_BRIDGE = "event_history_bridge"
+TRANSPORT_NATIVE = "native_cloud_connector"
+TRANSPORT_MIXED = "mixed"
+_BRIDGE_PREFIX = "bridge:"
+
 
 @dataclass(frozen=True)
 class CloudOpsRuntimeResult:
@@ -342,6 +352,35 @@ def _aggregate_event_signatures(
             for severity, count in signal.severity_profile.items():
                 severity_profile[severity] = severity_profile.get(severity, 0) + count
 
+        # 2.0-D3 T4: the transport is DERIVED, not assumed. This row used to state
+        # `transport: "event_history_bridge"` unconditionally, which was already
+        # false for every natively-ingested Azure and AWS event (the bridge is only
+        # one of three producers feeding this assembly) and would now also mislabel
+        # every Application Insights signal. The event's own `source_system` is the
+        # honest answer: the shared cloud-event skeleton stamps a bridged event
+        # `bridge:<provider>` and a native one with the provider family. A signature
+        # that folded a native event together with its bridged twin genuinely has
+        # both transports, so this is a LIST and the scalar reads `mixed` rather
+        # than silently picking one.
+        # Derived per FOLDED FIRING, not per representative: a signature that folded
+        # a native event together with its bridged twin genuinely arrived by both
+        # routes, and the representative is only whichever fired first. Each member's
+        # evidence pointer carries its own source_system (the bridge stamps
+        # `bridge:<provider>` on both the event and its pointer — see
+        # ops_event_bridge), so the pointers are the per-firing truth; the
+        # representative is the fallback for a signal with no pointers.
+        _members = [
+            str(pointer.get("source_system") or "")
+            for signal in signals
+            for pointer in signal.member_pointers
+        ] or [
+            str(signal.representative.source_system or "") for signal in signals
+        ]
+        transports = sorted({
+            TRANSPORT_BRIDGE if system.startswith(_BRIDGE_PREFIX) else TRANSPORT_NATIVE
+            for system in _members
+        })
+
         resource = representative.resource
         event_rows.append(
             {
@@ -379,7 +418,8 @@ def _aggregate_event_signatures(
                 "provider_event_ids": provider_event_ids,
                 "batch_ids": batch_ids,
                 "staging_row_ids": staging_row_ids,
-                "transport": "event_history_bridge",
+                "transports": transports,
+                "transport": transports[0] if len(transports) == 1 else TRANSPORT_MIXED,
             }
         )
 

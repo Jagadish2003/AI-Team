@@ -35,6 +35,7 @@ import { DataCacheProvider } from '../lib/dataCache';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import type { Decision } from '../types/common';
 import type { OpportunityCandidate } from '../types/analystReview';
+import { showRelease2ArcAUi } from '../config/releaseFlags';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -86,6 +87,60 @@ const mockSaveOverride = vi.fn().mockResolvedValue({ ok: true });
 const mockSelect = vi.fn().mockImplementation((id: string) => { mockSelectedId = id; });
 const mockRefetch = vi.fn();
 const mockNavigate = vi.fn();
+const mockPush = vi.hoisted(() => vi.fn());
+const mockFetchLearningSignals = vi.hoisted(() => vi.fn());
+
+function learningSignals(active = true) {
+  return {
+    schemaVersion: '1.0.0',
+    orgId: 'org_test',
+    configVersion: '1.0.0',
+    collectedAt: new Date().toISOString(),
+    isActive: active,
+    inactiveReason: active
+      ? null
+      : 'Learning is not yet active: 3 of 10 informing decisions recorded.',
+    counts: {
+      total: active ? 12 : 3,
+      weighted: active ? 12 : 3,
+      outcomes: 0,
+      decisions: active ? 12 : 3,
+      distinctIdentities: active ? 12 : 3,
+    },
+    thresholds: {
+      minimumDecisions: 10,
+      minimumSignals: 10,
+      minimumDistinctIdentities: 5,
+    },
+    activation: {
+      status: active ? 'active' : 'learning_not_yet_active',
+      isActive: active,
+      message: active
+        ? null
+        : 'Learning is not yet active: 3 of 10 informing decisions recorded.',
+      currentCount: active ? 12 : 3,
+      threshold: 10,
+      counts: {
+        weightedSignals: active ? 12 : 3,
+        decisions: active ? 12 : 3,
+        outcomes: 0,
+        distinctIdentities: active ? 12 : 3,
+      },
+      thresholds: {
+        minimumDecisions: 10,
+        minimumSignals: 10,
+        minimumDistinctIdentities: 5,
+      },
+      remaining: {
+        decisions: active ? 0 : 7,
+        weightedSignals: active ? 0 : 7,
+        distinctIdentities: active ? 0 : 2,
+      },
+      basis: 'provisional',
+      policy: 'decision_floor_plus_distinct_identity',
+    },
+  };
+}
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
@@ -108,7 +163,11 @@ vi.mock('../context/RunContext', () => ({
 }));
 
 vi.mock('../components/common/Toast', () => ({
-  useToast: () => ({ push: vi.fn() }),
+  useToast: () => ({ push: mockPush }),
+}));
+
+vi.mock('../api/learningApi', () => ({
+  fetchLearningSignals: () => mockFetchLearningSignals(),
 }));
 
 vi.mock('../components/common/TopNav', () => ({
@@ -171,6 +230,7 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     mockOpportunities = [OPP_1, OPP_2];
     mockSelectedId = OPP_1.id;
     mockSalesforceConnected = false;
+    mockFetchLearningSignals.mockResolvedValue(learningSignals(true));
   });
 
   // ── Route and redirect tests ────────────────────────────────────────────────
@@ -188,6 +248,21 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
   it('AC3: /opportunity-map redirects and renders Opportunity Review', () => {
     renderPage('/opportunity-map');
     expect(screen.getByText('Opportunity Review')).toBeTruthy();
+  });
+
+  it('A3 AC4: shows cold-start learning state when learning is inactive', async () => {
+    mockFetchLearningSignals.mockResolvedValueOnce(learningSignals(false));
+    renderPage('/opportunity-review');
+    if (!showRelease2ArcAUi) {
+      expect(screen.queryByTestId('learning-inactive-state')).toBeNull();
+      return;
+    }
+    expect(await screen.findByTestId('learning-inactive-state')).toHaveTextContent(
+      /Learning is not yet active/i,
+    );
+    expect(screen.getByTestId('learning-inactive-state')).toHaveTextContent(
+      /7 more informing decisions needed/i,
+    );
   });
 
   // ── Selection tests ─────────────────────────────────────────────────────────
@@ -222,28 +297,59 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
 
   // ── Decision / optimistic update tests ─────────────────────────────────────
 
+  it('AC6: renders the approve/reject panel without the Release 2 demo flag', () => {
+    renderPage();
+    expect(screen.getByText('Reasoning Override')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /reject/i })).toBeEnabled();
+  });
+
   it('AC6: Approve button calls setDecision with APPROVED', async () => {
     renderPage();
-    const approveBtn = screen.queryByRole('button', { name: /approve/i });
-    if (approveBtn) {
-      await act(async () => { fireEvent.click(approveBtn); });
-      await waitFor(() => {
-        expect(mockSetDecision).toHaveBeenCalledWith('opp_001', 'APPROVED');
-      });
-    }
+    const approveBtn = screen.getByRole('button', { name: /approve/i });
+    await act(async () => { fireEvent.click(approveBtn); });
+    await waitFor(() => {
+      expect(mockSetDecision).toHaveBeenCalledWith('opp_001', 'APPROVED');
+      expect(mockPush).toHaveBeenCalledWith('Opportunity approved.', 'success');
+    });
+  });
+
+  it('AC6: shows the approval toast immediately without waiting for save', async () => {
+    let resolveDecision!: (value: { ok: boolean }) => void;
+    mockSetDecision.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveDecision = resolve; }),
+    );
+
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    expect(mockPush).toHaveBeenCalledWith('Opportunity approved.', 'success');
+    expect(mockSetDecision).toHaveBeenCalledWith('opp_001', 'APPROVED');
+
+    await act(async () => {
+      resolveDecision({ ok: true });
+    });
+  });
+
+  it('AC6: Reject button calls setDecision with REJECTED and shows toast', async () => {
+    renderPage();
+    const rejectBtn = screen.getByRole('button', { name: /reject/i });
+    await act(async () => { fireEvent.click(rejectBtn); });
+    await waitFor(() => {
+      expect(mockSetDecision).toHaveBeenCalledWith('opp_001', 'REJECTED');
+      expect(mockPush).toHaveBeenCalledWith('Opportunity rejected.', 'error');
+    });
   });
 
   it('AC7: after setDecision resolves, opportunities array contains updated decision', async () => {
     renderPage();
-    const approveBtn = screen.queryByRole('button', { name: /approve/i });
-    if (approveBtn) {
-      await act(async () => { fireEvent.click(approveBtn); });
-      await waitFor(() => {
-        // The mock setDecision mutates mockOpportunities (optimistic update simulation)
-        const updated = mockOpportunities.find((o) => o.id === 'opp_001');
-        expect(updated?.decision).toBe('APPROVED');
-      });
-    }
+    const approveBtn = screen.getByRole('button', { name: /approve/i });
+    await act(async () => { fireEvent.click(approveBtn); });
+    await waitFor(() => {
+      // The mock setDecision mutates mockOpportunities (optimistic update simulation)
+      const updated = mockOpportunities.find((o) => o.id === 'opp_001');
+      expect(updated?.decision).toBe('APPROVED');
+    });
   });
 
   // ── Blueprint button gating ─────────────────────────────────────────────────

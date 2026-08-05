@@ -255,3 +255,153 @@ class TestRunnerGating:
         calls = self._record_azure(monkeypatch)
         runner.run("offline", systems=["salesforce"], pack="cloud_ops")
         assert not calls, "azure ingestion must not run when azure_events is not selected"
+
+
+# ── 2.0-D3 T1 — the bounded Application Insights read scope, in run health ───────
+
+
+_AI_COMPONENT = (
+    f"/subscriptions/{SUB}/resourceGroups/prod/providers"
+    "/microsoft.insights/components/prod-checkout-api"
+)
+
+#: An App Insights availability alert, on the SAME Alerts Management surface the
+#: connector already reads (D3 adds no read surface).
+_AI_AVAILABILITY_ALERT = {
+    "data": {"essentials": {
+        "alertId": f"/subscriptions/{SUB}/providers/Microsoft.AlertsManagement/alerts/ai-1",
+        "alertRule": "prod-checkout-api-availability",
+        "severity": "Sev1",
+        "signalType": "Metric",
+        "monitorCondition": "Fired",
+        "monitoringService": "Platform",
+        "alertTargetIDs": [_AI_COMPONENT],
+        "firedDateTime": "2026-06-03T09:15:00.000Z",
+        "description": "Availability test failed from 3 of 5 locations",
+    }, "alertContext": {"conditionType": "WebtestLocationAvailabilityCriteria"}},
+}
+
+#: Raw request telemetry. Seeded to prove it is never ingested (D3-AC2).
+_AI_RAW_REQUEST_TELEMETRY = {
+    "name": "Microsoft.ApplicationInsights.dev.Request",
+    "time": "2026-06-03T13:02:11.4410000Z",
+    "data": {"baseType": "RequestData", "baseData": {
+        "name": "POST /api/checkout", "responseCode": "500", "success": False,
+    }},
+}
+
+
+class TestAppInsightsScopeInRunHealth:
+    """2.0-D3 T1 through the REAL runner path, not just the connector in isolation."""
+
+    def _ingestor(self, org, alert_rows):
+        alerts = _RecordingAlerts(alert_rows)
+        ingestor = ae.AzureEventIngestor(
+            org,
+            cfg.AzureEventConfig(
+                environment=cfg.resolve_environment(cfg.AZURE_CLOUD),
+                mode=cfg.MODE_LIGHTHOUSE,
+                subscriptions=[SUB],
+            ),
+            vault_reader=_sp_record,
+            token_fn=_fake_token_fn,
+            alerts_client=alerts,
+            activity_log_client=_RecordingStream([]),
+            service_health_client=_RecordingStream([]),
+        )
+        return ingestor, alerts
+
+    def test_app_insights_signal_is_reported_in_run_health(self, client, monkeypatch):
+        org = "org_az_d3_health"
+        ingestor, _ = self._ingestor(org, [_AI_AVAILABILITY_ALERT])
+        monkeypatch.setattr(ae, "build_ingestor", lambda org_id, **kw: ingestor)
+
+        data = runner._ingest_azure_events(org, "run_azure_d3_1")
+
+        block = data["health"]["app_insights"]
+        assert block["records"] == 1
+        assert block["components"] == [_AI_COMPONENT]
+        assert block["by_signal_kind"] == {"availability": 1}
+        # The scope rides the record WRAPPER, never the normalised event.
+        record = next(r for r in data["records"] if r.get("app_insights"))
+        assert "app_insights" not in record["event"]
+
+    def test_seeded_raw_telemetry_is_not_ingested_through_the_runner(
+        self, client, monkeypatch
+    ):
+        """D3-AC2 at the runner boundary: telemetry seeded into a stream produces
+        no record and no App Insights health block."""
+        org = "org_az_d3_scope"
+        ingestor, _ = self._ingestor(org, [_AI_RAW_REQUEST_TELEMETRY])
+        monkeypatch.setattr(ae, "build_ingestor", lambda org_id, **kw: ingestor)
+
+        data = runner._ingest_azure_events(org, "run_azure_d3_2")
+
+        assert data["records"] == []
+        assert "app_insights" not in data["health"]
+
+    def test_health_block_is_absent_when_no_app_insights_estate(
+        self, client, monkeypatch
+    ):
+        """A run with no App Insights signal reports the pre-D3 health block."""
+        org = "org_az_d3_none"
+        ingestor, _ = self._ingestor(org, [_AZURE_MONITOR])
+        monkeypatch.setattr(ae, "build_ingestor", lambda org_id, **kw: ingestor)
+
+        data = runner._ingest_azure_events(org, "run_azure_d3_3")
+
+        assert data["health"]["records"] == 1          # the plain B2 alert still flows
+        assert "app_insights" not in data["health"]
+
+
+# ── 2.0-D3 T4 — a budget-cut poll must never report a clean run ──────────────────
+
+
+class TestBudgetDeferralInRunHealth:
+    """The gap this closes: the MSP-B7 budget counts deferred EVENTS, which it can
+    only do for events it actually saw. When capacity is exhausted the connector
+    stops REQUESTING further pages (the desired behaviour), so those polls
+    contribute no deferred-event count and `BudgetReport.breached` stays False — and
+    the run would report a clean budget while having skipped whole subscriptions."""
+
+    def _ingestor(self, org, *, budget):
+        return ae.AzureEventIngestor(
+            org,
+            cfg.AzureEventConfig(
+                environment=cfg.resolve_environment(cfg.AZURE_CLOUD),
+                mode=cfg.MODE_LIGHTHOUSE,
+                subscriptions=[SUB],
+            ),
+            vault_reader=_sp_record,
+            token_fn=_fake_token_fn,
+            alerts_client=_RecordingAlerts([_AI_AVAILABILITY_ALERT]),
+            activity_log_client=_RecordingStream([_AZURE_ACTIVITY]),
+            service_health_client=_RecordingStream([_SERVICE_HEALTH]),
+            budget=budget,
+        )
+
+    def test_a_skipped_poll_degrades_the_reported_status(self, client, monkeypatch):
+        org = "org_az_d3t4_deferred"
+        ingestor = self._ingestor(org, budget=1)
+        monkeypatch.setattr(ae, "build_ingestor", lambda org_id, **kw: ingestor)
+
+        data = runner._ingest_azure_events(org, "run_azure_d3t4_1")
+
+        health = data["health"]
+        # The budget alone would have reported nothing wrong...
+        assert health.get("budget", {}).get("breached") in (False, None)
+        # ...so the deferral block is what keeps it honest.
+        assert health["status"] == "degraded"
+        assert health["reason"] == "run_event_budget_exhausted"
+        assert health["deferrals"]["complete"] is False
+        assert health["deferrals"]["deferred_polls"] >= 1
+
+    def test_a_complete_poll_reports_ok_with_no_deferral_block(self, client, monkeypatch):
+        org = "org_az_d3t4_complete"
+        ingestor = self._ingestor(org, budget=None)
+        monkeypatch.setattr(ae, "build_ingestor", lambda org_id, **kw: ingestor)
+
+        data = runner._ingest_azure_events(org, "run_azure_d3t4_2")
+
+        assert data["health"]["status"] == "ok"
+        assert "deferrals" not in data["health"]

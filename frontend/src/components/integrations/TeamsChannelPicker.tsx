@@ -21,12 +21,15 @@
  * them, so the customer explicitly opts channels in. Viewers get a read-only
  * picker (PATCH is analyst+).
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '../common/Toast';
-import { ApiError, apiGet, apiPatch } from '../../lib/apiClient';
+import { ApiError, apiPatch } from '../../lib/apiClient';
 import { useAuthOptional } from '../../context/AuthContext';
 import { isViewerRole } from '../../utils/roles';
+import { useDataCache } from '../../lib/dataCache';
+import { cacheKeys } from '../../lib/cacheKeys';
 import PickerSkeleton from './PickerSkeleton';
+import { usePickerResource } from './usePickerResource';
 import ConversationContentConsentNotice from './ConversationContentConsentNotice';
 
 interface TeamsChannel {
@@ -61,32 +64,34 @@ export default function TeamsChannelPicker({ onSaved }: Props) {
   const auth = useAuthOptional();
   const isViewer = isViewerRole(auth?.user?.role);
 
-  const [available, setAvailable] = useState<TeamsChannel[]>([]);
+  const cache = useDataCache();
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // True once the user has changed the selection without saving it — a background
+  // refresh must never overwrite an edit in progress.
+  const dirtyRef = useRef(false);
 
+  // Channels on the SHARED cache: skeleton on the FIRST load only, so a re-render,
+  // a remount, or a background refresh keeps the current list on screen (see
+  // usePickerResource).
+  const { data, firstLoad } = usePickerResource<TeamsChannelsResponse>(
+    cacheKeys.connectorTeamsChannels,
+    '/api/connectors/teams/channels',
+  );
+  const available: TeamsChannel[] = data?.available ?? [];
+
+  // Configured → the saved selection. Not configured yet → pre-select NONE
+  // (consistent with the Jira/Confluence/SharePoint/GitHub pickers). Until a
+  // selection is saved the ingestor still reads every granted channel (the
+  // backwards-compatible default); the picker just doesn't pre-check them.
   useEffect(() => {
-    setLoading(true);
-    apiGet<TeamsChannelsResponse>('/api/connectors/teams/channels')
-      .then((data) => {
-        const channels = data?.available ?? [];
-        setAvailable(channels);
-        // Configured → the saved selection. Not configured yet → pre-select NONE
-        // (consistent with the Jira/Confluence/SharePoint/GitHub pickers). Until a
-        // selection is saved the ingestor still reads every granted channel (the
-        // backwards-compatible default); the picker just doesn't pre-check them.
-        setSelected(
-          data?.configured ? new Set(data.selected ?? []) : new Set(),
-        );
-      })
-      .catch(() => {
-        // Silent failure — an empty picker is a safe default.
-      })
-      .finally(() => setLoading(false));
-  }, []);
+    if (dirtyRef.current) return;
+    if (!data) return;
+    setSelected(data.configured ? new Set(data.selected ?? []) : new Set());
+  }, [data]);
 
   function toggleChannel(id: string) {
+    dirtyRef.current = true;
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -103,6 +108,11 @@ export default function TeamsChannelPicker({ onSaved }: Props) {
         { channels: [...selected] },
       );
       setSelected(new Set(data.selected));
+      // The saved response is written into the cache rather than invalidating the
+      // key: an invalidate refetches in the FOREGROUND, which would blank the
+      // picker into its skeleton right after a successful save.
+      dirtyRef.current = false;
+      cache.setData(cacheKeys.connectorTeamsChannels, data);
       push(
         data.selected.length > 0
           ? `Reading ${data.selected.length} Teams channel${data.selected.length > 1 ? 's' : ''}.`
@@ -114,9 +124,9 @@ export default function TeamsChannelPicker({ onSaved }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [selected, push, onSaved]);
+  }, [selected, push, onSaved, cache]);
 
-  if (loading) {
+  if (firstLoad) {
     return <PickerSkeleton label="Loading Teams channels" />;
   }
 

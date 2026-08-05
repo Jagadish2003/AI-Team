@@ -42,7 +42,7 @@ from .opportunity_display import (
     with_roadmap_display_titles,
 )
 from .replay import replay_run as replay_run_
-from .roadmap_engine import build_roadmap
+from .roadmap_engine import apply_learned_adjustment, build_roadmap
 from .terminology import apply_run_terminology
 from .routes_normalization import register_normalization_routes
 from .routes_connector_auth import register_connector_auth_routes
@@ -73,6 +73,7 @@ from .routes_graph import register_graph_routes
 from .routes_trace_graph import register_trace_graph_routes
 from .routes_evidence_export import register_evidence_export_routes
 from .routes_retrieval import register_retrieval_routes
+from .routes_cloud_ops_signatures import register_cloud_ops_signature_routes
 from .routes_run_health import register_run_health_routes
 from .routes_auth import register_auth_routes
 from .routes_license import register_license_routes
@@ -84,6 +85,8 @@ from .routes_secops_evidence import register_secops_evidence_routes
 from .routes_opportunity_lifecycle import register_opportunity_lifecycle_routes
 from .routes_opportunity_baseline import register_opportunity_baseline_routes
 from .routes_opportunity_movement import register_opportunity_movement_routes
+from .routes_learning_feedback import register_learning_routes
+from .routes_learning_adjustment import register_learning_adjustment_routes
 from .routes_outcomes import register_outcome_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
@@ -357,6 +360,9 @@ register_trace_graph_routes(app)
 register_evidence_export_routes(app)
 # R18-B2 T6: retrieval freshness metrics for the run-health dashboard (AC7).
 register_retrieval_routes(app)
+# Read-only view of the cloud-event signature rows a run assembled — the values
+# needed to author matching ServiceNow incidents. Additive; nothing else reads it.
+register_cloud_ops_signature_routes(app)
 # R18-C2 T1: Run-Health Dashboard aggregation endpoints (connectors, runs,
 # content/freshness, packs) — org-scoped, Owner/Analyst read-only.
 register_run_health_routes(app)
@@ -385,6 +391,14 @@ register_opportunity_movement_routes(app)
 # 2.0-A2 T6: customer-facing outcome surfaces, assembled from stored lifecycle and
 # movement artifacts with caveat counts and run-id evidence.
 register_outcome_routes(app)
+# 2.0-A3 T1: the learning signal set — analyst accept/dismiss/defer-with-reason
+# plus A2 outcome results, outcome-weighted. Records and inspects signals only;
+# the bounded ranking adjustment is T2 and is not registered here.
+register_learning_routes(app)
+# 2.0-A3 T2: the bounded adjustment layer's read surface + recomputation.
+# The adjustment itself is applied at serve time via the one function in
+# app/learning_adjustment.py; these routes inspect and recompute its state.
+register_learning_adjustment_routes(app)
 
 origins = [
     o.strip()
@@ -802,9 +816,98 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
     # opportunity is never rewritten.
     from .projection_copy_guard import scrub_opportunity_narratives
 
+    # 2.0-A3 T2: the bounded learned adjustment, at SERVE time — which is what
+    # makes "base scoring untouched and always recoverable" structurally true
+    # rather than a convention: the stored order IS the base order, so turning
+    # learning off restores it with nothing to undo, and every returned finding
+    # carries its own baseRank/baseImpact.
+    #
+    # Applied BEFORE display shaping, deliberately. with_display_scores adds a
+    # deterministic per-id offset (up to +0.6) to spread bubbles on the matrix
+    # chart; running the adjustment after it would compute the score cap from
+    # that offset impact, making the cap vary by opportunity id for a purely
+    # cosmetic reason. The cap must be a fraction of the REAL base score.
+    adjusted = _apply_learned_ranking(opps)
     return scrub_opportunity_narratives(
-        apply_run_terminology([with_display(opp) for opp in opps], run_id)
+        apply_run_terminology([with_display(opp) for opp in adjusted], run_id)
     )
+
+
+def _apply_learned_ranking(opps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Route the served list through the ONE adjustment function.
+
+    A call site, not a second implementation — ``app.learning_adjustment`` is
+    the only place a learned adjustment is computed, because a second one would
+    compound into movement nobody could explain.
+
+    Non-blocking: a learning failure serves BASE order rather than no list. That
+    is also the safe direction if the adjustment state is unavailable — no
+    learning beats partial or stale learning.
+    """
+    try:
+        from .learning_adjustment import adjust_ranking
+        from .learning_adjustment_state import get_adjustments
+        from .learning_signals import collect_learning_signals
+
+        org_id = get_current_org_id()
+        adjustments = get_adjustments(org_id)
+        if not adjustments:
+            return opps
+        signal_set = collect_learning_signals(org_id)
+        result = adjust_ranking(
+            opps,
+            adjustments,
+            is_active=signal_set.is_active,
+            inactive_reason=signal_set.inactive_reason,
+        )
+        return list(result.ordered)
+    except Exception as exc:  # noqa: BLE001 - ranking is advisory, never fatal
+        logger.warning("Learned ranking not applied: %s", exc)
+        return opps
+
+
+#: 2.0-A3 T1 — how a review decision maps onto a learning action. UNREVIEWED is
+#: absent on purpose: clearing a decision is the absence of a judgement, and
+#: recording it as one would let a reset teach the ranking layer something.
+_REVIEW_DECISION_TO_LEARNING_ACTION = {"APPROVED": "accept", "REJECTED": "dismiss"}
+
+
+def _mirror_decision_to_learning(
+    opp: Dict[str, Any], decision: str, run_id: str
+) -> None:
+    """Record a review decision as a durable learning signal. Never blocks.
+
+    The review decision answers "is this finding real?" per run; the learning
+    record answers "is this finding type worth our team's time?" across runs.
+    They are different questions with different lifetimes, which is why this
+    mirrors rather than replaces — see ``database/models/opportunity_feedback.py``.
+
+    A finding with no ``opportunity_identity`` (materialized before A1 T6 stamped
+    it) is skipped rather than recorded under a run-scoped id: a learning signal
+    that cannot be matched on the next run is worse than no signal, because it
+    counts towards the cold-start threshold while informing nothing.
+    """
+    action = _REVIEW_DECISION_TO_LEARNING_ACTION.get(decision)
+    if not action:
+        return
+    identity = str(opp.get("opportunity_identity") or "").strip()
+    if not identity:
+        return
+    try:
+        from .learning_feedback import record_feedback
+
+        debug = opp.get("_debug") if isinstance(opp.get("_debug"), dict) else {}
+        record_feedback(
+            get_current_org_id(),
+            identity,
+            action,
+            actor_id="review_decision",
+            detector_id=(debug or {}).get("detector_id"),
+            pack_id=opp.get("packId"),
+            run_id=run_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - learning must never break review
+        logger.warning("Could not mirror decision to learning record: %s", exc)
 
 
 @app.post(
@@ -854,6 +957,14 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
         }
         audit = run_kv_get("audit", run_id, default_audit())
         run_kv_set("audit", run_id, [event, *audit])
+        # 2.0-A3 T1: mirror the review decision into the durable learning record.
+        # APPROVED/REJECTED is a per-run judgement stored in a KV blob that
+        # materialization rewrites and replay resets; the learning layer needs it
+        # keyed on the stable opportunity_identity and surviving the run. Mirroring
+        # here means the existing analyst UI feeds learning with no frontend
+        # change. UNREVIEWED is deliberately not mirrored — clearing a decision is
+        # the absence of a judgement, not a third kind of one.
+        _mirror_decision_to_learning(o, decision, run_id)
     # with_display (not just title) so impact/effort carry the same stable matrix
     # offset as the list endpoint — otherwise the bubble jumps when its decision
     # response replaces the listed opportunity in the UI. R18-C1 T4: same
@@ -937,7 +1048,12 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
     # stage summaries) to the run's active template. No-op without a template.
     run_roadmap = run_kv_get("roadmap", run_id, None)
     if run_roadmap is not None:
-        return apply_run_terminology(with_roadmap_display_titles(run_roadmap), run_id)
+        # 2.0-A3 T2: the learned adjustment at SERVE time. The STORED roadmap is
+        # base order — build_roadmap runs during materialization and must stay
+        # learning-free, or disabling learning could not restore what was stored.
+        return apply_run_terminology(
+            with_roadmap_display_titles(apply_learned_adjustment(run_roadmap)), run_id
+        )
     opps = run_kv_get("opps", run_id, None)
     if opps is None:
         raise HTTPException(
@@ -947,7 +1063,9 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
                 "T2 materialisation has not completed for this run."
             ),
         )
-    return apply_run_terminology(build_roadmap(with_display_titles(opps)), run_id)
+    return apply_run_terminology(
+        apply_learned_adjustment(build_roadmap(with_display_titles(opps))), run_id
+    )
 
 
 @app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
