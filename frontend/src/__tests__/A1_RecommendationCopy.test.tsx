@@ -293,16 +293,16 @@ describe('2.0-A1 T5 — Opportunity Review recommendation copy', () => {
     );
   });
 
-  it('renders nothing when the finding carries no recommendation', () => {
+  it('renders fallback intervention copy when an older projection has no recommendation', () => {
     const withoutRecommendation = {
       ...OPPORTUNITY,
       projection: { ...PROJECTION, recommendation: null },
     };
     render(<OpportunityDetail opp={withoutRecommendation} audit={AUDIT} />);
 
-    expect(
-      screen.queryByTestId('projection-recommendation-panel'),
-    ).not.toBeInTheDocument();
+    const panel = screen.getByTestId('projection-recommendation-panel');
+    expect(panel).toHaveTextContent('Agent handles 240 recurring instances');
+    expect(panel).toHaveTextContent('What remains manual');
   });
 });
 
@@ -360,7 +360,7 @@ describe('2.0-A1 T5 — Executive Report Top Quick Wins', () => {
     assertNoProhibitedCopy(container.textContent ?? '', 'Top Quick Wins');
   });
 
-  it('omits the headline for a quick win with no recommendation', () => {
+  it('shows fallback intervention copy for a quick win with no recommendation', () => {
     render(
       <MemoryRouter>
         <TopQuickWins
@@ -371,7 +371,9 @@ describe('2.0-A1 T5 — Executive Report Top Quick Wins', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.queryByTestId('recommendation-headline')).not.toBeInTheDocument();
+    expect(screen.getByTestId('recommendation-headline')).toHaveTextContent(
+      'Agent handles 240 recurring instances',
+    );
   });
 });
 
@@ -386,9 +388,11 @@ describe('2.0-A1 T5 — recommendation accessors', () => {
     expect(recommendationNextSteps(PROJECTION)).toHaveLength(3);
   });
 
-  it('returns null rather than inventing copy when there is no recommendation', () => {
+  it('returns null only when there is no projection to describe', () => {
     expect(recommendationHeadline(null)).toBeNull();
-    expect(recommendationHeadline({ ...PROJECTION, recommendation: null })).toBeNull();
+    expect(recommendationHeadline({ ...PROJECTION, recommendation: null })).toContain(
+      'Agent handles 240 recurring instances',
+    );
     expect(recommendationSummary(null)).toBeNull();
     expect(recommendationNextSteps(null)).toEqual([]);
   });
