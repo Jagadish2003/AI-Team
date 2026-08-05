@@ -407,3 +407,33 @@ sides so a shared bug cannot pass vacuously.
 
 **Not in this ticket.** AC3 (one concept-native detector running unchanged across three
 source families) is 2.0-B4 T4.
+
+---
+
+## Cross-family run proof (2.0-B4 T4 / AT-813 — AC3 + AC5)
+
+**AC3:** *a detector written only against normalised concepts runs across at least three
+different source families without modification.* **AC5:** *unmappable connector concepts are
+recorded as declared gaps, visible to pack authors — never silently approximated.*
+
+**One concept-only detector, three families, via the real mapper layer.**
+[`concept_detectors.detect_open_work_item_backlog`](../backend/discovery/concepts/concept_detectors.py)
+reads only the `WorkItem` concept (`is_open`, derived from the coarse `status_category`, and the
+group reference on `assigned_group`). It is written concept-first — not a port. The proof
+([`backend/tests/unit/test_r2_0_b4_t4_cross_family_run.py`](../backend/tests/unit/test_r2_0_b4_t4_cross_family_run.py))
+feeds it `WorkItem`s produced by **T2's own registered `work_item` mappers** for
+**ServiceNow (itsm)**, **Jira (engineering_tracker)** and **Salesforce (crm)**, over T2's golden
+sample records — so the same function runs, unchanged, on the concepts the platform actually
+produces. A structural test pins that the detector body names no source family and never
+branches on `source_system`; another shows it emits nothing when handed raw connector dicts (it
+responds only to concept instances).
+
+**AC5 rides on the real mappers.** Jira assigns to an individual and declares an `actor_group`
+gap, and a person-owned Salesforce case has no queue — so T2's mappers leave `assigned_group`
+`None` for those items (a group is never synthesised from a person's name). The backlog finding
+then reports them under `ungrouped_count` with an empty `groups` breakdown, while ServiceNow's
+grouped incident and Salesforce's queue-owned case appear under their group. The gap is a visible
+fact in the output, never smoothed over, and `declared_gaps()` carries every gap with its reason
+for pack authors to read. `cancelled ≠ closed` is preserved end to end — a ServiceNow cancelled
+incident and a Jira "Won't Do" both normalise to `cancelled` and are excluded from the open
+backlog, never counted as work.
