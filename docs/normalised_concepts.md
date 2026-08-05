@@ -268,4 +268,41 @@ guard, and a non-firing negative control). An explicit expected firing set is as
 **both** sides, so a shared bug that agreed on the wrong answer would still fail.
 
 **Not in this ticket.** AC3 (one concept-native detector running unchanged across three source
-families) is a separate ticket; it builds on this port and the T2 per-connector mappers.
+families) is T4 — see the next section.
+
+---
+
+## Cross-family run proof (2.0-B4 T4 / AT-813 — AC3 + AC5)
+
+**AC3:** *a detector written only against normalised concepts runs across at least three
+different source families without modification.* **AC5:** *unmappable connector concepts are
+recorded as declared gaps, visible to pack authors — never silently approximated.*
+
+**One concept-only detector, four families.**
+[`concept_detectors.detect_open_work_item_backlog`](../backend/discovery/concepts/concept_detectors.py)
+reads only the `WorkItem` concept (`is_open`, derived from the coarse `status_category`, and the
+group reference on `assigned_group`). It is written concept-first — not a port. Fed `WorkItem`s
+mapped from **ServiceNow (itsm)**, **Jira (engineering_tracker)**, **Salesforce (crm)** and
+**GitHub (code)**, the SAME function produces a backlog finding per family, unchanged. Four
+per-family WorkItem mappers were added to
+[`mappers.py`](../backend/discovery/concepts/mappers.py) — each normalising a different dialect
+(`state`/`assignment_group` vs `fields.status.name`/`assignee` vs `Status`/`OwnerGroup` vs
+`state`/`assignees`) onto the one shape.
+
+The proof is **dialect-blind**: each family's fixture carries the same 4-open / 1-not-open set,
+and the detector reports `open_count == 4` for every one — the normalisation is what makes the
+detector unable to tell the dialects apart. A structural test pins that the detector body names
+no source family and never branches on `source_system`; another shows it emits nothing when handed
+raw connector dicts (it responds only to concept instances).
+
+**AC5 shows through the same run.** Jira and GitHub assign to individuals and declare an
+`actor_group` **gap** (`conformance.py`), so their mappers leave `assigned_group = None` — a group
+is never synthesised from a person's name. The backlog finding then reports those items under
+`ungrouped_count` with an empty `groups` breakdown, while ServiceNow/Salesforce items appear under
+their group. The gap is a visible fact in the output, never smoothed over, and `declared_gaps()`
+carries every gap with its reason for pack authors to read. (GitHub also demonstrates
+`cancelled ≠ closed`: an issue closed "not planned" normalises to `cancelled`, so it is never
+counted as completed work.)
+
+Proof:
+[`backend/tests/unit/test_r2_0_b4_t4_cross_family_run.py`](../backend/tests/unit/test_r2_0_b4_t4_cross_family_run.py).
