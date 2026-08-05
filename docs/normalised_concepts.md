@@ -363,3 +363,77 @@ per-customer.
 * **No connector read-scope changes.** Every mapper reads fields the connector already
   requests. A concept needing a new read is `declared`, not mapped — mapping a field
   nobody fetches would produce a concept that is always empty.
+
+---
+
+## Detector portability (2.0-B4 T3 / AT-812 — AC2)
+
+**AC2:** *two existing detectors, ported to normalised concepts, produce identical
+findings on golden fixtures.* This proves the concept set is not just a data model but a
+*portable* one — a detector re-expressed against concepts behaves exactly as its
+connector-bound original.
+
+Two shipped detectors are ported in
+[`backend/discovery/concepts/portable_detectors.py`](../backend/discovery/concepts/portable_detectors.py):
+
+| Original (connector-bound) | Concept-native port | Concepts it reads |
+|---|---|---|
+| `APPROVAL_BOTTLENECK` — [`detectors/approval_delay.py`](../backend/discovery/detectors/approval_delay.py) | `detect_approval_bottleneck` | `Approval` |
+| `PERMISSION_BOTTLENECK` — [`detectors/permission_bottleneck.py`](../backend/discovery/detectors/permission_bottleneck.py) | `detect_permission_bottleneck` | `Approval` + the `ActorGroup` its `approver_group` points at |
+
+The originals read `sf_data['approval_processes'][i]['avg_delay_days']` — bound, by the
+field names they know, to Salesforce. The ports read a concept stream and name no source
+and no source field path (a test sweeps the module to prove it); they emit nothing when
+handed the raw connector dicts. `portable_detectors.py` is self-contained — it imports the
+threshold constants from the original modules (so the calibration is provably identical and
+cannot drift; the one thing that differs is the shape the detector reads) and needs no
+mapper. `approver_count` is read from the normalised `ActorGroup.member_count`; the source's
+pre-computed scores (`avg_delay_days`, `bottleneck_score`, `pending_count`) ride on the
+`Approval.attributes` bag (B0's `payload` rule).
+
+**Where the concepts come from.** The proof — 
+[`backend/tests/unit/test_r2_0_b4_t3_detector_portability.py`](../backend/tests/unit/test_r2_0_b4_t3_detector_portability.py) —
+carries a small scaffold mapper that turns the golden `approval_processes` block
+([`concepts/fixtures/portability_approvals_golden.json`](../backend/discovery/concepts/fixtures/portability_approvals_golden.json))
+into `Approval`+`ActorGroup` concepts. It lives in the test, not in production: the T2
+[`mappers/`](../backend/discovery/concepts/mappers/) package is the sole connector→concept
+layer, and this proof works on the AGGREGATE block the service_cloud approval detectors
+actually read — a different granularity than T2's per-`ProcessInstance`
+`map_process_instance_approval`. The test feeds the golden to both the original and the port
+and asserts `DetectorResult` lists are byte-identical across every firing branch
+(combined-delay, severe-delay, concentration-only, the `approver_count == 0` guard, and a
+non-firing negative control), with an explicit expected firing set asserted against **both**
+sides so a shared bug cannot pass vacuously.
+
+**Not in this ticket.** AC3 (one concept-native detector running unchanged across three
+source families) is 2.0-B4 T4.
+
+---
+
+## Cross-family run proof (2.0-B4 T4 / AT-813 — AC3 + AC5)
+
+**AC3:** *a detector written only against normalised concepts runs across at least three
+different source families without modification.* **AC5:** *unmappable connector concepts are
+recorded as declared gaps, visible to pack authors — never silently approximated.*
+
+**One concept-only detector, three families, via the real mapper layer.**
+[`concept_detectors.detect_open_work_item_backlog`](../backend/discovery/concepts/concept_detectors.py)
+reads only the `WorkItem` concept (`is_open`, derived from the coarse `status_category`, and the
+group reference on `assigned_group`). It is written concept-first — not a port. The proof
+([`backend/tests/unit/test_r2_0_b4_t4_cross_family_run.py`](../backend/tests/unit/test_r2_0_b4_t4_cross_family_run.py))
+feeds it `WorkItem`s produced by **T2's own registered `work_item` mappers** for
+**ServiceNow (itsm)**, **Jira (engineering_tracker)** and **Salesforce (crm)**, over T2's golden
+sample records — so the same function runs, unchanged, on the concepts the platform actually
+produces. A structural test pins that the detector body names no source family and never
+branches on `source_system`; another shows it emits nothing when handed raw connector dicts (it
+responds only to concept instances).
+
+**AC5 rides on the real mappers.** Jira assigns to an individual and declares an `actor_group`
+gap, and a person-owned Salesforce case has no queue — so T2's mappers leave `assigned_group`
+`None` for those items (a group is never synthesised from a person's name). The backlog finding
+then reports them under `ungrouped_count` with an empty `groups` breakdown, while ServiceNow's
+grouped incident and Salesforce's queue-owned case appear under their group. The gap is a visible
+fact in the output, never smoothed over, and `declared_gaps()` carries every gap with its reason
+for pack authors to read. `cancelled ≠ closed` is preserved end to end — a ServiceNow cancelled
+incident and a Jira "Won't Do" both normalise to `cancelled` and are excluded from the open
+backlog, never counted as work.

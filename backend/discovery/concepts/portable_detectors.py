@@ -38,7 +38,6 @@ from __future__ import annotations
 from typing import Iterable, List
 
 try:
-    from discovery.concepts.mappers import actor_group_key, approver_group_ref_key
     from discovery.concepts.model import ActorGroup, Approval, ConceptSignal
     from discovery.detectors.approval_delay import (
         BOTTLENECK_THRESHOLD,
@@ -52,10 +51,6 @@ try:
     )
     from discovery.models import DetectorResult
 except ModuleNotFoundError:  # project-root execution uses backend as package
-    from backend.discovery.concepts.mappers import (
-        actor_group_key,
-        approver_group_ref_key,
-    )
     from backend.discovery.concepts.model import ActorGroup, Approval, ConceptSignal
     from backend.discovery.detectors.approval_delay import (
         BOTTLENECK_THRESHOLD,
@@ -72,6 +67,21 @@ except ModuleNotFoundError:  # project-root execution uses backend as package
 _SIGNAL_SOURCE = "salesforce"
 
 
+# Linking an Approval to its approver ActorGroup is done on a stable (source_system,
+# name/record-id) key, kept here so the detector is self-contained — it depends on no
+# mapper module. (T2's mappers/ package is the connector→concept layer; these ports
+# only read concept OBJECTS, so they need none of it.)
+def _actor_group_key(group: ActorGroup) -> tuple:
+    return (group.source_system, group.name)
+
+
+def _approver_group_ref_key(approval: Approval):
+    ref = approval.approver_group
+    if ref is None:
+        return None
+    return (ref.source_system, ref.source_record_id)
+
+
 def _approver_count_for(approval: Approval, groups: dict) -> int:
     """Resolve an ``Approval``'s approver count from the normalised
     ``ActorGroup.member_count`` its ``approver_group`` reference points at.
@@ -79,7 +89,7 @@ def _approver_count_for(approval: Approval, groups: dict) -> int:
     A reference with no matching group (or a group with no member count) reads 0 —
     the same value the original detector gets from a missing ``approver_count`` — so
     the port degrades exactly as the original does rather than raising."""
-    group = groups.get(approver_group_ref_key(approval))
+    group = groups.get(_approver_group_ref_key(approval))
     if group is None or group.member_count is None:
         return 0
     return int(group.member_count)
@@ -87,7 +97,7 @@ def _approver_count_for(approval: Approval, groups: dict) -> int:
 
 def _index_groups(signals: Iterable[ConceptSignal]) -> dict:
     return {
-        actor_group_key(s): s for s in signals if isinstance(s, ActorGroup)
+        _actor_group_key(s): s for s in signals if isinstance(s, ActorGroup)
     }
 
 
