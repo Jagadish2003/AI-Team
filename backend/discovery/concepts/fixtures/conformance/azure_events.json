@@ -1,8 +1,8 @@
 {
   "_meta": {
     "story": "2.0-B4 T5 (AT-814)",
-    "purpose": "Conformance golden fixture for one shipped connector. Locks the connector's per-concept conformance declaration and carries the raw->concept mapping cases that prove any mapper is correct. The CI gate (tests/contract/test_r2_0_b4_t5_conformance_fixtures.py) fails if a shipped connector has no fixture here.",
-    "note": "concepts[] mirrors discovery/concepts/conformance.py and is pinned to it by the gate — a registry change without a fixture change fails."
+    "purpose": "Conformance golden fixture for one shipped connector (AC4). Locks the connector's per-concept conformance declaration (status/reason/mapper/field_gaps) from discovery/concepts/conformance.py. The CI gate (tests/contract/test_r2_0_b4_t5_conformance_fixtures.py) fails if a shipped connector has no fixture here, and pins each fixture to the registry so a conformance change cannot ship without updating its golden.",
+    "note": "Every 'supported' concept's mapper must resolve in T2's mapper registry (discovery.concepts.mappers.resolve_mapper) — the gate checks it. The raw→concept correctness of each mapper is proven by T2's connector-mapping test."
   },
   "connector_id": "azure_events",
   "source_family": "cloud_events",
@@ -11,38 +11,44 @@
     "actor_group": {
       "status": "not_applicable",
       "reason": "a cloud/telemetry event stream carries no workflow state; MSP-B0's OperationalEvent is the correct profile for this source, not the workflow concepts",
-      "mapper": null
+      "mapper": null,
+      "field_gaps": []
     },
     "approval": {
       "status": "not_applicable",
       "reason": "a cloud/telemetry event stream carries no workflow state; MSP-B0's OperationalEvent is the correct profile for this source, not the workflow concepts",
-      "mapper": null
+      "mapper": null,
+      "field_gaps": []
     },
     "artifact": {
       "status": "not_applicable",
       "reason": "a cloud/telemetry event stream carries no workflow state; MSP-B0's OperationalEvent is the correct profile for this source, not the workflow concepts",
-      "mapper": null
+      "mapper": null,
+      "field_gaps": []
     },
     "assignment": {
       "status": "not_applicable",
       "reason": "a cloud/telemetry event stream carries no workflow state; MSP-B0's OperationalEvent is the correct profile for this source, not the workflow concepts",
-      "mapper": null
+      "mapper": null,
+      "field_gaps": []
     },
     "entity_reference": {
-      "status": "declared",
-      "reason": "",
-      "mapper": null
+      "status": "supported",
+      "reason": "the resource an event concerns, with entity_type='system' to match what resource_graph.py writes for the same event — that agreement is what lets a CMDB CI and a cloud resource be recognised as one thing by 2.0-B2's resolution",
+      "mapper": "discovery.concepts.mappers.cloud_events:map_azure_resource_reference",
+      "field_gaps": []
     },
     "state_transition": {
       "status": "not_applicable",
       "reason": "a resource state change is an OperationalEvent (MSP-B0), not a work-item state transition",
-      "mapper": null
+      "mapper": null,
+      "field_gaps": []
     },
     "work_item": {
       "status": "not_applicable",
       "reason": "a cloud/telemetry event stream carries no workflow state; MSP-B0's OperationalEvent is the correct profile for this source, not the workflow concepts",
-      "mapper": null
+      "mapper": null,
+      "field_gaps": []
     }
-  },
-  "mapping_cases": []
+  }
 }

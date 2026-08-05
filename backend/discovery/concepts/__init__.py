@@ -15,7 +15,14 @@ Three modules, three questions:
   versioned data rather than prose. ``CONCEPT_SET_VERSION`` plus a per-concept
   contract version, with the bump rules stated in the module.
 * :mod:`~discovery.concepts.conformance` — *who* conforms. One declaration per
-  shipped connector, with recorded gaps.
+  shipped connector, with recorded concept-level and field-level gaps.
+
+2.0-B4 T2 adds the mapping itself:
+
+* :mod:`~discovery.concepts.mappers` — the per-connector mappers and the registry that
+  makes a ``supported`` conformance claim resolve to real code.
+* :mod:`~discovery.concepts.gaps` — the declared-gap surface (AC5), inverted
+  concept-first for pack authors, plus ``assert_no_approximation``.
 
 Documented in ``docs/normalised_concepts.md``.
 """
@@ -34,6 +41,9 @@ from .contracts import (
 )
 from .conformance import (
     CONFORMANCE,
+    FIELD_GAP_KINDS,
+    GAP_ABSENT,
+    GAP_PARTIAL,
     STATUS_DECLARED,
     STATUS_GAP,
     STATUS_NOT_APPLICABLE,
@@ -42,11 +52,32 @@ from .conformance import (
     ConceptConformance,
     ConformanceError,
     ConnectorConformance,
+    FieldGap,
     conformance_summary,
     connectors_supporting,
     declared_gaps,
     get_conformance,
     stale_declarations,
+)
+from .gaps import (
+    ApproximationError,
+    assert_no_approximation,
+    concept_gap_report,
+    concepts_usable_by,
+    connector_gap_report,
+    connectors_for_detector,
+    field_gaps_for,
+    gap_summary,
+    unpopulated_fields,
+)
+from .mappers import (
+    MAPPERS,
+    ConceptMapper,
+    MapperError,
+    get_mapper,
+    mapped_concepts,
+    registry_summary,
+    resolve_mapper,
 )
 from .model import (
     ACTOR_GROUP_TYPES,
@@ -135,4 +166,26 @@ __all__ = [
     "declared_gaps",
     "stale_declarations",
     "conformance_summary",
+    "FieldGap",
+    "GAP_ABSENT",
+    "GAP_PARTIAL",
+    "FIELD_GAP_KINDS",
+    # mappers (T2)
+    "MAPPERS",
+    "ConceptMapper",
+    "MapperError",
+    "get_mapper",
+    "mapped_concepts",
+    "resolve_mapper",
+    "registry_summary",
+    # gaps (T2 / AC5)
+    "ApproximationError",
+    "assert_no_approximation",
+    "concept_gap_report",
+    "connector_gap_report",
+    "connectors_for_detector",
+    "concepts_usable_by",
+    "field_gaps_for",
+    "unpopulated_fields",
+    "gap_summary",
 ]
