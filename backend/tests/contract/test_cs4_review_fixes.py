@@ -62,13 +62,22 @@ def test_discovery_steps_live_in_discovery_layer():
     assert DISCOVERY_STEPS[0] == "sf_crm"
     assert DISCOVERY_STEPS[-1] == "complete"
     # Emission order: each connected source emits its own step at the START of its
-    # ingest (CRM -> ServiceNow -> Jira -> Slack -> Teams -> Confluence ->
-    # SharePoint -> GitHub -> Java -> .NET), then the pack-specific second SF pass
-    # (sf_ncino), then detect/enrich/complete.
+    # ingest (CRM -> ServiceNow -> Jira -> Azure events -> AWS events -> Slack ->
+    # Teams -> Confluence -> SharePoint -> GitHub -> Java -> .NET), then the
+    # pack-specific second SF pass for each declared product (sf_ncino / sf_fsc),
+    # then detect/enrich/complete.
+    #
+    # This list is expected to GROW as sources are added, and the assertion is
+    # deliberately exact rather than a subset check: the point of this test is
+    # that the vocabulary lives in the discovery layer and is reviewed when it
+    # changes. `azure_events` / `aws_events` (the native MSP-B1/B2 cloud event
+    # connectors) and `sf_fsc` (the 2.0-D1 Financial Services Cloud pack's second
+    # Salesforce pass) were added to discovery/steps.py without this copy of the
+    # expectation being updated, so keep the two in step when adding a source.
     assert DISCOVERY_STEPS == [
-        "sf_crm", "sn", "jira", "slack", "teams", "confluence", "sharepoint",
-        "github", "java_app", "dotnet_app", "sf_ncino", "detect", "enrich",
-        "complete",
+        "sf_crm", "sn", "jira", "azure_events", "aws_events", "slack", "teams",
+        "confluence", "sharepoint", "github", "java_app", "dotnet_app",
+        "sf_ncino", "sf_fsc", "detect", "enrich", "complete",
     ]
     assert DISCOVERY_STEP_IDS == frozenset(DISCOVERY_STEPS)
     # It must NOT be re-exported from app.db anymore.
