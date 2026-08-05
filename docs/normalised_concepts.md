@@ -437,3 +437,36 @@ fact in the output, never smoothed over, and `declared_gaps()` carries every gap
 for pack authors to read. `cancelled ≠ closed` is preserved end to end — a ServiceNow cancelled
 incident and a Jira "Won't Do" both normalise to `cancelled` and are excluded from the open
 backlog, never counted as work.
+
+---
+
+## Conformance fixture suite + CI gate (2.0-B4 T5 / AT-814 — AC4)
+
+**AC4:** *every connector has conformance fixtures; CI fails if a connector lacks them* —
+"a new connector ships with its conformance fixtures or does not ship."
+
+**One golden fixture per shipped connector**, at
+[`backend/discovery/concepts/fixtures/conformance/<connector_id>.json`](../backend/discovery/concepts/fixtures/conformance/),
+one per entry in `conformance.CONFORMANCE` (13). Each is a **locked snapshot** of that
+connector's per-concept declaration — `status`, `reason`, `mapper`, `field_gaps` for all seven
+concepts — generated from the live registry, so it captures T2's real state (28 concepts
+`supported` today). The loader is
+[`conformance_fixtures.py`](../backend/discovery/concepts/conformance_fixtures.py).
+
+**The CI gate** is
+[`backend/tests/contract/test_r2_0_b4_t5_conformance_fixtures.py`](../backend/tests/contract/test_r2_0_b4_t5_conformance_fixtures.py),
+under `tests/contract` so CI's `pytest tests/contract/` actually runs it. It enforces:
+
+1. **Presence (the AC4 gate)** — every shipped connector has a fixture; a missing one fails, an
+   orphan fails. A negative control removes a fixture and asserts the gate trips.
+2. **Completeness** — a fixture covers all seven concepts (a partial declaration is a silently
+   unmapped concept).
+3. **The fixture is a true lock on the registry** — status/reason/mapper/field_gaps must match
+   `conformance.py`, so a conformance change cannot ship without updating its golden fixture.
+4. **Gaps and not-applicables carry reasons.**
+5. **Every `supported` claim resolves to a real mapper** in T2's registry
+   (`mappers.resolve_mapper`) — the strongest claim cannot be made by editing a status.
+
+The raw→concept correctness of each `supported` mapper is proven by T2's connector-mapping suite
+over its golden samples; this gate does not re-prove that — it pins the per-connector fixture
+discipline that AC4 asks for.
