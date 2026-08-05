@@ -1,0 +1,48 @@
+{
+  "_meta": {
+    "story": "2.0-B4 T5 (AT-814)",
+    "purpose": "Conformance golden fixture for one shipped connector. Locks the connector's per-concept conformance declaration and carries the raw->concept mapping cases that prove any mapper is correct. The CI gate (tests/contract/test_r2_0_b4_t5_conformance_fixtures.py) fails if a shipped connector has no fixture here.",
+    "note": "concepts[] mirrors discovery/concepts/conformance.py and is pinned to it by the gate — a registry change without a fixture change fails."
+  },
+  "connector_id": "jira",
+  "source_family": "engineering_tracker",
+  "concept_set_version": 1,
+  "concepts": {
+    "actor_group": {
+      "status": "gap",
+      "reason": "Jira assigns to individuals; project roles and components are the closest group-shaped concepts and neither is a work queue. Mapping an assignee to a group would fabricate one.",
+      "mapper": null
+    },
+    "approval": {
+      "status": "gap",
+      "reason": "approval is a workflow-transition convention per project, not a first-class Jira record; reading one reliably needs per-org configuration this connector does not have",
+      "mapper": null
+    },
+    "artifact": {
+      "status": "declared",
+      "reason": "",
+      "mapper": null
+    },
+    "assignment": {
+      "status": "declared",
+      "reason": "",
+      "mapper": null
+    },
+    "entity_reference": {
+      "status": "declared",
+      "reason": "",
+      "mapper": null
+    },
+    "state_transition": {
+      "status": "declared",
+      "reason": "",
+      "mapper": null
+    },
+    "work_item": {
+      "status": "declared",
+      "reason": "",
+      "mapper": null
+    }
+  },
+  "mapping_cases": []
+}

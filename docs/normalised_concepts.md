@@ -269,3 +269,47 @@ guard, and a non-firing negative control). An explicit expected firing set is as
 
 **Not in this ticket.** AC3 (one concept-native detector running unchanged across three source
 families) is a separate ticket; it builds on this port and the T2 per-connector mappers.
+
+---
+
+## Conformance fixture suite + CI gate (2.0-B4 T5 / AT-814 — AC4)
+
+**AC4:** *every connector has conformance fixtures; CI fails if a connector lacks them.* The
+discipline the story states plainly: *a new connector ships with its conformance fixtures or
+does not ship.*
+
+**One golden fixture per shipped connector**, at
+[`backend/discovery/concepts/fixtures/conformance/<connector_id>.json`](../backend/discovery/concepts/fixtures/conformance/),
+one per entry in `conformance.CONFORMANCE` (13 today). Each fixture carries:
+
+* a **locked snapshot** of that connector's per-concept declaration — `status`, `reason`,
+  `mapper` for all seven concepts — pinned to `discovery/concepts/conformance.py` by the gate;
+  and
+* zero or more **mapping cases**: a `raw` source sample, the `mapper` that maps it (named as a
+  `"module:function"` string), and the exact normalised concepts (`expected`) it must produce.
+
+**The CI gate** is
+[`backend/tests/contract/test_r2_0_b4_t5_conformance_fixtures.py`](../backend/tests/contract/test_r2_0_b4_t5_conformance_fixtures.py).
+It lives under `tests/contract` on purpose — CI runs `pytest tests/contract/`
+(`.github/workflows/contract-tests.yml`), so the gate actually runs in CI. It enforces:
+
+1. **Presence (the AC4 gate)** — every shipped connector has a fixture; a missing one fails,
+   an orphan fixture fails. A negative control removes a fixture and asserts the gate trips,
+   so the gate is known to be a gate.
+2. **The fixture is a true lock on the registry** — status/reason/mapper for every concept must
+   match the declaration, so a conformance change cannot ship without updating its golden
+   fixture, and a newly-shipped connector cannot arrive with no fixture.
+3. **Gaps and not-applicables carry reasons** (AC5's honesty, re-checked at the fixture).
+4. **Mapping cases prove the mapper** — the named mapper is run on `raw` and its output must
+   equal `expected` exactly; this is how a fixture *proves the mapping is correct* rather than
+   only asserting a status. Today one real mapping is proven: Salesforce's approval block →
+   `Approval` + approver `ActorGroup`, via the T3 `map_service_cloud_approvals` mapper.
+5. **A `supported` claim needs a proving case** — the only status that asserts conformance cannot
+   be set without a mapping case that produces the concept (a forward guard for the T2 mappers;
+   vacuous today because nothing is `supported` yet).
+
+The loader and mapper resolution live in
+[`backend/discovery/concepts/conformance_fixtures.py`](../backend/discovery/concepts/conformance_fixtures.py)
+(not in the test), so the T2 per-connector mappers register against these same fixtures as they
+land — flipping a `declared` concept to `supported` is then exactly: add a mapping case, run the
+gate, flip the status.

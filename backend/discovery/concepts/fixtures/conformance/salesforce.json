@@ -1,0 +1,142 @@
+{
+  "_meta": {
+    "story": "2.0-B4 T5 (AT-814)",
+    "purpose": "Conformance golden fixture for one shipped connector. Locks the connector's per-concept conformance declaration and carries the raw->concept mapping cases that prove any mapper is correct. The CI gate (tests/contract/test_r2_0_b4_t5_conformance_fixtures.py) fails if a shipped connector has no fixture here.",
+    "note": "concepts[] mirrors discovery/concepts/conformance.py and is pinned to it by the gate — a registry change without a fixture change fails."
+  },
+  "connector_id": "salesforce",
+  "source_family": "crm",
+  "concept_set_version": 1,
+  "concepts": {
+    "actor_group": {
+      "status": "declared",
+      "reason": "",
+      "mapper": null
+    },
+    "approval": {
+      "status": "declared",
+      "reason": "",
+      "mapper": null
+    },
+    "artifact": {
+      "status": "not_applicable",
+      "reason": "the Salesforce ingest surface reads records, not files; attachments reach the platform through the document path instead",
+      "mapper": null
+    },
+    "assignment": {
+      "status": "declared",
+      "reason": "",
+      "mapper": null
+    },
+    "entity_reference": {
+      "status": "declared",
+      "reason": "",
+      "mapper": null
+    },
+    "state_transition": {
+      "status": "declared",
+      "reason": "",
+      "mapper": null
+    },
+    "work_item": {
+      "status": "declared",
+      "reason": "",
+      "mapper": null
+    }
+  },
+  "mapping_cases": [
+    {
+      "name": "approval_processes block -> Approval gate + approver ActorGroup",
+      "mapper": "discovery.concepts.mappers:map_service_cloud_approvals",
+      "org_id": "acme",
+      "produces": [
+        "actor_group",
+        "approval"
+      ],
+      "raw": {
+        "approval_processes": [
+          {
+            "process_name": "Underwriting Referral Review",
+            "pending_count": 74,
+            "avg_delay_days": 6.5,
+            "approver_count": 2,
+            "bottleneck_score": 37.0,
+            "approver_ids": [
+              "005xx000002INS2",
+              "005xx000002INS4"
+            ]
+          }
+        ]
+      },
+      "expected": [
+        {
+          "concept": "actor_group",
+          "org_id": "acme",
+          "source_system": "salesforce",
+          "signal_id": "approval-group:Underwriting Referral Review",
+          "observed_at": "2026-01-01T00:00:00Z",
+          "provenance": {
+            "source_system": "salesforce",
+            "source_artifact": "Underwriting Referral Review",
+            "source_timestamp": "2026-01-01T00:00:00Z",
+            "origin": "observed",
+            "extraction_job_id": null,
+            "chunk_id": null,
+            "retrieval_result_id": null,
+            "detector_evidence_id": null,
+            "confidence": null,
+            "source_artifact_type": null
+          },
+          "native_type": "",
+          "attributes": {},
+          "entity_refs": [],
+          "group_type": "role",
+          "name": "Underwriting Referral Review",
+          "member_count": 2
+        },
+        {
+          "concept": "approval",
+          "org_id": "acme",
+          "source_system": "salesforce",
+          "signal_id": "approval:Underwriting Referral Review",
+          "observed_at": "2026-01-01T00:00:00Z",
+          "provenance": {
+            "source_system": "salesforce",
+            "source_artifact": "Underwriting Referral Review",
+            "source_timestamp": "2026-01-01T00:00:00Z",
+            "origin": "observed",
+            "extraction_job_id": null,
+            "chunk_id": null,
+            "retrieval_result_id": null,
+            "detector_evidence_id": null,
+            "confidence": null,
+            "source_artifact_type": null
+          },
+          "native_type": "",
+          "attributes": {
+            "process_name": "Underwriting Referral Review",
+            "avg_delay_days": 6.5,
+            "bottleneck_score": 37.0,
+            "pending_count": 74
+          },
+          "entity_refs": [],
+          "decision": "pending",
+          "approval_type": "other",
+          "work_item": null,
+          "approver_group": {
+            "entity_type": "team",
+            "source_system": "salesforce",
+            "source_record_id": "Underwriting Referral Review",
+            "display_name": "Underwriting Referral Review",
+            "entity_id": null,
+            "is_resolved": false
+          },
+          "requested_at": null,
+          "decided_at": null,
+          "step_index": null,
+          "is_decided": false
+        }
+      ]
+    }
+  ]
+}

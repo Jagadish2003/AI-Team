@@ -1,0 +1,48 @@
+{
+  "_meta": {
+    "story": "2.0-B4 T5 (AT-814)",
+    "purpose": "Conformance golden fixture for one shipped connector. Locks the connector's per-concept conformance declaration and carries the raw->concept mapping cases that prove any mapper is correct. The CI gate (tests/contract/test_r2_0_b4_t5_conformance_fixtures.py) fails if a shipped connector has no fixture here.",
+    "note": "concepts[] mirrors discovery/concepts/conformance.py and is pinned to it by the gate — a registry change without a fixture change fails."
+  },
+  "connector_id": "teams",
+  "source_family": "conversation",
+  "concept_set_version": 1,
+  "concepts": {
+    "actor_group": {
+      "status": "declared",
+      "reason": "a team/channel is a group-shaped container, NOT a work queue — a detector must not read queue semantics into it",
+      "mapper": null
+    },
+    "approval": {
+      "status": "not_applicable",
+      "reason": "the source has no approval concept — it records content/activity, not gated decisions",
+      "mapper": null
+    },
+    "artifact": {
+      "status": "declared",
+      "reason": "",
+      "mapper": null
+    },
+    "assignment": {
+      "status": "not_applicable",
+      "reason": "the source has no unit-of-work record; its signal is content or events, not tracked work",
+      "mapper": null
+    },
+    "entity_reference": {
+      "status": "declared",
+      "reason": "",
+      "mapper": null
+    },
+    "state_transition": {
+      "status": "not_applicable",
+      "reason": "the source has no unit-of-work record; its signal is content or events, not tracked work",
+      "mapper": null
+    },
+    "work_item": {
+      "status": "not_applicable",
+      "reason": "the source has no unit-of-work record; its signal is content or events, not tracked work",
+      "mapper": null
+    }
+  },
+  "mapping_cases": []
+}
