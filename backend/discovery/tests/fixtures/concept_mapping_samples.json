@@ -1,0 +1,370 @@
+{
+  "_meta": {
+    "story": "2.0-B4 T2 — connector mapping",
+    "purpose": "Source records in the shape each connector's API actually returns, used to pin every mapper's normalised output.",
+    "provenance": "Hand-written from each provider's API contract and from the field sets the AgentIQ connectors already request (servicenow.py INCIDENT_CI_FIELDS + INCIDENT_RESOLUTION_FIELDS + ASSIGNMENT_HISTORY_FIELDS + CMDB_FIELDS; jira.py's requested fields; salesforce.py's SOQL objects). NOT dumped from the mappers, so a mapper regression cannot silently update its own expectations — the same discipline as the 2.0-D3 App Insights golden fixtures.",
+    "servicenow_note": "Every field is a {value, display_value} envelope because the connector reads with sysparm_display_value=all. The two halves are deliberately DIFFERENT here (raw '2026-07-01 09:14:22' vs display '01-07-2026 10:14:22' in a non-UTC instance format) so a mapper that reads the wrong half fails the test rather than passing by coincidence.",
+    "no_individuals": "The person-shaped fields (assigned_to, caller_id, Jira assignee, Salesforce OwnerId=005...) are PRESENT on purpose: a leak test over a fixture with no individuals in it would be vacuous."
+  },
+
+  "servicenow": {
+    "incident_open": {
+      "sys_id": {"value": "a1b2c3d4e5f60718293a4b5c6d7e8f90", "display_value": "a1b2c3d4e5f60718293a4b5c6d7e8f90"},
+      "number": {"value": "INC0010042", "display_value": "INC0010042"},
+      "state": {"value": "2", "display_value": "In Progress"},
+      "priority": {"value": "2", "display_value": "2 - High"},
+      "short_description": {"value": "Payment batch job failing nightly", "display_value": "Payment batch job failing nightly"},
+      "category": {"value": "software", "display_value": "Software"},
+      "subcategory": {"value": "batch", "display_value": "Batch Processing"},
+      "opened_at": {"value": "2026-07-01 09:14:22", "display_value": "01-07-2026 10:14:22"},
+      "sys_created_on": {"value": "2026-07-01 09:14:22", "display_value": "01-07-2026 10:14:22"},
+      "sys_updated_on": {"value": "2026-07-14 16:02:11", "display_value": "14-07-2026 17:02:11"},
+      "resolved_at": {"value": "", "display_value": ""},
+      "closed_at": {"value": "", "display_value": ""},
+      "assignment_group": {"value": "9f8e7d6c5b4a39281706f5e4d3c2b1a0", "display_value": "Level 2 Payments"},
+      "assigned_to": {"value": "62826bf03710200044e0bfc8bcbe5df1", "display_value": "Sam Rivera"},
+      "caller_id": {"value": "5137153cc611227c000bbd1bd8cd2007", "display_value": "Priya Nadar"},
+      "cmdb_ci": {"value": "3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d", "display_value": "PAY-BATCH-01"}
+    },
+    "incident_cancelled": {
+      "sys_id": {"value": "b2c3d4e5f60718293a4b5c6d7e8f9001", "display_value": "b2c3d4e5f60718293a4b5c6d7e8f9001"},
+      "number": {"value": "INC0010043", "display_value": "INC0010043"},
+      "state": {"value": "8", "display_value": "Cancelled"},
+      "priority": {"value": "4", "display_value": "4 - Low"},
+      "short_description": {"value": "Duplicate of INC0010042", "display_value": "Duplicate of INC0010042"},
+      "opened_at": {"value": "2026-07-02 11:00:00", "display_value": "02-07-2026 12:00:00"},
+      "sys_updated_on": {"value": "2026-07-02 11:30:00", "display_value": "02-07-2026 12:30:00"},
+      "closed_at": {"value": "2026-07-02 11:30:00", "display_value": "02-07-2026 12:30:00"},
+      "assignment_group": {"value": "9f8e7d6c5b4a39281706f5e4d3c2b1a0", "display_value": "Level 2 Payments"}
+    },
+    "incident_custom_state": {
+      "sys_id": {"value": "c3d4e5f60718293a4b5c6d7e8f900102", "display_value": "c3d4e5f60718293a4b5c6d7e8f900102"},
+      "number": {"value": "INC0010044", "display_value": "INC0010044"},
+      "state": {"value": "42", "display_value": "Awaiting Vendor Triage"},
+      "opened_at": {"value": "2026-07-03 08:00:00", "display_value": "03-07-2026 09:00:00"},
+      "sys_updated_on": {"value": "2026-07-03 08:00:00", "display_value": "03-07-2026 09:00:00"}
+    },
+    "assignment_group_record": {
+      "sys_id": {"value": "9f8e7d6c5b4a39281706f5e4d3c2b1a0", "display_value": "9f8e7d6c5b4a39281706f5e4d3c2b1a0"},
+      "name": {"value": "Level 2 Payments", "display_value": "Level 2 Payments"},
+      "sys_updated_on": {"value": "2026-06-30 12:00:00", "display_value": "30-06-2026 13:00:00"},
+      "member_count": 14
+    },
+    "audit_first_assignment": {
+      "sys_id": {"value": "aud1000000000000000000000000001", "display_value": "aud1000000000000000000000000001"},
+      "documentkey": {"value": "a1b2c3d4e5f60718293a4b5c6d7e8f90", "display_value": "a1b2c3d4e5f60718293a4b5c6d7e8f90"},
+      "oldvalue": "",
+      "newvalue": "Service Desk",
+      "sys_created_on": {"value": "2026-07-01 09:15:00", "display_value": "01-07-2026 10:15:00"}
+    },
+    "audit_reassignment": {
+      "sys_id": {"value": "aud1000000000000000000000000002", "display_value": "aud1000000000000000000000000002"},
+      "documentkey": {"value": "a1b2c3d4e5f60718293a4b5c6d7e8f90", "display_value": "a1b2c3d4e5f60718293a4b5c6d7e8f90"},
+      "oldvalue": "Service Desk",
+      "newvalue": "Level 2 Payments",
+      "sys_created_on": {"value": "2026-07-02 14:20:00", "display_value": "02-07-2026 15:20:00"}
+    },
+    "audit_state_reopen": {
+      "sys_id": {"value": "aud1000000000000000000000000003", "display_value": "aud1000000000000000000000000003"},
+      "documentkey": {"value": "a1b2c3d4e5f60718293a4b5c6d7e8f90", "display_value": "a1b2c3d4e5f60718293a4b5c6d7e8f90"},
+      "oldvalue": "Resolved",
+      "newvalue": "In Progress",
+      "sys_created_on": {"value": "2026-07-10 09:00:00", "display_value": "10-07-2026 10:00:00"}
+    },
+    "audit_state_change": {
+      "sys_id": {"value": "aud1000000000000000000000000004", "display_value": "aud1000000000000000000000000004"},
+      "documentkey": {"value": "a1b2c3d4e5f60718293a4b5c6d7e8f90", "display_value": "a1b2c3d4e5f60718293a4b5c6d7e8f90"},
+      "oldvalue": "New",
+      "newvalue": "In Progress",
+      "sys_created_on": {"value": "2026-07-01 09:20:00", "display_value": "01-07-2026 10:20:00"}
+    },
+    "cmdb_ci": {
+      "sys_id": {"value": "3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d", "display_value": "3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d"},
+      "name": {"value": "PAY-BATCH-01", "display_value": "PAY-BATCH-01"},
+      "sys_class_name": {"value": "cmdb_ci_app_server", "display_value": "Application Server"},
+      "operational_status": {"value": "1", "display_value": "Operational"},
+      "sys_updated_on": {"value": "2026-06-28 07:00:00", "display_value": "28-06-2026 08:00:00"}
+    }
+  },
+
+  "jira": {
+    "issue_in_progress": {
+      "id": "10421",
+      "key": "PAY-42",
+      "fields": {
+        "summary": "Reconciliation report times out",
+        "issuetype": {"name": "Bug"},
+        "status": {"name": "In Review", "statusCategory": {"key": "indeterminate", "name": "In Progress"}},
+        "priority": {"name": "High"},
+        "project": {"key": "PAY", "name": "Payments"},
+        "labels": ["reconciliation", "sev2"],
+        "created": "2026-07-01T09:14:22.000+0000",
+        "updated": "2026-07-14T16:02:11.000+0000",
+        "resolutiondate": null,
+        "resolution": null,
+        "assignee": {"accountId": "5b10a2844c20165700ede21g", "displayName": "Sam Rivera"},
+        "reporter": {"accountId": "5b10a2844c20165700ede21h", "displayName": "Priya Nadar"}
+      }
+    },
+    "issue_done": {
+      "id": "10422",
+      "key": "PAY-43",
+      "fields": {
+        "summary": "Add retry to batch submit",
+        "issuetype": {"name": "Task"},
+        "status": {"name": "Done", "statusCategory": {"key": "done", "name": "Done"}},
+        "priority": {"name": "Medium"},
+        "project": {"key": "PAY"},
+        "created": "2026-06-20T09:00:00.000+0000",
+        "updated": "2026-07-02T10:00:00.000+0000",
+        "resolutiondate": "2026-07-02T10:00:00.000+0000",
+        "resolution": {"name": "Done"}
+      }
+    },
+    "issue_wont_do": {
+      "id": "10423",
+      "key": "PAY-44",
+      "fields": {
+        "summary": "Rewrite the reconciliation engine",
+        "issuetype": {"name": "Story"},
+        "status": {"name": "Closed", "statusCategory": {"key": "done", "name": "Done"}},
+        "priority": {"name": "Low"},
+        "project": {"key": "PAY"},
+        "created": "2026-05-01T09:00:00.000+0000",
+        "updated": "2026-06-01T09:00:00.000+0000",
+        "resolutiondate": "2026-06-01T09:00:00.000+0000",
+        "resolution": {"name": "Won't Do"}
+      }
+    },
+    "issue_custom_type": {
+      "id": "10424",
+      "key": "PAY-45",
+      "fields": {
+        "summary": "Quarterly compliance sweep",
+        "issuetype": {"name": "Governance Review"},
+        "status": {"name": "To Do", "statusCategory": {"key": "new", "name": "To Do"}},
+        "project": {"key": "PAY"},
+        "created": "2026-07-05T09:00:00.000+0000",
+        "updated": "2026-07-05T09:00:00.000+0000"
+      }
+    },
+    "attachment": {
+      "id": "20301",
+      "filename": "reconciliation-trace.log",
+      "created": "2026-07-14T15:00:00.000+0000",
+      "content": "https://example.atlassian.net/rest/api/3/attachment/content/20301",
+      "author": {"accountId": "5b10a2844c20165700ede21g", "displayName": "Sam Rivera"}
+    }
+  },
+
+  "salesforce": {
+    "case_queue_owned": {
+      "Id": "5003X00000AbCdEAAV",
+      "CaseNumber": "00104521",
+      "Subject": "Statement not received",
+      "Status": "Working",
+      "Priority": "High",
+      "Type": "Servicing",
+      "Origin": "Phone",
+      "OwnerId": "00G3X000004ZzYqUAA",
+      "OwnerName": "Payments Queue",
+      "CreatedDate": "2026-07-01T09:14:22.000+0000",
+      "LastModifiedDate": "2026-07-14T16:02:11.000+0000",
+      "ClosedDate": null
+    },
+    "case_person_owned": {
+      "Id": "5003X00000AbCdFAAV",
+      "CaseNumber": "00104522",
+      "Subject": "Address change request",
+      "Status": "New",
+      "Priority": "Low",
+      "OwnerId": "0053X000009AbCdAAK",
+      "OwnerName": "Sam Rivera",
+      "CreatedDate": "2026-07-02T09:00:00.000+0000",
+      "LastModifiedDate": "2026-07-02T09:00:00.000+0000",
+      "ClosedDate": null
+    },
+    "case_closed": {
+      "Id": "5003X00000AbCdGAAV",
+      "CaseNumber": "00104523",
+      "Subject": "Duplicate statement request",
+      "Status": "Closed",
+      "Priority": "Medium",
+      "OwnerId": "00G3X000004ZzYqUAA",
+      "CreatedDate": "2026-06-01T09:00:00.000+0000",
+      "LastModifiedDate": "2026-06-05T09:00:00.000+0000",
+      "ClosedDate": "2026-06-05T09:00:00.000+0000"
+    },
+    "case_custom_status": {
+      "Id": "5003X00000AbCdHAAV",
+      "CaseNumber": "00104524",
+      "Subject": "Awaiting regulator response",
+      "Status": "Regulator Review",
+      "CreatedDate": "2026-07-03T09:00:00.000+0000",
+      "LastModifiedDate": "2026-07-03T09:00:00.000+0000"
+    },
+    "history_status_change": {
+      "Id": "0173X00000AbCdIAAV",
+      "CaseId": "5003X00000AbCdEAAV",
+      "Field": "Status",
+      "OldValue": "New",
+      "NewValue": "Working",
+      "CreatedDate": "2026-07-01T10:00:00.000+0000"
+    },
+    "history_reopen": {
+      "Id": "0173X00000AbCdJAAV",
+      "CaseId": "5003X00000AbCdGAAV",
+      "Field": "Status",
+      "OldValue": "Closed",
+      "NewValue": "Working",
+      "CreatedDate": "2026-06-10T10:00:00.000+0000"
+    },
+    "history_owner_to_queue": {
+      "Id": "0173X00000AbCdKAAV",
+      "CaseId": "5003X00000AbCdEAAV",
+      "Field": "Owner",
+      "OldValue": "0053X000009AbCdAAK",
+      "NewValue": "00G3X000004ZzYqUAA",
+      "CreatedDate": "2026-07-03T10:00:00.000+0000"
+    },
+    "history_owner_to_person": {
+      "Id": "0173X00000AbCdLAAV",
+      "CaseId": "5003X00000AbCdEAAV",
+      "Field": "Owner",
+      "OldValue": "00G3X000004ZzYqUAA",
+      "NewValue": "0053X000009AbCdAAK",
+      "CreatedDate": "2026-07-04T10:00:00.000+0000"
+    },
+    "history_priority_change": {
+      "Id": "0173X00000AbCdMAAV",
+      "CaseId": "5003X00000AbCdEAAV",
+      "Field": "Priority",
+      "OldValue": "Low",
+      "NewValue": "High",
+      "CreatedDate": "2026-07-05T10:00:00.000+0000"
+    },
+    "approval_pending": {
+      "Id": "04g3X0000012AbCAAM",
+      "Status": "Pending",
+      "TargetObjectId": "5003X00000AbCdEAAV",
+      "CreatedDate": "2026-07-06T09:00:00.000+0000",
+      "CompletedDate": null
+    },
+    "approval_removed": {
+      "Id": "04g3X0000012AbDAAM",
+      "Status": "Removed",
+      "TargetObjectId": "5003X00000AbCdGAAV",
+      "CreatedDate": "2026-06-02T09:00:00.000+0000",
+      "CompletedDate": "2026-06-03T09:00:00.000+0000"
+    },
+    "approval_approved": {
+      "Id": "04g3X0000012AbEAAM",
+      "Status": "Approved",
+      "TargetObjectId": "5003X00000AbCdGAAV",
+      "CreatedDate": "2026-06-02T09:00:00.000+0000",
+      "CompletedDate": "2026-06-04T09:00:00.000+0000"
+    },
+    "queue_group": {
+      "Id": "00G3X000004ZzYqUAA",
+      "Name": "Payments Queue",
+      "Type": "Queue",
+      "LastModifiedDate": "2026-06-01T09:00:00.000+0000"
+    },
+    "role_group": {
+      "Id": "00G3X000004ZzYrUAA",
+      "Name": "Regional Managers",
+      "Type": "Role",
+      "LastModifiedDate": "2026-06-01T09:00:00.000+0000"
+    }
+  },
+
+  "confluence": {
+    "page": {
+      "id": "745634",
+      "type": "page",
+      "title": "Payment batch runbook",
+      "space": {"key": "OPS"},
+      "version": {"number": 7, "when": "2026-07-10T11:22:33.000Z"},
+      "_links": {"webui": "/spaces/OPS/pages/745634/Payment+batch+runbook"}
+    }
+  },
+
+  "sharepoint": {
+    "file": {
+      "id": "01ABCDEF1234567890",
+      "name": "reconciliation-procedure.docx",
+      "webUrl": "https://contoso.sharepoint.com/sites/ops/Shared%20Documents/reconciliation-procedure.docx",
+      "eTag": "\"{GUID},7\"",
+      "lastModifiedDateTime": "2026-07-11T08:00:00Z",
+      "file": {"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+    },
+    "folder": {
+      "id": "01ABCDEF1234567891",
+      "name": "Procedures",
+      "webUrl": "https://contoso.sharepoint.com/sites/ops/Shared%20Documents/Procedures",
+      "lastModifiedDateTime": "2026-07-11T08:00:00Z",
+      "folder": {"childCount": 12}
+    },
+    "page": {
+      "id": "01ABCDEF1234567892",
+      "title": "Operations home",
+      "webUrl": "https://contoso.sharepoint.com/sites/ops/SitePages/Home.aspx",
+      "lastModifiedDateTime": "2026-07-12T08:00:00Z"
+    }
+  },
+
+  "slack": {
+    "thread": {
+      "thread_id": "C0123456789:1720000000.000100",
+      "channel_name": "payments-ops",
+      "title": "Batch job failing again",
+      "permalink": "https://example.slack.com/archives/C0123456789/p1720000000000100",
+      "last_ts": "2026-07-14T16:00:00Z",
+      "participants": ["Sam Rivera", "Priya Nadar", "Alex Chen"]
+    },
+    "channel": {
+      "id": "C0123456789",
+      "name": "payments-ops",
+      "member_count": 23,
+      "updated_at": "2026-07-01T08:00:00Z"
+    }
+  },
+
+  "teams": {
+    "thread": {
+      "thread_id": "19:team123@thread.tacv2/19:channel456:1720000000000",
+      "channel_name": "Payments Ops",
+      "title": "Batch job failing again",
+      "web_url": "https://teams.microsoft.com/l/message/19:channel456/1720000000000",
+      "last_ts": "2026-07-14T16:00:00Z",
+      "participants": ["Sam Rivera", "Priya Nadar"]
+    },
+    "channel": {
+      "id": "19:channel456@thread.tacv2",
+      "displayName": "Payments Ops",
+      "member_count": 18,
+      "lastModifiedDateTime": "2026-07-01T08:00:00Z"
+    }
+  },
+
+  "github": {
+    "commit": {
+      "kind": "commit",
+      "repo_id": "acme/payments",
+      "sha": "9f2c1ab7de45",
+      "title": "Retry batch submit on transient failure",
+      "committed_at": "2026-07-08T14:00:00Z"
+    },
+    "file": {
+      "kind": "file",
+      "repo_id": "acme/payments",
+      "sha": "9f2c1ab7de45",
+      "path": "src/batch/submit.py",
+      "committed_at": "2026-07-08T14:00:00Z"
+    },
+    "repo": {
+      "repo_id": "acme/payments",
+      "name": "payments"
+    }
+  }
+}

@@ -21,10 +21,6 @@ from pathlib import Path
 import pytest
 
 from app.provenance import EvidencePointer
-from discovery.concepts.mappers import (
-    MAPPER_OBSERVED_AT,
-    map_service_cloud_approvals,
-)
 from discovery.concepts.model import ActorGroup, Approval, EntityReference
 from discovery.concepts.portable_detectors import (
     detect_approval_bottleneck,
@@ -33,6 +29,66 @@ from discovery.concepts.portable_detectors import (
 from discovery.detectors import approval_delay, permission_bottleneck
 
 ORG_ID = "acme"
+
+# ── Proof-scaffold mapper (2.0-B4 T3) ───────────────────────────────────────────
+#
+# This maps the golden `approval_processes` block onto Approval + ActorGroup concepts
+# to FEED the portability proof below. It lives in the test, not in production: T2's
+# `discovery/concepts/mappers/` package is the sole connector→concept layer, and it
+# maps a single ProcessInstance record (map_process_instance_approval). This proof
+# instead works on the AGGREGATE, detector-visible `approval_processes` block — the
+# exact shape the service_cloud approval detectors (approval_delay / permission_
+# bottleneck) read — carrying the source's pre-computed measurements
+# (avg_delay_days / bottleneck_score / pending_count) on the concept's `attributes`
+# bag, and the approver_count as a normalised ActorGroup.member_count. Deterministic
+# so the proof compares byte-for-byte.
+MAPPER_OBSERVED_AT = "2026-01-01T00:00:00Z"
+_SF = "salesforce"
+
+
+def _observed_provenance(source_artifact: str) -> dict:
+    return EvidencePointer.observed(
+        source_system=_SF,
+        source_artifact=source_artifact,
+        source_timestamp=MAPPER_OBSERVED_AT,
+    ).to_dict()
+
+
+def map_service_cloud_approvals(sf_data, *, org_id, observed_at=MAPPER_OBSERVED_AT):
+    """Golden `approval_processes` block → [ActorGroup, Approval] per process, in
+    order (group before approval). approver_count → ActorGroup.member_count (a
+    normalised aggregate, never a roster); the source scores ride on Approval.attributes."""
+    if not org_id:
+        raise ValueError("org_id is required — every concept is org-scoped")
+    out = []
+    for ap in sf_data.get("approval_processes") or []:
+        process_name = str(ap.get("process_name") or "")
+        anchor = process_name or f"approval-process-{len(out)}"
+        approver_count = int(ap.get("approver_count", 0) or 0)
+        pending_count = int(ap.get("pending_count", 0) or 0)
+        avg_delay_days = float(ap.get("avg_delay_days", 0.0) or 0.0)
+        bottleneck_score = float(ap.get("bottleneck_score", 0.0) or 0.0)
+        provenance = _observed_provenance(anchor)
+        out.append(ActorGroup(
+            org_id=org_id, source_system=_SF, signal_id=f"approval-group:{anchor}",
+            observed_at=observed_at, provenance=provenance,
+            group_type="role", name=anchor, member_count=approver_count,
+        ))
+        out.append(Approval(
+            org_id=org_id, source_system=_SF, signal_id=f"approval:{anchor}",
+            observed_at=observed_at, provenance=provenance,
+            decision="pending" if pending_count > 0 else "approved",
+            approval_type="other",
+            approver_group=EntityReference(
+                entity_type="team", source_system=_SF,
+                source_record_id=anchor, display_name=process_name or None,
+            ),
+            attributes={
+                "process_name": process_name, "avg_delay_days": avg_delay_days,
+                "bottleneck_score": bottleneck_score, "pending_count": pending_count,
+            },
+        ))
+    return out
 GOLDEN = (
     Path(__file__).resolve().parents[1]
     / ".."

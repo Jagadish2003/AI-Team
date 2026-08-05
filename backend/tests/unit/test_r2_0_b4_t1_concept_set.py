@@ -369,14 +369,26 @@ def test_only_supported_counts_as_conformance():
     assert supported.conforms is True
 
 
-def test_nothing_claims_supported_yet_which_is_the_honest_state_at_t1():
-    """T1 defines the set, the contracts and this mechanism; the mappers are T2/T3.
-    A `supported` here would be a claim with no code behind it."""
+def test_every_supported_claim_points_at_a_registered_mapper():
+    """T1 shipped with nothing `supported`, because no mapper existed; 2.0-B4 T2 built
+    them. The invariant that survives the transition is the one T1's version was
+    standing in for: a `supported` claim must point at code that exists.
+
+    Kept here (rather than only in the T2 suite) because it is a property of the
+    conformance MECHANISM: the whole point of requiring a mapper name is that the name
+    resolves."""
+    from discovery.concepts import mappers as mp
+
     for connector_id, decl in conf.CONFORMANCE.items():
-        assert decl.supported == (), (
-            f"{connector_id} claims support before a mapper exists"
-        )
-    assert all(not v for v in conf.conformance_summary()["supported_by_concept"].values())
+        for position in decl.concepts:
+            if not position.conforms:
+                continue
+            resolved = mp.resolve_mapper(position.mapper)
+            assert resolved.connector_id == connector_id, (
+                f"{connector_id}/{position.concept} names a mapper registered for "
+                f"{resolved.connector_id}"
+            )
+            assert resolved.concept == position.concept
 
 
 def test_gap_and_not_applicable_are_reported_differently():
@@ -425,8 +437,17 @@ def test_declarations_are_pinned_to_the_concept_set_version_they_were_written_ag
 
 
 def test_connectors_supporting_reads_code_not_intent():
+    """Returns only `supported`, never `declared` — a detector pointed at a connector
+    with no mapper would run, find nothing, and report the emptiness as an answer."""
     for concept in C.CONCEPT_SET:
-        assert conf.connectors_supporting(concept) == (), "no mappers exist at T1"
+        supporting = conf.connectors_supporting(concept)
+        for connector_id in supporting:
+            assert conf.CONFORMANCE[connector_id].position(concept).conforms
+        declared_only = [
+            cid for cid, decl in conf.CONFORMANCE.items()
+            if decl.position(concept).status == conf.STATUS_DECLARED
+        ]
+        assert not (set(supporting) & set(declared_only))
     with pytest.raises(KeyError, match="not a normalised concept"):
         conf.connectors_supporting("sandwich")
 

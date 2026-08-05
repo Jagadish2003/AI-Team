@@ -219,12 +219,159 @@ ingestion does not ship cannot conform, because there is nothing to conform.
 
 ---
 
+# Connector mapping (2.0-B4 T2)
+
+T1 made the target exist. T2 maps the connectors onto it, and records at FIELD level
+what each one cannot carry.
+
+> **AC5** — *Unmappable connector concepts are recorded as declared gaps, visible to
+> pack authors — never silently approximated.*
+
+## Where the code lives
+
+| Module | Job |
+|---|---|
+| `discovery/concepts/mappers/__init__.py` | the mapper registry — `@maps(connector, concept)` registers at definition; `resolve_mapper` turns a conformance claim into a verifiable reference |
+| `discovery/concepts/mappers/_common.py` | provenance spine, group-reference funnel, timestamp passthrough — shared so they cannot drift per connector |
+| `discovery/concepts/mappers/servicenow.py` | the richest source: work item, actor group, assignment, state transition, CI reference |
+| `discovery/concepts/mappers/jira.py` | work item, attachment, issue reference |
+| `discovery/concepts/mappers/salesforce.py` | case, case history (transition + assignment), ProcessInstance approval, queue, record reference |
+| `discovery/concepts/mappers/content.py` | Confluence, SharePoint, Slack, Teams, GitHub — artifacts, channels, references |
+| `discovery/concepts/mappers/cloud_events.py` | AWS / Azure — the resource reference, and nothing else |
+| `discovery/concepts/gaps.py` | the AC5 surface: the concept-first report, and `assert_no_approximation` |
+| `app/routes_concepts.py` | `GET /api/concepts/{contracts,conformance,gaps,by-concept,connectors/{id}}` |
+
+## What a mapper is
+
+A pure function `(org_id, record, **ctx) -> concept | None`. No I/O, no client, no
+environment, no DB — the same posture as MSP-B0's `reference_mappers`, and what lets a
+golden fixture pin the whole normalised output. A structural test walks the package's
+AST and fails the build on an `os.environ` read or on any `app.*` import other than the
+pure `provenance` dataclass.
+
+Three rules, each enforced by a test rather than asserted:
+
+1. **A missing field stays `None`** — never defaulted to something plausible.
+2. **An unmapped native value raises** — the model's vocabulary check is not caught and
+   downgraded to `"other"`, because a silent `"other"` is the approximation AC5 exists
+   to prevent.
+3. **An individual is never turned into a group.** Where a source records only a person,
+   the group-shaped field stays `None` and the gap is declared.
+
+## Field-level gaps
+
+T1's four statuses answer *can this connector produce this concept at all?* Building the
+mappers showed the real question is finer — *ServiceNow supports `state_transition`, but
+can it tell me which group moved the item?* So a declaration also carries `FieldGap`
+entries with a `kind`:
+
+* **`absent`** — never populated, for any record;
+* **`partial`** — populated only under a stated condition.
+
+A field gap must name a real contract field, must carry a reason, and cannot sit on a
+**required** field beside a `supported` claim (a connector that cannot populate a
+required field does not support the concept). `assert_no_approximation` raises if a
+mapper populates an `absent` field; `partial` never raises, because both branches of a
+stated condition are legal.
+
+### Every field gap currently declared
+
+| Connector | Concept | Field | Kind | Why |
+|---|---|---|---|---|
+| servicenow | `state_transition` | `actor_group` | absent | the audit row records that the state changed, not who changed it; the only mover field is an individual |
+| servicenow | `assignment` | `assigned_to` | partial | the audit row stores the group's NAME, not its sys_id, so the reference is name-keyed by the source's own construction |
+| servicenow | `assignment` | `hop_index` | partial | position in the chain is a property of the ordered history, supplied by the caller mapping the sequence |
+| jira | `work_item` | `assigned_group` | absent | Jira assigns to a person; `JIRA_TEAM_FIELD` is per-deployment config, not a guaranteed field |
+| jira | `work_item` | `closed_at` | absent | Jira has no close event separate from resolution; mirroring it would give a resolve-to-close detector a manufactured zero |
+| salesforce | `work_item` | `assigned_group` | partial | only when `OwnerId` is a Queue (`00G`); a person-owned case has no group to name |
+| salesforce | `work_item` | `resolved_at` | absent | Salesforce records `ClosedDate` only |
+| salesforce | `state_transition` | `actor_group` | absent | `CaseHistory` records the user who made the change, never a group |
+| salesforce | `assignment` | `assigned_to` | partial | only when the new owner is a Queue; a handoff to a person still counts the hop |
+| salesforce | `approval` | `approver_group` | absent | the approver is on `ProcessInstanceWorkitem.ActorId`, a User in the common configuration |
+| slack / teams | `artifact` | `revision` | absent | a thread has no version; an edit re-renders the whole thread |
+
+`approval_type` on Salesforce is deliberately **not** a field gap: it is always `other`
+because Salesforce does not classify a process, and the field IS populated — with the
+vocabulary's neutral value — so calling it absent would be false. That fact lives in the
+position's `reason`, which the API serves alongside the gaps.
+
+## Mapping decisions worth knowing
+
+* **The ServiceNow `{value, display_value}` trap.** Datetimes and class identifiers take
+  the RAW half (canonical `YYYY-MM-DD HH:MM:SS` UTC); names and states take the display
+  half. The mapper imports `servicenow.py`'s own accessors rather than re-deriving them,
+  and the golden fixture's two halves differ deliberately so reading the wrong one fails.
+* **Cancelled is not resolved, on both sources.** ServiceNow state 8 maps to `cancelled`.
+  Jira files "Won't Do" / "Duplicate" under `statusCategory='done'`, so the mapper reads
+  `resolution.name` as well and routes the abandoning resolutions to `cancelled` —
+  otherwise abandoned work counts as delivered.
+* **An unmapped status raises; an unmapped issue TYPE does not.** Nothing branches
+  open-vs-closed on `work_item_type`, and Jira types are freely invented per project, so
+  `other` is safe there and unsafe for a status.
+* **Salesforce's owner branch is deterministic.** Key prefix `00G` is a Group (a Queue),
+  `005` is a User — so the group-vs-individual question that forces a gap on Jira is
+  answerable here from the id itself, with no name matching.
+* **A channel is a `team`, never a `queue`.** Work is not routed to or drawn from a chat
+  channel, and a queue-ageing detector reading one as a queue would report backlog that
+  does not exist.
+* **Cloud events map one concept only.** An `OperationalEvent` is already the right
+  normalised shape for an alarm; re-expressing it as a `work_item` or a work-item
+  `state_transition` would let an ageing detector measure the dwell time of a server. The
+  resource reference is the one piece that genuinely crosses source families.
+* **`entity_id` is never set by a mapper.** Resolution is the graph's decision; asserting
+  one would claim a resolution nobody made.
+
+## Reading the gaps
+
+```
+GET /api/concepts/gaps          # both orientations
+GET /api/concepts/by-concept    # "which sources can carry my detector?"
+GET /api/concepts/connectors/jira
+```
+
+In code: `concepts_usable_by("servicenow")`, `unpopulated_fields("servicenow",
+"state_transition")`, and `connectors_for_detector("work_item", "actor_group")` — which
+answers T3's portability question from the declarations rather than by trying it.
+
+## Current coverage
+
+| Concept | Supported by |
+|---|---|
+| `entity_reference` | all ten non-database connectors |
+| `artifact` | confluence, github, jira, sharepoint, slack, teams |
+| `actor_group` | salesforce, servicenow, slack, teams |
+| `work_item` | jira, salesforce, servicenow |
+| `state_transition` | salesforce, servicenow |
+| `assignment` | salesforce, servicenow |
+| `approval` | salesforce |
+
+Ten `declared` entries remain, each naming a source that carries the concept and a read
+the connector does not yet perform — a work list, not a formality. The largest are
+ServiceNow approvals (`sysapproval_approver` is unread), the Jira changelog (no
+`expand=changelog`), GitHub's per-PR surface, and the native databases, whose schemas are
+per-customer.
+
+---
+
+## What T2 does not do
+
+* **No detector porting.** AC2/AC3 (two detectors ported, one running across three source
+  families) are T3. `connectors_for_detector` is the surface they will read.
+* **No CI conformance-fixture gate.** AC4 is separate; the golden fixture here
+  (`discovery/tests/fixtures/concept_mapping_samples.json`) is the shape that gate will
+  require of every connector.
+* **No connector read-scope changes.** Every mapper reads fields the connector already
+  requests. A concept needing a new read is `declared`, not mapped — mapping a field
+  nobody fetches would produce a concept that is always empty.
+
+---
+
 ## Detector portability (2.0-B4 T3 / AT-812 — AC2)
 
 **AC2:** *two existing detectors, ported to normalised concepts, produce identical
-findings on golden fixtures.* This is the proof that the concept set is not just a
-data model but a *portable* one — a detector re-expressed against concepts behaves
-exactly as its connector-bound original.
+findings on golden fixtures.* This proves the concept set is not just a data model but a
+*portable* one — a detector re-expressed against concepts behaves exactly as its
+connector-bound original.
 
 Two shipped detectors are ported in
 [`backend/discovery/concepts/portable_detectors.py`](../backend/discovery/concepts/portable_detectors.py):
@@ -235,37 +382,28 @@ Two shipped detectors are ported in
 | `PERMISSION_BOTTLENECK` — [`detectors/permission_bottleneck.py`](../backend/discovery/detectors/permission_bottleneck.py) | `detect_permission_bottleneck` | `Approval` + the `ActorGroup` its `approver_group` points at |
 
 The originals read `sf_data['approval_processes'][i]['avg_delay_days']` — bound, by the
-field names they know, to Salesforce. The ports read a concept stream: a flat list of
-`ConceptSignal` filtered to `Approval` gates and their approver `ActorGroup`s. They name
-no source and no source field path (a test sweeps the module to prove it), and they emit
-nothing when handed the raw connector dicts — they respond only to concept instances.
+field names they know, to Salesforce. The ports read a concept stream and name no source
+and no source field path (a test sweeps the module to prove it); they emit nothing when
+handed the raw connector dicts. `portable_detectors.py` is self-contained — it imports the
+threshold constants from the original modules (so the calibration is provably identical and
+cannot drift; the one thing that differs is the shape the detector reads) and needs no
+mapper. `approver_count` is read from the normalised `ActorGroup.member_count`; the source's
+pre-computed scores (`avg_delay_days`, `bottleneck_score`, `pending_count`) ride on the
+`Approval.attributes` bag (B0's `payload` rule).
 
-**Same logic, only the input is normalised.** The ports import the threshold constants
-from the original modules rather than re-declaring them, so the calibration is provably
-identical and cannot drift: change a threshold in the original and the port changes with
-it. The one thing that differs is the shape the detector reads.
-
-**Where the discriminating numbers live.** `approver_count` — what `PERMISSION_BOTTLENECK`
-keys on — is read from the normalised `ActorGroup.member_count`, a first-class concept
-aggregate, and the mapper drops the source's individual approver roster entirely (groups,
-never individuals). The source's own pre-computed scores (`avg_delay_days`,
-`bottleneck_score`, `pending_count`) ride on the `Approval.attributes` bag — B0's `payload`
-rule: the source computed them, so the faithful mapping carries them rather than fabricating
-per-approval detail the source never recorded. The port never reaches into a connector dict
-for any of them.
-
-The mapper is [`backend/discovery/concepts/mappers.py`](../backend/discovery/concepts/mappers.py)
-(`map_service_cloud_approvals`). It is a *proof* mapper over a detector-visible shape, and
-deliberately does **not** flip the Salesforce connector's conformance to `supported` — the
-conformance registry tracks the shipping ingest mapper, which is T2's remit.
-
-The proof — [`backend/tests/unit/test_r2_0_b4_t3_detector_portability.py`](../backend/tests/unit/test_r2_0_b4_t3_detector_portability.py)
-— feeds the golden fixture
+**Where the concepts come from.** The proof — 
+[`backend/tests/unit/test_r2_0_b4_t3_detector_portability.py`](../backend/tests/unit/test_r2_0_b4_t3_detector_portability.py) —
+carries a small scaffold mapper that turns the golden `approval_processes` block
 ([`concepts/fixtures/portability_approvals_golden.json`](../backend/discovery/concepts/fixtures/portability_approvals_golden.json))
-to both the original and the port and asserts `DetectorResult` lists are byte-identical, across
-every firing branch (combined-delay, severe-delay, concentration-only, the `approver_count == 0`
-guard, and a non-firing negative control). An explicit expected firing set is asserted against
-**both** sides, so a shared bug that agreed on the wrong answer would still fail.
+into `Approval`+`ActorGroup` concepts. It lives in the test, not in production: the T2
+[`mappers/`](../backend/discovery/concepts/mappers/) package is the sole connector→concept
+layer, and this proof works on the AGGREGATE block the service_cloud approval detectors
+actually read — a different granularity than T2's per-`ProcessInstance`
+`map_process_instance_approval`. The test feeds the golden to both the original and the port
+and asserts `DetectorResult` lists are byte-identical across every firing branch
+(combined-delay, severe-delay, concentration-only, the `approver_count == 0` guard, and a
+non-firing negative control), with an explicit expected firing set asserted against **both**
+sides so a shared bug cannot pass vacuously.
 
-**Not in this ticket.** AC3 (one concept-native detector running unchanged across three source
-families) is a separate ticket; it builds on this port and the T2 per-connector mappers.
+**Not in this ticket.** AC3 (one concept-native detector running unchanged across three
+source families) is 2.0-B4 T4.
