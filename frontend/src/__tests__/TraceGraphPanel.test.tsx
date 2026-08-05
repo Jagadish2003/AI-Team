@@ -12,12 +12,10 @@
  */
 import React from 'react';
 import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DataCacheProvider } from '../lib/dataCache';
 import type { TraceGraphResponse, TraceHop } from '../types/traceGraph';
+import detailSource from '../components/analyst_review/OpportunityDetail.tsx?raw';
 
 const { fetchTraceGraphMock } = vi.hoisted(() => ({
   fetchTraceGraphMock: vi.fn(),
@@ -314,11 +312,10 @@ describe('TraceGraphPanel', () => {
   // crashed (40 of them). Testing the panel in isolation says nothing about
   // whether the page meant to host it can mount.
   describe('OpportunityDetail wiring', () => {
-    const detailSource = readFileSync(
-      resolve(dirname(fileURLToPath(import.meta.url)),
-              '../components/analyst_review/OpportunityDetail.tsx'),
-      'utf8'
-    );
+    // Read via Vite's `?raw` rather than node:fs — the frontend tsconfig types
+    // only `vite/client` (no @types/node), so node:* imports fail `tsc -b` and
+    // break the build gate. `?raw` is declared by vite/client and works in both
+    // vitest and the build.
 
     it('imports the source-trace panel it renders', () => {
       // Both halves: rendering without importing is the defect, and importing
