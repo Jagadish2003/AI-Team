@@ -15,6 +15,12 @@ configuration, and this tool only ever reads it.
     python scripts/pack_sdk.py test ./my_pack       # fixtures produce what you expect?
     python scripts/pack_sdk.py check ./my_pack      # all three, as installation runs them
 
+    # Ship it (2.0-C3 T4 / AT-839)
+    PACK_BUNDLE_SIGNING_KEY=<base64 32-byte ed25519 seed> \
+        python scripts/pack_sdk.py package ./my_pack --out ./my_pack.aiqpack \
+            --key-id acme-publishing-2026
+    python scripts/pack_sdk.py verify ./my_pack.aiqpack
+
     # Reference
     python scripts/pack_sdk.py primitives           # the primitive library + parameters
     python scripts/pack_sdk.py schema               # the manifest schema reference
@@ -22,6 +28,11 @@ configuration, and this tool only ever reads it.
 
 Every command exits non-zero on failure, so it drops straight into CI. Add
 ``--json`` to any of them for a machine-readable report.
+
+``package`` runs ``check`` first and refuses to build a bundle that would fail
+installation — shipping an artifact the platform will reject is worse than not
+shipping. The signing key is read from the environment only: it is publisher key
+material and must never reach a repository, a deployment, or a log line.
 """
 from __future__ import annotations
 
@@ -32,6 +43,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from discovery.packs.sdk.bundle import (  # noqa: E402
+    BUNDLE_SUFFIX,
+    BundleError,
+    build_bundle,
+    verify_bundle,
+)
 from discovery.packs.sdk.harness import (  # noqa: E402
     FIXTURES_DIRNAME,
     PACK_MANIFEST_FILENAME,
@@ -183,6 +200,60 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0 if report.ok else 1
 
 
+def cmd_package(args: argparse.Namespace) -> int:
+    """Build a signed bundle — but only from a pack that passes the full check."""
+    target = Path(args.directory)
+    report = check_pack_directory(target)
+    if not report.ok:
+        print("Refusing to package: the pack does not pass its own checks.")
+        for reason in report.reasons():
+            print(f"  {reason}")
+        return 1
+
+    default_name = f"{report.manifest.pack_id}-{report.manifest.pack_version}{BUNDLE_SUFFIX}"
+    output = Path(args.out) if args.out else target.parent / default_name
+    try:
+        verification = build_bundle(
+            target,
+            output,
+            signing_key=args.signing_key,
+            key_id=args.key_id,
+            publisher=args.publisher or "",
+        )
+    except BundleError as exc:
+        print(f"Packaging failed: {exc}")
+        return 1
+
+    if verification.ok:
+        print(
+            f"Packaged {verification.pack_id} v{verification.pack_version} -> {output}"
+        )
+        print(f"  files:  {len(verification.files)}")
+        print(f"  digest: {verification.bundle_digest}")
+        print(f"  key id: {verification.key_id}")
+    else:
+        # The bundle was written but does not verify here — almost always because
+        # this machine does not trust the key it was just signed with. Say so
+        # plainly rather than implying the artifact is broken.
+        print(f"Packaged {output}, but it does not verify on this machine:")
+        print(f"  [{verification.reason}] {verification.detail}")
+    _emit(verification.to_dict(), args.json)
+    return 0 if verification.ok or args.allow_untrusted else 1
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    verification = verify_bundle(Path(args.bundle))
+    if verification.ok:
+        print(
+            f"Bundle verifies: {verification.pack_id} v{verification.pack_version} "
+            f"({len(verification.files)} files, signed by {verification.key_id!r})"
+        )
+    else:
+        print(f"Bundle does NOT verify [{verification.reason}]: {verification.detail}")
+    _emit(verification.to_dict(), args.json)
+    return 0 if verification.ok else 1
+
+
 def cmd_primitives(args: argparse.Namespace) -> int:
     catalog = primitive_catalog()
     if args.json:
@@ -262,6 +333,36 @@ def main(argv: list[str] | None = None) -> int:
         sub = subparsers.add_parser(name, help=help_text)
         sub.add_argument("directory", nargs="?", default=".", help="pack directory")
         sub.set_defaults(handler=handler)
+
+    package = subparsers.add_parser(
+        "package", help="build a signed bundle (runs check first)"
+    )
+    package.add_argument("directory", nargs="?", default=".", help="pack directory")
+    package.add_argument("--out", help="output bundle path")
+    package.add_argument("--key-id", default="", help="publisher signing key id")
+    package.add_argument(
+        "--signing-key",
+        default=None,
+        help=(
+            "base64 ed25519 seed; omit to read PACK_BUNDLE_SIGNING_KEY from the "
+            "environment (preferred — a key on the command line lands in shell "
+            "history)"
+        ),
+    )
+    package.add_argument("--publisher", help="publisher name recorded in the bundle")
+    package.add_argument(
+        "--allow-untrusted",
+        action="store_true",
+        help=(
+            "exit 0 even when the freshly built bundle does not verify here, which "
+            "is expected when the signing key is not in this machine's trust list"
+        ),
+    )
+    package.set_defaults(handler=cmd_package)
+
+    verify = subparsers.add_parser("verify", help="verify a signed bundle")
+    verify.add_argument("bundle", help="path to a .aiqpack bundle")
+    verify.set_defaults(handler=cmd_verify)
 
     subparsers.add_parser(
         "primitives", help="list the detector primitive library"

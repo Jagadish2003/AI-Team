@@ -216,6 +216,49 @@ class PackCertificationPolicyChangedPayload(TypedDict, total=False):
     changed_at: NotRequired[str]
 
 
+class PackInstalledPayload(TypedDict, total=False):
+    """2.0-C3 T4 (AT-839) — an authored pack was installed from a signed bundle.
+
+    Carries provenance (bundle digest, publisher key id) and never the bundle
+    itself: the artifact can be large and is partner-supplied, and telemetry is
+    for observing that an install happened, not for storing what was installed.
+    """
+    org_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    pack_version: NotRequired[str]
+    bundle_digest: NotRequired[str]
+    signing_key_id: NotRequired[str]
+    activated: NotRequired[bool]
+    actor_id: NotRequired[str]
+    installed_at: NotRequired[str]
+
+
+class PackInstallRefusedPayload(TypedDict, total=False):
+    """2.0-C3 T4 (AT-839) — an install or activation was refused, and by which gate.
+
+    ``reason`` is the gate (signature / validation / compatibility / policy) and
+    ``failure_count`` how many specific problems it found. The failures themselves
+    stay in the HTTP response and the logs — they can quote manifest content, and
+    telemetry is not the place for partner-supplied text.
+    """
+    org_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    reason: NotRequired[str]
+    failure_count: NotRequired[int]
+    actor_id: NotRequired[str]
+    refused_at: NotRequired[str]
+
+
+class PackActivationChangedPayload(TypedDict, total=False):
+    """2.0-C3 T4 (AT-839) — an installed authored pack was activated or withdrawn."""
+    org_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    pack_version: NotRequired[str]
+    status: NotRequired[str]
+    actor_id: NotRequired[str]
+    changed_at: NotRequired[str]
+
+
 class PackCertificationPolicyRefusedPayload(TypedDict, total=False):
     """2.0-C2 T4 (AT-834) — an activation was refused by the org's policy.
 
@@ -1053,6 +1096,14 @@ register_event_type(
 register_event_type(
     "pack.certification_policy_refused", PackCertificationPolicyRefusedPayload
 )
+# 2.0-C3 T4 (AT-839): authored-pack packaging & installation. `installed` and
+# `activation_changed` record what an owner did; `install_refused` records which
+# gate (signature / validation / compatibility / certification policy) stopped an
+# install, so a refusal is observable in support tooling rather than existing only
+# as an HTTP 409 the caller saw once.
+register_event_type("pack.installed", PackInstalledPayload)
+register_event_type("pack.install_refused", PackInstallRefusedPayload)
+register_event_type("pack.activation_changed", PackActivationChangedPayload)
 # T3-S11-A Sprint 11
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
 # T3-S12-A T7 Sprint 12

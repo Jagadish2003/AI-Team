@@ -1,6 +1,43 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.20
-Date: 2026-08-03
+Version: v1.21
+Date: 2026-08-05
+
+> v1.21 — 2.0-C3 T4 (Pack Packaging & Installation): an authored ("partner") pack
+> installs from a **signed bundle**, gated by C1 compatibility and C2 certification
+> policy. Entirely new routes; no existing response shape changed.
+>
+> **New endpoints**
+> - `POST /api/packs/install` (**owner**, 201) — body
+>   `{ "bundleBase64": string, "activate"?: boolean }`. Returns the installed-pack
+>   record plus `compatibility` (the C1 verdict as evaluated at install) and
+>   `bundle` (`digest`, `keyId`, `fileCount`).
+> - `GET /api/packs/installed` (**viewer+**) — `{ packs: InstalledPack[], count }`.
+> - `PUT /api/packs/installed/{packId}/activation` (**owner**) — body
+>   `{ "active": boolean }`, the TARGET state, so the call is idempotent.
+>
+> **`InstalledPack`**: `packId`, `packName`, `packVersion`, `status`
+> (`installed` | `active` | `inactive`), `active` (boolean), `manifestFingerprint`,
+> `bundleDigest`, `publisher`, `signingKeyId`, `certificationLevel` (always
+> `community` — see below), `certificationLabel`, `requestedCertificationLevel`,
+> `revision`, `installedBy`, `createdAt`, `updatedAt`.
+>
+> **An authored pack is always `community`.** `requestedCertificationLevel` is what
+> the publisher ASKED for; only a CloudFulcrum signature (2.0-C2) grants a level. A
+> consumer must never render the requested level as a badge.
+>
+> **Status codes** — every gate refuses with the gate NAMED in
+> `detail.error`, and `detail.failures[]` lists the specific problems:
+> - **409** `bundle_unverified` (unsigned / tampered / untrusted publisher),
+>   `validation_failed` (manifest schema, author fixtures, or lint),
+>   `incompatible_with_platform`, `certification_policy_violation`,
+>   `reserved_pack_id`;
+> - **400** `bundleBase64` is not valid base64; **413** body above the size cap;
+> - **404** activating a pack that is not installed;
+> - **503** `certification_policy_unavailable` — the floor could not be READ, which
+>   is deliberately distinct from having determined non-compliance.
+>
+> **Withdrawal is never a delete.** `active: false` writes `status: "inactive"`; the
+> record, its manifest, and its bundle provenance remain readable.
 
 > v1.20 — 2.0-C2 T5 (Certification Expiry): a certification now expires on TWO
 > rules — the platform-version scope it was reviewed against, and the age of the
