@@ -7,8 +7,16 @@ different source families without modification.*
 `WorkItem` concept — `is_open` (derived from the coarse `status_category`) and the
 group reference on `assigned_group` — and knows nothing about any connector. It is not
 a port of an existing detector (that was T3); it is written concept-first. Fed
-`WorkItem`s mapped from ServiceNow, Jira, Salesforce and GitHub (four source families;
-AC3 needs three), the SAME function produces a backlog finding per family, unchanged.
+`WorkItem`s mapped from ServiceNow (itsm), Jira (engineering_tracker) and Salesforce
+(crm) — three source families, which is what AC3 requires — the SAME function produces a
+backlog finding per family, unchanged.
+
+Those are the three because they are the three connectors whose `work_item` is
+`supported` in the conformance registry. GitHub carries pull requests and is a fourth
+family in principle, but its `work_item` is `declared`, not `supported`: the connector
+reads PR activity as aggregate metrics rather than per-PR records, so no mapper exists
+and there is nothing honest to feed the detector. Counting it would be exactly the
+overstated claim this story's discipline forbids.
 
 It never branches on a source's identity. `source_system` is used only as a grouping
 DIMENSION (so a mixed multi-family stream yields one finding per family) — there is no
@@ -16,7 +24,7 @@ DIMENSION (so a mixed multi-family stream yields one finding per family) — the
 `tests/unit/test_r2_0_b4_t4_cross_family_run.py` pins.
 
 AC5 shows through the same detector honestly. A family that declares an `actor_group`
-gap (Jira, GitHub) maps its work items with `assigned_group = None`, so the finding
+gap (Jira) maps its work items with `assigned_group = None`, so the finding
 reports those items under `ungrouped_count` rather than inventing a group from an
 individual's name — the gap is visible in the output, never silently approximated.
 """

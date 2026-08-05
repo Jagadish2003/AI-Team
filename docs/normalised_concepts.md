@@ -470,3 +470,82 @@ under `tests/contract` so CI's `pytest tests/contract/` actually runs it. It enf
 The raw→concept correctness of each `supported` mapper is proven by T2's connector-mapping suite
 over its golden samples; this gate does not re-prove that — it pins the per-connector fixture
 discipline that AC4 asks for.
+
+---
+
+# Acceptance validation & the published vocabulary (2.0-B4 T6)
+
+T6 closes the story: it validates AC1–AC5 **together**, on the assembled result, and
+publishes the finished registry as the vocabulary 2.0-C3's partners build against.
+
+## Why a story-level suite when every task already tests itself
+
+T1–T5 each import the module they test and assert against it. That catches a broken
+implementation, but not a claim made in one task that another task's data contradicts —
+which is exactly the defect this ticket found. `concept_detectors.py` advertised
+**four** source families including GitHub; GitHub's `work_item` is `declared`, not
+`supported`, so no mapper exists and nothing honest could be fed from it. T4's own test
+correctly used three. The docstring was an overstated claim with nothing behind it, which
+is the failure mode this whole story exists to prevent, so T6 corrected it and pinned the
+correction: `test_github_is_not_claimed_as_a_work_item_family_anywhere`, plus
+`test_every_family_used_here_actually_declares_support`, which refuses to count any
+family toward AC3 unless the registry says its `work_item` is supported.
+
+The suite is `backend/tests/unit/test_r2_0_b4_t6_acceptance.py`, organised AC by AC. It
+cross-checks task against task: registry against mappers, fixtures against registry,
+ports against their originals, published vocabulary against all of it.
+
+**AC4 is re-validated DB-free.** The T5 CI gate lives in `tests/contract/`, whose
+conftest requires a test database at session start even though the gate needs none — so
+the fixture discipline is also validated in the unit suite, where it can run without a
+database.
+
+## The published vocabulary
+
+`discovery/concepts/sdk_vocabulary.py` → `GET /api/concepts/vocabulary`, documented for
+partners in **`docs/skills_sdk_vocabulary.md`**.
+
+Three obligations shape it, and each one is a deliberate difference from the internal
+registry:
+
+1. **No implementation.** 2.0-C3's governing constraint is that partner packs are
+   declarative configuration — no partner code runs in a customer deployment. Publishing
+   `discovery.concepts.mappers.servicenow:map_incident_work_item` invites exactly the
+   import that constraint forbids, so the partner artifact carries **capability, never a
+   module path**. `/api/concepts/conformance` still names the mapper, because it answers
+   an internal reviewer's question; the two audiences are served differently on purpose,
+   and a test asserts the path appears in one and not the other.
+2. **Pinnable.** `vocabulary_digest()` is a `sha256` over canonical JSON (sorted, no
+   clock, no environment). Everything a partner could observe moves it — a concept, a
+   required field, a vocabulary value, availability gained or withdrawn, a gap appearing.
+   Internal refactors deliberately do not, because a digest that churned on our
+   refactors would train partners to ignore it. This is what makes C1's "declares the
+   normalised concepts it needs" enforceable rather than advisory.
+3. **Honest about availability.** Only `supported` is published as usable. Advertising
+   `declared` would send a partner to write a detector that runs, finds nothing, and
+   reports the emptiness as an answer — AC5's failure mode arriving through the front
+   door. Field gaps travel with every available source.
+
+`SDK_HANDOFF` records what C3 inherits and what it does not (the primitive library, the
+manifest schema, packaging — all C3's own), so the SDK story starts from a stated
+boundary rather than an assumption.
+
+**The partner doc cannot rot.** It carries an availability table, which is a snapshot, so
+`TestPartnerDocumentationCannotRot` parses that table and compares it concept by concept
+to the live registry — the same reasoning as C3's AC6 requiring its worked example to
+build in CI. A negative control proves it trips on drift.
+
+## Recorded limitation: what AC2's proof actually covers
+
+AC2 is proven behaviour-identical, on the input the original detectors consume — the
+aggregate `approval_processes` block, whose pre-computed `avg_delay_days` /
+`bottleneck_score` no live connector RECORD carries. The concept stream for that
+comparison is therefore built by a mapper defined in T3's test file, not by the
+registered `ProcessInstance` mapper.
+
+This is a seam, and it is recorded rather than hidden. Proving the port through the
+registered record-level mapper would be a *weaker* claim, not a stronger one, because the
+original detector cannot run on that input at all — there would be nothing to compare
+against. Adding a registered mapper for the aggregate shape was considered and refused
+for the reason T2 states: mapping a shape no live connector emits produces a concept
+that is always empty.

@@ -79,6 +79,30 @@ from .mappers import (
     registry_summary,
     resolve_mapper,
 )
+from .concept_detectors import (
+    DEFAULT_MIN_OPEN,
+    detect_open_work_item_backlog,
+)
+from .conformance_fixtures import (
+    CONFORMANCE_FIXTURE_DIR,
+    available_fixture_ids,
+    load_all_fixtures,
+    load_fixture,
+)
+from .portable_detectors import (
+    detect_approval_bottleneck,
+    detect_permission_bottleneck,
+)
+from .sdk_vocabulary import (
+    SDK_HANDOFF,
+    STABILITY_CONTRACT,
+    VOCABULARY_VERSION,
+    concepts_available_from,
+    publish_vocabulary,
+    sources_for_required_concepts,
+    unsupported_requirements,
+    vocabulary_digest,
+)
 from .model import (
     ACTOR_GROUP_TYPES,
     APPROVAL_DECISIONS,
@@ -188,4 +212,23 @@ __all__ = [
     "field_gaps_for",
     "unpopulated_fields",
     "gap_summary",
+    # portable + concept-native detectors (T3 / T4)
+    "detect_approval_bottleneck",
+    "detect_permission_bottleneck",
+    "detect_open_work_item_backlog",
+    "DEFAULT_MIN_OPEN",
+    # conformance fixtures (T5)
+    "CONFORMANCE_FIXTURE_DIR",
+    "available_fixture_ids",
+    "load_fixture",
+    "load_all_fixtures",
+    # the published partner vocabulary (T6)
+    "VOCABULARY_VERSION",
+    "SDK_HANDOFF",
+    "STABILITY_CONTRACT",
+    "publish_vocabulary",
+    "vocabulary_digest",
+    "concepts_available_from",
+    "sources_for_required_concepts",
+    "unsupported_requirements",
 ]

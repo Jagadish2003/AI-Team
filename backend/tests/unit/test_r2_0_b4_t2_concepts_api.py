@@ -119,6 +119,32 @@ def test_unknown_connector_404s_and_names_the_declared_set(client):
     assert "servicenow" in detail
 
 
+def test_vocabulary_endpoint_serves_the_partner_contract(client):
+    """2.0-B4 T6: the published vocabulary, with a pinnable digest."""
+    body = client.get("/api/concepts/vocabulary").json()
+    assert body["digest"].startswith("sha256:")
+    assert set(body["concepts"]) == set(M.CONCEPT_SET)
+    assert body["vocabularies"]["STATUS_CATEGORIES"]
+    assert body["stability_contract"] and body["sdk_handoff"]["not_provided_by_b4"]
+
+
+def test_vocabulary_endpoint_leaks_no_mapper_path(client):
+    """The partner surface publishes capability; /conformance publishes the mapper. The
+    two audiences are served differently on purpose."""
+    import json as _json
+
+    vocabulary = _json.dumps(client.get("/api/concepts/vocabulary").json())
+    assert "discovery.concepts.mappers" not in vocabulary
+    conformance = _json.dumps(client.get("/api/concepts/conformance").json())
+    assert "discovery.concepts.mappers" in conformance
+
+
+def test_vocabulary_endpoint_is_stable_across_calls(client):
+    """A digest that moved between two reads could not be pinned."""
+    first = client.get("/api/concepts/vocabulary").json()["digest"]
+    assert first == client.get("/api/concepts/vocabulary").json()["digest"]
+
+
 def test_every_endpoint_is_read_only(client):
     """The registry is code. A write route would imply it can be edited at runtime."""
     for method in ("post", "put", "patch", "delete"):
