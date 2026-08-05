@@ -224,11 +224,7 @@ function checkpointProgressRows(item: ConnectorHealthItem): Array<{ label: strin
 
 function checkpointSupportingRows(item: ConnectorHealthItem): Array<{ label: string; value: string }> {
   const progressRows = checkpointProgressRows(item);
-  const rows: Array<{ label: string; value: string }> = progressRows.map(({ label, value }) => ({ label, value }));
-  if (item.checkpoint_streams && item.checkpoint_streams > 1) {
-    rows.push({ label: "Streams tracked", value: `${item.checkpoint_streams} streams; newest checkpoint shown` });
-  }
-  return rows;
+  return progressRows.map(({ label, value }) => ({ label, value }));
 }
 
 function sentenceCase(value: string): string {
