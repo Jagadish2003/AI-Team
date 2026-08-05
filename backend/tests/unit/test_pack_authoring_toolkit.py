@@ -63,11 +63,12 @@ from discovery.packs.sdk.toolkit import (  # noqa: E402
 EXAMPLES = (
     Path(__file__).resolve().parents[2] / "discovery" / "packs" / "sdk" / "examples"
 )
+EXAMPLE_PACK = EXAMPLES / "example_service_desk"
 
 
 @pytest.fixture()
 def example_document():
-    return json.loads((EXAMPLES / "example_partner_pack.json").read_text("utf-8"))
+    return json.loads((EXAMPLE_PACK / "pack.json").read_text("utf-8"))
 
 
 @pytest.fixture()
@@ -449,7 +450,7 @@ def test_lint_rule_reference_is_serialisable_and_complete():
 
 def test_lint_findings_are_all_actionable():
     """Every finding names a path and a reason — 'invalid pack' helps nobody."""
-    document = json.loads((EXAMPLES / "example_partner_pack.json").read_text("utf-8"))
+    document = json.loads((EXAMPLE_PACK / "pack.json").read_text("utf-8"))
     document["detectors"][0]["labels"]["summary"] = "Grouped by assignee."
     for finding in lint_pack(parse_manifest(document)).findings:
         assert finding.path and finding.message

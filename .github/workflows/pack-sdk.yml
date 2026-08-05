@@ -1,0 +1,108 @@
+name: Pack SDK
+
+# 2.0-C3 T5 (AT-840) — the partner-facing front door, kept honest by CI.
+#
+# The worked example pack is built, tested, linted, packaged, and installed on
+# every change, and the generated reference blocks in docs/partner/ are compared
+# against the platform's own declarations. Partner documentation that drifts from
+# reality is worse than none, so both are a build gate rather than a review item.
+#
+# Separate from contract-tests.yml deliberately: nothing here needs a database,
+# and it must also run when only docs/partner/ changed.
+
+on:
+  pull_request:
+    paths:
+      - "backend/discovery/packs/**"
+      - "backend/app/pack_installation.py"
+      - "backend/scripts/pack_sdk.py"
+      - "backend/tests/unit/test_pack_*.py"
+      - "backend/tests/unit/test_partner_documentation.py"
+      - "docs/partner/**"
+  push:
+    branches: ["main"]
+    paths:
+      - "backend/discovery/packs/**"
+      - "backend/app/pack_installation.py"
+      - "backend/scripts/pack_sdk.py"
+      - "backend/tests/unit/test_pack_*.py"
+      - "backend/tests/unit/test_partner_documentation.py"
+      - "docs/partner/**"
+
+jobs:
+  pack-sdk:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      PYTHONPATH: "..:."
+      INGEST_MODE: offline
+      AGENTIQ_DISABLE_BACKGROUND_JOBS: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      # The worked example, through the same commands a partner runs.
+      - name: Check the worked example pack
+        run: python scripts/pack_sdk.py check discovery/packs/sdk/examples/example_service_desk
+
+      # A generated reference block edited by hand, or a declaration changed
+      # without regenerating, fails here.
+      - name: Check the partner documentation is current
+        run: python scripts/pack_sdk.py docs
+
+      # An ephemeral key generated for this run only: it proves the packaging path
+      # end to end and is discarded with the runner. No real publisher key ever
+      # reaches CI, and none is needed — trust is per-deployment.
+      - name: Package and verify the worked example
+        run: |
+          python - <<'PY' > /tmp/pack_ci_key
+          import base64
+          from cryptography.hazmat.primitives import serialization
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+          key = Ed25519PrivateKey.generate()
+          print(base64.b64encode(
+              key.private_bytes(
+                  encoding=serialization.Encoding.Raw,
+                  format=serialization.PrivateFormat.Raw,
+                  encryption_algorithm=serialization.NoEncryption(),
+              )
+          ).decode())
+          print(base64.b64encode(
+              key.public_key().public_bytes(
+                  encoding=serialization.Encoding.Raw,
+                  format=serialization.PublicFormat.Raw,
+              )
+          ).decode())
+          PY
+          export PACK_BUNDLE_SIGNING_KEY="$(sed -n 1p /tmp/pack_ci_key)"
+          export PACK_BUNDLE_TRUSTED_KEYS="{\"ci-ephemeral\":\"$(sed -n 2p /tmp/pack_ci_key)\"}"
+          python scripts/pack_sdk.py package \
+            discovery/packs/sdk/examples/example_service_desk \
+            --out /tmp/example_service_desk.aiqpack --key-id ci-ephemeral
+          python scripts/pack_sdk.py verify /tmp/example_service_desk.aiqpack
+
+      - name: Run the SDK test suites
+        run: |
+          pytest -q \
+            tests/unit/test_partner_documentation.py \
+            tests/unit/test_pack_manifest_schema.py \
+            tests/unit/test_pack_primitive_library.py \
+            tests/unit/test_pack_authoring_toolkit.py \
+            tests/unit/test_pack_bundle_packaging.py \
+            tests/unit/test_pack_installation.py

@@ -71,6 +71,7 @@ from discovery.packs.sdk.signals import (  # noqa: E402
 EXAMPLES = (
     Path(__file__).resolve().parents[2] / "discovery" / "packs" / "sdk" / "examples"
 )
+EXAMPLE_PACK = EXAMPLES / "example_service_desk"
 AS_OF = datetime(2026, 6, 30, tzinfo=timezone.utc)
 
 
@@ -84,14 +85,15 @@ def minutes_before(count: int) -> str:
 
 @pytest.fixture()
 def example_manifest():
-    return parse_manifest(json.loads((EXAMPLES / "example_partner_pack.json").read_text("utf-8")))
+    return parse_manifest(json.loads((EXAMPLE_PACK / "pack.json").read_text("utf-8")))
 
 
 @pytest.fixture()
 def example_signal():
-    return signal_set_from_dicts(
-        json.loads((EXAMPLES / "example_partner_signal.json").read_text("utf-8"))
+    case = json.loads(
+        (EXAMPLE_PACK / "fixtures" / "01_busy_service_desk.json").read_text("utf-8")
     )
+    return signal_set_from_dicts(case["signal"])
 
 
 def contract_is_complete(finding) -> bool:
@@ -698,7 +700,7 @@ def test_execution_is_reproducible(example_manifest, example_signal):
 def test_a_disabled_detector_is_reported_not_omitted(example_manifest, example_signal):
     """An author debugging a fixture must be able to tell 'did not fire' from
     'was not run'."""
-    document = json.loads((EXAMPLES / "example_partner_pack.json").read_text("utf-8"))
+    document = json.loads((EXAMPLE_PACK / "pack.json").read_text("utf-8"))
     document["detectors"][0]["enabledByDefault"] = False
     manifest = parse_manifest(document)
     outcome = run_manifest(manifest, example_signal).outcomes[0]

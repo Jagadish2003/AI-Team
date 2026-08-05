@@ -8,7 +8,7 @@ Implementation: `backend/discovery/packs/sdk/primitive_library.py` (the runnable
 primitives), `signals.py` (what they read), `contract.py` (what every finding
 inherits), `execution.py` (running a manifest). Contracts:
 `backend/discovery/packs/sdk/primitives.py` (AT-836). Worked example + seeded
-signal: `backend/discovery/packs/sdk/examples/`. Tests:
+signal: `backend/discovery/packs/sdk/examples/example_service_desk/`. Tests:
 `backend/tests/unit/test_pack_primitive_library.py`.
 
 ---

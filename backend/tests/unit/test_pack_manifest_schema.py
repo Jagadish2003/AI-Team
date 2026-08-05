@@ -70,7 +70,8 @@ EXAMPLE_MANIFEST_PATH = (
     / "packs"
     / "sdk"
     / "examples"
-    / "example_partner_pack.json"
+    / "example_service_desk"
+    / "pack.json"
 )
 
 

@@ -25,6 +25,7 @@ configuration, and this tool only ever reads it.
     python scripts/pack_sdk.py primitives           # the primitive library + parameters
     python scripts/pack_sdk.py schema               # the manifest schema reference
     python scripts/pack_sdk.py rules                # the lint rules and floors
+    python scripts/pack_sdk.py docs --check         # are the partner docs current?
 
 Every command exits non-zero on failure, so it drops straight into CI. Add
 ``--json`` to any of them for a machine-readable report.
@@ -64,6 +65,10 @@ from discovery.packs.sdk.manifest import (  # noqa: E402
     validate_manifest,
 )
 from discovery.packs.sdk.primitives import primitive_catalog  # noqa: E402
+from discovery.packs.sdk.reference_docs import (  # noqa: E402
+    ReferenceDocsError,
+    sync_docs,
+)
 from discovery.packs.sdk.scaffold import ScaffoldError, scaffold_pack  # noqa: E402
 from discovery.packs.sdk.toolkit import check_pack_directory  # noqa: E402
 
@@ -303,6 +308,33 @@ def cmd_rules(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_docs(args: argparse.Namespace) -> int:
+    """Check (or regenerate) the generated reference blocks in the partner docs."""
+    try:
+        report = sync_docs(args.dir, write=args.write)
+    except ReferenceDocsError as exc:
+        print(f"Documentation cannot be synchronised: {exc}")
+        return 1
+    if args.write:
+        for name in report["updated"]:
+            print(f"  regenerated {name}")
+        print(
+            f"Partner docs in {report['docsDir']}: "
+            f"{len(report['updated'])} file(s) regenerated."
+        )
+        for problem in report["remaining"]:
+            print(f"  {problem}")
+    elif report["ok"]:
+        print(f"Partner docs in {report['docsDir']} are up to date.")
+    else:
+        print("Partner docs are out of date with the code:")
+        for problem in report["stale"]:
+            print(f"  {problem}")
+        print("Run: python scripts/pack_sdk.py docs --write")
+    _emit(report, args.json)
+    return 0 if report["ok"] else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="pack_sdk",
@@ -373,6 +405,23 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("rules", help="print the lint rules").set_defaults(
         handler=cmd_rules
     )
+
+    docs = subparsers.add_parser(
+        "docs", help="check that the partner docs' generated blocks match the code"
+    )
+    mode = docs.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--check",
+        action="store_true",
+        help="report stale blocks without changing anything (the default)",
+    )
+    mode.add_argument(
+        "--write",
+        action="store_true",
+        help="regenerate the blocks in place instead of only reporting",
+    )
+    docs.add_argument("--dir", default=None, help="partner documentation directory")
+    docs.set_defaults(handler=cmd_docs)
 
     args = parser.parse_args(argv)
     return int(args.handler(args))

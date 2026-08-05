@@ -7,7 +7,7 @@ or validates a partner pack.
 Implementation: `backend/discovery/packs/sdk/manifest.py` (schema + validator) and
 `backend/discovery/packs/sdk/primitives.py` (primitive vocabulary + parameter
 contracts). Worked example:
-`backend/discovery/packs/sdk/examples/example_partner_pack.json`. Tests:
+`backend/discovery/packs/sdk/examples/example_service_desk/pack.json`. Tests:
 `backend/tests/unit/test_pack_manifest_schema.py`.
 
 ---

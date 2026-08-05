@@ -173,3 +173,9 @@ Packaging and installation, sandbox validation wiring, and partner-facing
 documentation are separate 2.0-C3 tasks. They call `check_pack_directory` rather
 than re-deriving these rules — if a later task re-implements a lint rule or a
 fixture runner, that is the drift this module exists to prevent.
+
+Note for anyone changing a lint rule or a floor: the partner-facing rule tables in
+[`docs/partner/discipline_rules.md`](partner/discipline_rules.md) are **generated**
+from `LINT_RULES` and `FLOOR_PARAMETERS`. Run `python scripts/pack_sdk.py docs
+--write` in the same PR — a test fails otherwise. See
+[`pack_partner_documentation.md`](pack_partner_documentation.md).
