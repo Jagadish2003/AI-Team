@@ -17,6 +17,16 @@ validates, packages, or installs an authored pack) touches:
                               corroboration derivation an author cannot override.
 * :mod:`.execution`         — running a manifest's detectors over signal, with
                               the contract enforced at the pack boundary.
+* :mod:`.scaffold`          — generating a working pack project locally
+                              (T3 / AT-838).
+* :mod:`.harness`           — the fixture-based test harness: seeded signal in,
+                              asserted findings out (T3 / AT-838).
+* :mod:`.lint`              — the platform's non-negotiables, checked at
+                              authoring time (T3 / AT-838).
+* :mod:`.toolkit`           — validate + test + lint as ONE check, the same code
+                              path installation runs before activation.
+
+The CLI over all of it is ``backend/scripts/pack_sdk.py``.
 
 The governing constraint of this whole package: **a pack is declarative
 configuration, never code**. Nothing here loads, imports, or executes
@@ -86,15 +96,63 @@ from .signals import (  # noqa: F401
     signal_set,
     signal_set_from_dicts,
 )
+from .harness import (  # noqa: F401
+    FIXTURES_DIRNAME,
+    PACK_MANIFEST_FILENAME,
+    CaseResult,
+    HarnessError,
+    HarnessResult,
+    load_cases,
+    run_case,
+    run_cases,
+    run_pack_directory,
+    validate_case,
+)
+from .lint import (  # noqa: F401
+    LintFinding,
+    LintReport,
+    lint_pack,
+    lint_rule_reference,
+)
+from .scaffold import (  # noqa: F401
+    ScaffoldError,
+    ScaffoldResult,
+    scaffold_pack,
+)
+from .toolkit import (  # noqa: F401
+    PackCheckReport,
+    check_manifest_document,
+    check_pack_directory,
+)
 
 __all__ = [
+    "FIXTURES_DIRNAME",
     "MANIFEST_VERSION",
+    "PACK_MANIFEST_FILENAME",
     "PRIMITIVE_IMPLEMENTATIONS",
     "PRIMITIVE_LIBRARY",
     "PRIMITIVE_LIBRARY_VERSION",
+    "CaseResult",
     "ConceptRecord",
     "DetectorDeclaration",
     "DetectorOutcome",
+    "HarnessError",
+    "HarnessResult",
+    "LintFinding",
+    "LintReport",
+    "PackCheckReport",
+    "ScaffoldError",
+    "ScaffoldResult",
+    "check_manifest_document",
+    "check_pack_directory",
+    "lint_pack",
+    "lint_rule_reference",
+    "load_cases",
+    "run_case",
+    "run_cases",
+    "run_pack_directory",
+    "scaffold_pack",
+    "validate_case",
     "ManifestError",
     "ManifestValidation",
     "ManifestValidationError",
