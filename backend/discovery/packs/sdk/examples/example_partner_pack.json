@@ -1,0 +1,146 @@
+{
+  "manifestVersion": "agentiq-pack-manifest-v1",
+  "primitiveLibraryVersion": "1.0.0",
+  "pack": {
+    "packId": "example_service_desk",
+    "packName": "Example Service Desk Operations",
+    "packVersion": "0.1.0",
+    "domain": "example_service_desk",
+    "description": "Worked example manifest: service-desk operational friction composed entirely from platform primitives over normalised concepts. Ships no code.",
+    "author": {
+      "name": "Example Partner Ltd",
+      "contact": "packs@example-partner.test",
+      "url": "https://example-partner.test/agentiq"
+    }
+  },
+  "compatibility": {
+    "minPlatformVersion": "1.9.0",
+    "maxPlatformVersion": null,
+    "requiredConcepts": [
+      "incident_workflow",
+      "resolution_signature",
+      "operational_event"
+    ],
+    "optionalConcepts": [
+      "cmdb_dependency",
+      "cross_system_link"
+    ]
+  },
+  "certification": {
+    "requestedLevel": "partner",
+    "contact": "certification@example-partner.test",
+    "notes": "Submitted for Partner review against the 2.0 platform."
+  },
+  "detectors": [
+    {
+      "detectorId": "repeated_manual_resolution",
+      "title": "Repeated manual resolution of the same incident shape",
+      "primitive": "recurrence",
+      "concepts": ["resolution_signature"],
+      "parameters": {
+        "min_occurrences": 4,
+        "window_days": 30,
+        "group_by": "signature"
+      },
+      "labels": {
+        "summary": "The same resolution is applied repeatedly by hand.",
+        "whyItMatters": "Repeated identical resolutions are the clearest candidate for an assisting agent.",
+        "recommendation": "An agent handles the recurring cases; the residual requires judgment."
+      }
+    },
+    {
+      "detectorId": "service_desk_queue_ageing",
+      "title": "Service-desk queue ageing",
+      "primitive": "ageing",
+      "concepts": ["incident_workflow"],
+      "parameters": {
+        "min_age_days": 14,
+        "min_items": 5,
+        "age_from": "last_state_change_at",
+        "state_scope": "open"
+      },
+      "labels": {
+        "summary": "Open incidents are ageing well past the queue's normal dwell time."
+      }
+    },
+    {
+      "detectorId": "shared_dependency_concentration",
+      "title": "Incidents concentrate on a shared dependency",
+      "primitive": "concentration_traversal",
+      "concepts": ["incident_workflow", "cmdb_dependency"],
+      "parameters": {
+        "max_depth": 2,
+        "min_dependents": 3,
+        "anchor": "entity_reference",
+        "window_days": 30,
+        "require_corroboration": true
+      },
+      "labels": {
+        "summary": "Incidents across several services concentrate on one shared dependency.",
+        "evidenceHint": "Concentration only — the finding never asserts causation."
+      }
+    },
+    {
+      "detectorId": "alert_to_incident_pairing",
+      "title": "Alerts consistently pair with a raised incident",
+      "primitive": "co_occurrence_window",
+      "concepts": ["operational_event", "incident_workflow"],
+      "parameters": {
+        "window_minutes": 120,
+        "min_pairs": 5,
+        "ordering": "first_before_second"
+      },
+      "labels": {
+        "summary": "Alerts are followed by a manually raised incident inside the correlation window."
+      }
+    }
+  ],
+  "scorerCalibration": {
+    "impactWeights": {
+      "effort_concentration": 0.4,
+      "breadth": 0.25,
+      "recurrence_stability": 0.2,
+      "automation_shape": 0.15
+    },
+    "confidence": {
+      "singleSourceCap": "MEDIUM",
+      "corroboratedMax": "HIGH",
+      "conversationSourceCap": "MEDIUM"
+    },
+    "dimensions": {
+      "automation_shape": {
+        "trivial_ttr_minutes": 30,
+        "judgment_ttr_minutes": 240,
+        "default": 0.5
+      },
+      "recurrence_stability": {
+        "steady": 1.0,
+        "burst": 0.4,
+        "default": 0.6
+      }
+    }
+  },
+  "terminology": {
+    "glossary": {
+      "incident": "A tracked service-desk record representing a disruption reported by a user.",
+      "queue": "A named work list a group of agents draws from.",
+      "dwell_time": "Elapsed time an incident spends in its current state."
+    },
+    "languageMap": {
+      "opportunity": "finding",
+      "friction": "toil",
+      "ticket": "incident"
+    },
+    "llmContext": "Service-desk operations analysis. Speak service-desk language: incidents, queues, dwell time, escalation. Reference groups and queues only, never individuals. Describe concentration, never causation. No automated incident resolution: humans remain responsible for every action."
+  },
+  "templateDefaults": {
+    "industry": "technology",
+    "systems": ["servicenow", "jira"],
+    "recommendedSystems": ["teams"],
+    "workflowFocus": "service_desk_operations",
+    "roles": {
+      "servicenow": "system_of_record",
+      "jira": "workflow_system"
+    }
+  }
+}
