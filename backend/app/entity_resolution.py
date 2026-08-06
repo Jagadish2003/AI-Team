@@ -151,6 +151,17 @@ def _canonicalize(display_name: str) -> str:
     return _truncate(" ".join(display_name.split()).lower())
 
 
+def canonical_name_for(display_name: str) -> str:
+    """Public alias for the canonical match key (see :func:`_canonicalize`).
+
+    2.0-B2 T1: the cross-source resolution engine must agree with THIS engine on
+    what "the same name" means, or the two layers would disagree about identity —
+    the failure mode that produces a wrong merge. Exposing the existing
+    normalisation instead of re-implementing it keeps one definition.
+    """
+    return _canonicalize(display_name)
+
+
 def _looks_like_identifier(value: str) -> bool:
     """Return True for compact ID-ish labels like Salesforce IDs or case numbers."""
     text = str(value or "").strip()

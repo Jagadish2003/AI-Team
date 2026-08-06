@@ -21,6 +21,11 @@ part of a pack's findings): runId/orgId; evidence ids (embed run_id); confidence
 and the corroboration_* overlay (ENT-2 elevates confidence from cross-run graph
 state — see the runner). Those are covered by their own tests.
 
+The ingest clock is PINNED for every comparison here (see ``_GOLDEN_TODAY``): the
+nCino ingest derives day counts relative to "today", so a golden captured against a
+live clock drifts daily and fails for no reason. Pinning makes the snapshot
+reproducible; it does not change how the ingest reads the clock in production.
+
 Regenerate (only after an INTENTIONAL, reviewed findings change):
     REGEN_GOLDEN=1 PYTHONPATH=. python -m pytest \
         discovery/tests/test_multi_pack_golden_run.py -k regenerate -s
@@ -29,16 +34,35 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import date
 from pathlib import Path
 
 import pytest
 
 os.environ.setdefault("INGEST_MODE", "offline")
 
+from discovery.ingest import ncino as _ncino  # noqa: E402
 from discovery.runner import run  # noqa: E402
 
 _GOLDEN_PATH = Path(__file__).parent / "golden_multi_pack" / "single_pack_findings.json"
 _GOLDEN_PACKS = ["service_cloud", "ncino"]
+
+# The nCino ingest derives cycle/ageing day counts as ``(today - created).days``
+# against a FIXED fixture date, so a golden captured from a live clock drifts by
+# one day every day and the test fails for no reason at all — regenerating buys a
+# day. Pin the clock instead, so the golden is genuinely reproducible: this is a
+# property of the SNAPSHOT (the same input must give the same findings), not a
+# change to how the ingest reads the clock in production.
+#
+# Keep this date fixed. Moving it changes every day-count in the golden and
+# requires a regeneration.
+_GOLDEN_TODAY = date(2026, 8, 6)
+
+
+@pytest.fixture(autouse=True)
+def _pinned_clock(monkeypatch):
+    """Freeze the ingest clock for every golden comparison in this module."""
+    monkeypatch.setattr(_ncino, "_today", lambda: _GOLDEN_TODAY)
 
 
 def canonical_findings(payload: dict) -> list:

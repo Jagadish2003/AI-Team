@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
-from .learning_adjustment import adjust_ranking, base_order
+from .learning_adjustment import RANK_SCOPE_RUN, adjust_ranking, base_order
 from .learning_adjustment_state import (
     ensure_ranking_adjustment_tables,
     get_adjustment_history,
@@ -42,6 +42,39 @@ from .rbac import _get_user_id_from_token, require_role
 from .security import require_auth
 
 router = APIRouter(prefix="/api/learning/adjustment", tags=["learning"])
+
+
+def _run_org_id(run: Dict[str, Any]) -> Optional[str]:
+    for key in ("orgId", "org_id"):
+        value = run.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _read_run_for_org(run_id: str) -> Dict[str, Any]:
+    """Resolve a run and REFUSE it when it belongs to another org.
+
+    ``read_run`` answers existence only, and ``run_kv_get("opps", run_id)`` is
+    keyed by run id alone — so without this guard any analyst holding a known
+    run id could read another org's stored opportunity list, its opportunity
+    identities, and the actor ids and feedback links carried on the structured
+    reason. Same posture as the cloud-ops signature and graph routes: the org
+    comes from the tenancy context, never from the request, and a cross-org run
+    is reported as **not found** rather than forbidden — a 403 would confirm the
+    run exists.
+    """
+    from .run_store import read_run
+
+    try:
+        run = read_run(run_id)
+    except KeyError:
+        raise HTTPException(404, "run not found")
+
+    run_org = _run_org_id(run if isinstance(run, dict) else {})
+    if run_org and run_org != get_current_org_id():
+        raise HTTPException(404, "run not found")
+    return run if isinstance(run, dict) else {}
 
 
 class RecomputeRequest(BaseModel):
@@ -146,12 +179,8 @@ def preview_adjustment(
     than quietly resolving.
     """
     from .db import run_kv_get
-    from .run_store import read_run
 
-    try:
-        read_run(run_id)
-    except KeyError:
-        raise HTTPException(404, "run not found")
+    _read_run_for_org(run_id)
 
     opps = run_kv_get("opps", run_id, None) or []
     org_id = get_current_org_id()
@@ -191,12 +220,8 @@ def explain_adjustment(
     "this was not adjusted because..." on every unadjusted finding.
     """
     from .db import run_kv_get
-    from .run_store import read_run
 
-    try:
-        read_run(run_id)
-    except KeyError:
-        raise HTTPException(404, "run not found")
+    _read_run_for_org(run_id)
 
     opps = run_kv_get("opps", run_id, None) or []
     org_id = get_current_org_id()
@@ -209,13 +234,18 @@ def explain_adjustment(
     )
 
     record = result.by_opportunity_id().get(opportunity_id)
-    if record is None or not record.moved:
+    if record is None or (not record.moved and not record.was_capped):
         raise HTTPException(404, "no ranking adjustment for this opportunity")
 
     return {
         "runId": run_id,
         "opportunityId": opportunity_id,
         "opportunityIdentity": record.opportunity_identity,
+        # These ranks index the whole run. The roadmap adjusts each stage
+        # separately and therefore reports a stage-local rank for this same
+        # finding — the scope is served so the two are never read as a
+        # contradiction.
+        "rankScope": RANK_SCOPE_RUN,
         "baseRank": record.base_rank,
         "adjustedRank": record.adjusted_rank,
         "baseImpact": round(record.base_impact, 4),
@@ -241,12 +271,8 @@ def get_base_order(
     second serving path for the same data that could drift from the first.
     """
     from .db import run_kv_get
-    from .run_store import read_run
 
-    try:
-        read_run(run_id)
-    except KeyError:
-        raise HTTPException(404, "run not found")
+    _read_run_for_org(run_id)
 
     opps = base_order(run_kv_get("opps", run_id, None) or [])
     return {

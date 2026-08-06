@@ -1,0 +1,54 @@
+{
+  "_meta": {
+    "story": "2.0-B4 T5 (AT-814)",
+    "purpose": "Conformance golden fixture for one shipped connector (AC4). Locks the connector's per-concept conformance declaration (status/reason/mapper/field_gaps) from discovery/concepts/conformance.py. The CI gate (tests/contract/test_r2_0_b4_t5_conformance_fixtures.py) fails if a shipped connector has no fixture here, and pins each fixture to the registry so a conformance change cannot ship without updating its golden.",
+    "note": "Every 'supported' concept's mapper must resolve in T2's mapper registry (discovery.concepts.mappers.resolve_mapper) — the gate checks it. The raw→concept correctness of each mapper is proven by T2's connector-mapping test."
+  },
+  "connector_id": "sql_server",
+  "source_family": "database",
+  "concept_set_version": 1,
+  "concepts": {
+    "actor_group": {
+      "status": "gap",
+      "reason": "per-customer schema; see the postgresql entry",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "approval": {
+      "status": "gap",
+      "reason": "per-customer schema; see the postgresql entry",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "artifact": {
+      "status": "not_applicable",
+      "reason": "the DB surface reads rows, not documents",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "assignment": {
+      "status": "gap",
+      "reason": "per-customer schema; see the postgresql entry",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "entity_reference": {
+      "status": "declared",
+      "reason": "a table row has a primary key that could key a reference, but which table and which column identify a real entity is per-customer scope configuration — the mapping needs that config, not just a mapper",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "state_transition": {
+      "status": "gap",
+      "reason": "per-customer schema; see the postgresql entry",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "work_item": {
+      "status": "gap",
+      "reason": "per-customer schema; see the postgresql entry",
+      "mapper": null,
+      "field_gaps": []
+    }
+  }
+}

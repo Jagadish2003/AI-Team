@@ -1,0 +1,65 @@
+{
+  "_meta": {
+    "story": "2.0-B4 T5 (AT-814)",
+    "purpose": "Conformance golden fixture for one shipped connector (AC4). Locks the connector's per-concept conformance declaration (status/reason/mapper/field_gaps) from discovery/concepts/conformance.py. The CI gate (tests/contract/test_r2_0_b4_t5_conformance_fixtures.py) fails if a shipped connector has no fixture here, and pins each fixture to the registry so a conformance change cannot ship without updating its golden.",
+    "note": "Every 'supported' concept's mapper must resolve in T2's mapper registry (discovery.concepts.mappers.resolve_mapper) — the gate checks it. The raw→concept correctness of each mapper is proven by T2's connector-mapping test."
+  },
+  "connector_id": "jira",
+  "source_family": "engineering_tracker",
+  "concept_set_version": 1,
+  "concepts": {
+    "actor_group": {
+      "status": "gap",
+      "reason": "Jira assigns to individuals; project roles and components are the closest group-shaped concepts and neither is a work queue. Mapping an assignee to a group would fabricate one.",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "approval": {
+      "status": "gap",
+      "reason": "approval is a workflow-transition convention per project, not a first-class Jira record; reading one reliably needs per-org configuration this connector does not have",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "artifact": {
+      "status": "supported",
+      "reason": "",
+      "mapper": "discovery.concepts.mappers.jira:map_issue_attachment",
+      "field_gaps": []
+    },
+    "assignment": {
+      "status": "declared",
+      "reason": "the changelog carries assignee changes (same unread expand as state_transition). Note the eventual mapper will not be able to populate assigned_to: Jira hands work to a person, so the hop is countable but the recipient group does not exist.",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "entity_reference": {
+      "status": "supported",
+      "reason": "keyed on the numeric issue id, not the key: a key changes when an issue moves project, and a reference that stops resolving after a move is not a reference",
+      "mapper": "discovery.concepts.mappers.jira:map_issue_reference",
+      "field_gaps": []
+    },
+    "state_transition": {
+      "status": "declared",
+      "reason": "the changelog carries every status change, but this connector does not request it (no expand=changelog) — the mapping needs a connector read first",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "work_item": {
+      "status": "supported",
+      "reason": "status maps from Jira's own statusCategory, with abandoning resolutions (Won't Do, Duplicate) routed to 'cancelled' so abandoned work is never counted as delivered",
+      "mapper": "discovery.concepts.mappers.jira:map_issue_work_item",
+      "field_gaps": [
+        {
+          "field": "assigned_group",
+          "kind": "absent",
+          "reason": "Jira assigns to an individual. JIRA_TEAM_FIELD can carry a team but is per-deployment configuration rather than a field Jira guarantees, and a mapping that works on only some customers' instances would make conformance mean different things per deployment."
+        },
+        {
+          "field": "closed_at",
+          "kind": "absent",
+          "reason": "Jira has no close event separate from resolution; resolved_at IS the close. Mirroring it into closed_at would give a resolve-to-close detector a manufactured zero."
+        }
+      ]
+    }
+  }
+}

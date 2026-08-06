@@ -218,6 +218,27 @@ export function salesforcePacksFromCatalog(
 // (state.packIds — the Discovery Plan dropdown, plus any template pack). Order-preserving and
 // de-duplicated, Salesforce packs first. Falls back to the single resolved pack
 // when neither is present.
+// The PRIMARY pack for a run: always the first element of the resolved
+// multi-pack selection, so "the primary pack" and "the packs that run" can never
+// name different things.
+//
+// Deriving it independently via `resolvePackId` was the bug: that helper ends in
+// an unconditional `service_cloud` fallback, while `resolvePackIds` only reaches
+// its fallback when the selection is EMPTY. So a user who picked just `cloud_ops`
+// got pack_ids `['cloud_ops']` but pack_id `'service_cloud'` — and because the
+// backend UNIONS the two (routes_stack_builder_launch reconcile), the run
+// activated a Service Cloud pack nobody selected, while the Discovery Plan
+// displayed `service_cloud` as active beside a list that did not contain it.
+export function resolvePrimaryPackId(
+  state: ReturnType<typeof useSetupState>['state'],
+  catalog: WorkspaceCatalogResponse | null,
+  industries: IndustryListItem[],
+  templates: TemplateListItem[],
+): string {
+  const packIds = resolvePackIds(state, catalog, industries, templates);
+  return packIds[0] ?? resolvePackId(state, catalog, industries, templates);
+}
+
 export function resolvePackIds(
   state: ReturnType<typeof useSetupState>['state'],
   catalog: WorkspaceCatalogResponse | null,
@@ -696,7 +717,7 @@ export default function StackBuilderPage({
     // R191-P1 T5: resolve the full multi-pack selection; the primary (first) pack
     // stays the singular value for backward-compatible callers.
     const packIds = resolvePackIds(state, catalog, industries, templates);
-    const packId = packIds[0] ?? resolvePackId(state, catalog, industries, templates);
+    const packId = resolvePrimaryPackId(state, catalog, industries, templates);
     const systems = normaliseSystems(state.selectedSystemIds);
     const headers = buildAuthHeaders(token);
 
@@ -811,7 +832,7 @@ export default function StackBuilderPage({
       <LendingFirstRunGuide
         template={selectedTemplate}
         state={state}
-        packId={resolvePackId(state, catalog, industries, templates)}
+        packId={resolvePrimaryPackId(state, catalog, industries, templates)}
         launchState={
           launchState === 'setup' && state.currentStep === 4
             ? 'ready'
@@ -892,7 +913,7 @@ export default function StackBuilderPage({
               setupState={setupState}
               industries={industries}
               templates={templates}
-              activePackId={resolvePackId(state, catalog, industries, templates)}
+              activePackId={resolvePrimaryPackId(state, catalog, industries, templates)}
               activePackIds={resolvePackIds(state, catalog, industries, templates)}
               salesforcePacks={salesforcePacksFromCatalog(catalog)}
               onLaunch={handleLaunch}

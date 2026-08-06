@@ -42,7 +42,8 @@ from pydantic import BaseModel
 from .db import org_connector_get, org_connector_set
 from .middleware.tenancy import get_current_org_id
 from .security import require_auth
-from .rbac import require_role
+from .connector_scope_audit import audit_scope_selection
+from .rbac import _get_user_id_from_token, require_role
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +142,7 @@ def register_slack_channels_routes(app: FastAPI) -> None:
         summary="Select which Slack channels AgentIQ reads for this workspace",
         tags=["Integration Hub"],
     )
-    def set_slack_channels(body: SlackChannelsBody) -> SlackChannelsResponse:
+    def set_slack_channels(body: SlackChannelsBody, token: str = Depends(require_auth)) -> SlackChannelsResponse:
         org_id = get_current_org_id()
         connector = org_connector_get(org_id, "slack")
         if not connector:
@@ -166,8 +167,18 @@ def register_slack_channels_routes(app: FastAPI) -> None:
             if cid in available_ids and cid not in validated:
                 validated.append(cid)
 
+        previous_scope = connector.get("channels")
         connector["channels"] = validated
         org_connector_set(org_id, "slack", connector)
+        # 2.0-D4 T1 (AC1): scope pin/unpin is a data-access grant.
+        audit_scope_selection(
+            connector_id="slack",
+            scope_key="channels",
+            previous=previous_scope,
+            selected=validated,
+            actor_id=_get_user_id_from_token(token),
+            first_selection=not isinstance(previous_scope, list),
+        )
 
         return SlackChannelsResponse(
             available=[SlackChannel(**c) for c in available],

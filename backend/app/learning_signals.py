@@ -562,6 +562,16 @@ class SignalSet:
 
     ``is_active`` is AC4's gate. T2 must consult it and apply nothing when it is
     False — "no pretending to personalise from three data points".
+
+    The derived counts are :class:`functools.cached_property`, computed once per
+    instance. Every one of them scans ``signals``, and ``is_active`` /
+    ``inactive_reason`` are read on each ``list_opportunities`` serve — with
+    plain properties a single serve rescanned the signal list many times over
+    (``inactive_reason`` consults ``is_active``, which consults three counts,
+    each of which rebuilt ``weighted``). Caching is safe precisely BECAUSE the
+    dataclass is frozen: the inputs cannot change under a cached value. Writing
+    the cache needs ``object.__setattr__``, which ``__setattr__`` below forwards
+    for exactly these names and nothing else.
     """
 
     org_id: str
@@ -574,21 +584,46 @@ class SignalSet:
     minimum_distinct_identities: int
     collected_at: str
 
+    def _memo(self, name: str, compute: Any) -> Any:
+        """Compute ``name`` once and cache it on the instance.
+
+        ``@dataclass(frozen=True)`` generates its own ``__setattr__`` and refuses
+        to be overwritten, and ``functools.cached_property`` assigns through
+        normal attribute setting — so it raises ``FrozenInstanceError`` here.
+        Writing the memo through ``object.__setattr__`` sidesteps the frozen
+        guard for these derived values only; every declared field stays
+        genuinely immutable, which is what makes the cache correct.
+        """
+        cache = self.__dict__
+        if name not in cache:
+            object.__setattr__(self, name, compute())
+        return cache[name]
+
     @property
     def weighted(self) -> Tuple[LearningSignal, ...]:
-        return tuple(s for s in self.signals if s.weight > 0)
+        return self._memo(
+            "_weighted", lambda: tuple(s for s in self.signals if s.weight > 0)
+        )
 
     @property
     def distinct_identities(self) -> int:
-        return len({s.opportunity_identity for s in self.weighted})
+        return self._memo(
+            "_distinct_identities",
+            lambda: len({s.opportunity_identity for s in self.weighted}),
+        )
 
     @property
     def outcome_count(self) -> int:
-        return sum(1 for s in self.weighted if s.is_outcome)
+        return self._memo(
+            "_outcome_count", lambda: sum(1 for s in self.weighted if s.is_outcome)
+        )
 
     @property
     def decision_count(self) -> int:
-        return sum(1 for s in self.weighted if not s.is_outcome)
+        return self._memo(
+            "_decision_count",
+            lambda: sum(1 for s in self.weighted if not s.is_outcome),
+        )
 
     @property
     def is_active(self) -> bool:
@@ -597,7 +632,9 @@ class SignalSet:
         The distinct-identity rule is what stops a single enthusiastically
         reviewed opportunity from switching learning on for a whole org.
         """
-        return not any(self.activation_remaining().values())
+        return self._memo(
+            "_is_active", lambda: not any(self.activation_remaining().values())
+        )
 
     @property
     def inactive_reason(self) -> Optional[str]:

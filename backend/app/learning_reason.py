@@ -265,7 +265,8 @@ def build_reason(adjustment: Any) -> Optional[AdjustmentReason]:
     if adjustment is None:
         return None
     moved = getattr(adjustment, "moved", 0)
-    if not moved:
+    was_capped = bool(getattr(adjustment, "was_capped", False))
+    if not moved and not was_capped:
         return None
 
     decisions: List[ContributingDecision] = []
@@ -309,7 +310,7 @@ def build_reason(adjustment: Any) -> Optional[AdjustmentReason]:
         by_verdict[verdict] = by_verdict.get(verdict, 0) + 1
 
     return AdjustmentReason(
-        direction=DIRECTION_UP if moved < 0 else DIRECTION_DOWN,
+        direction=_direction_for_adjustment(adjustment, moved),
         ranks_moved=abs(moved),
         base_rank=getattr(adjustment, "base_rank", 0),
         adjusted_rank=getattr(adjustment, "adjusted_rank", 0),
@@ -318,7 +319,7 @@ def build_reason(adjustment: Any) -> Optional[AdjustmentReason]:
         outcome_count=len(outcomes),
         outcomes_by_verdict=by_verdict,
         has_outcome_evidence=bool(getattr(adjustment, "has_outcome_evidence", False)),
-        was_capped=bool(getattr(adjustment, "was_capped", False)),
+        was_capped=was_capped,
         capped_by=getattr(adjustment, "capped_by", None),
         evidence_strength=_strength(len(decisions), len(outcomes)),
         contributing_decisions=tuple(decisions),
@@ -329,6 +330,20 @@ def build_reason(adjustment: Any) -> Optional[AdjustmentReason]:
 # --------------------------------------------------------------------------
 # Rendering — the sentence, composed from the structure
 # --------------------------------------------------------------------------
+
+
+def _direction_for_adjustment(adjustment: Any, moved: int) -> str:
+    if moved < 0:
+        return DIRECTION_UP
+    if moved > 0:
+        return DIRECTION_DOWN
+    requested_rank_delta = getattr(adjustment, "requested_rank_delta", 0)
+    if requested_rank_delta:
+        return DIRECTION_UP if requested_rank_delta > 0 else DIRECTION_DOWN
+    requested_delta = getattr(adjustment, "requested_delta", 0.0)
+    if requested_delta:
+        return DIRECTION_UP if requested_delta > 0 else DIRECTION_DOWN
+    return DIRECTION_NONE
 
 
 def _decision_clause(reason: AdjustmentReason) -> Optional[str]:
@@ -411,11 +426,24 @@ def render_reason(reason: Optional[AdjustmentReason]) -> Optional[str]:
     if reason is None:
         return None
 
-    headline = (
-        f"Ranked higher: moved up {_count_phrase(reason.ranks_moved, 'place')}"
-        if reason.direction == DIRECTION_UP
-        else f"Ranked lower: moved down {_count_phrase(reason.ranks_moved, 'place')}"
-    )
+    if reason.ranks_moved == 0:
+        requested = (
+            "a higher rank"
+            if reason.direction == DIRECTION_UP
+            else "a lower rank"
+            if reason.direction == DIRECTION_DOWN
+            else "a rank change"
+        )
+        headline = (
+            "Adjustment capped: requested "
+            f"{requested} but the cap kept this finding in place"
+        )
+    else:
+        headline = (
+            f"Ranked higher: moved up {_count_phrase(reason.ranks_moved, 'place')}"
+            if reason.direction == DIRECTION_UP
+            else f"Ranked lower: moved down {_count_phrase(reason.ranks_moved, 'place')}"
+        )
 
     decision_clause = _decision_clause(reason)
     outcome_clause = _outcome_clause(reason, standalone=decision_clause is None)
@@ -426,7 +454,7 @@ def render_reason(reason: Optional[AdjustmentReason]) -> Optional[str]:
 
     parts = [headline, _basis_clause(reason)]
 
-    if reason.was_capped:
+    if reason.was_capped and reason.ranks_moved > 0:
         # The tension case, stated rather than hidden: the learned signal wanted
         # to move this further than the cap allows.
         parts.append(

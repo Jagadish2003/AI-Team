@@ -198,12 +198,15 @@ def extract_event_signatures(*sources: Any) -> Tuple[str, ...]:
                     text = _text(entry)
                     if text and _EVENT_SIGNATURE_RE.match(text):
                         found.add(text)
+            for entry in _signature_candidates(source.get(field)):
+                text = _text(entry)
+                if text and _EVENT_SIGNATURE_RE.match(text):
+                    found.add(text)
         for field in EVENT_SIGNATURE_SCALAR_FIELDS:
             text = _text(source.get(field))
             if text and _EVENT_SIGNATURE_RE.match(text):
                 found.add(text)
     return tuple(sorted(found))
-
 
 def has_event_signature_field(*sources: Any) -> bool:
     """True when a source CARRIES an event-signature link field at all.
@@ -221,6 +224,40 @@ def has_event_signature_field(*sources: Any) -> bool:
             if source.get(field) is not None:
                 return True
     return False
+def _signature_candidates(raw: Any) -> Tuple[Any, ...]:
+    """Every individual signature carried by one column value.
+
+    The list branch cannot simply test ``isinstance(raw, (list, tuple))``,
+    because the incident payload copies this column VERBATIM and ServiceNow is
+    queried with ``sysparm_display_value=all`` — so a live multi-value field
+    arrives wrapped as ``{"value": ..., "display_value": ...}``, a Mapping, and
+    was skipped entirely. Offline fixtures store plain scalars, so every test
+    passed while every live multi-value signature was silently dropped.
+
+    Three shapes are therefore handled: a plain list, the ``{value: [...]}``
+    wrapper, and the comma-separated string ServiceNow uses for a multi-value
+    field inside that wrapper. Splitting on commas is safe because a signature is
+    ``"{version}:{hex}"`` and contains no comma — and every candidate is still
+    validated against ``_EVENT_SIGNATURE_RE`` by the caller, so a malformed
+    fragment is dropped rather than trusted.
+    """
+    if raw is None:
+        return ()
+    if isinstance(raw, Mapping):
+        # Prefer the raw value: display_value renders a reference list for humans,
+        # while value carries the canonical stored form.
+        inner = raw.get("value")
+        if inner is None:
+            inner = raw.get("display_value")
+        return _signature_candidates(inner)
+    if isinstance(raw, (list, tuple)):
+        out: list[Any] = []
+        for entry in raw:
+            out.extend(_signature_candidates(entry))
+        return tuple(out)
+    if isinstance(raw, str):
+        return tuple(part for part in (p.strip() for p in raw.split(",")) if part)
+    return (raw,)
 
 
 # ── the CI-location join ─────────────────────────────────────────────────────

@@ -224,6 +224,14 @@ class CorroborationResult:
     corroboration_weight_debug:
         R16-C1 audit details showing how Stack Builder source role/priority
         shaped the corroboration verdict.
+    identity_gate:
+        2.0-B2 T6 (AC5) audit details for the cross-source identity gate: whether
+        the two sources' entity references were claimed to be the same thing,
+        whether that identity was genuinely RESOLVED (and by which rule), and
+        which rules were consequently refused an elevation. Empty when the gate
+        did not engage. ``identity_verified`` inside it is how a reviewer tells a
+        HIGH resting on a proven shared identity from one resting only on a
+        shared detector.
     """
 
     rule_ids: List[str] = field(default_factory=list)
@@ -235,6 +243,7 @@ class CorroborationResult:
     confidence_elevated: bool = False
     elevation_target: str = CONFIDENCE_MEDIUM
     corroboration_weight_debug: Dict[str, Any] = field(default_factory=dict)
+    identity_gate: Dict[str, Any] = field(default_factory=dict)
 
 
 def _empty_result(original_confidence: str = CONFIDENCE_MEDIUM) -> CorroborationResult:
@@ -929,6 +938,52 @@ def _build_corroboration_weight_debug(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 2.0-B2 T6 — cross-source identity gate (AC5)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _apply_identity_gate(
+    org_id: str,
+    fired_rules: List[str],
+    run_data: Dict[str, Any],
+    identity_resolver: Any,
+) -> Any:
+    """Run the cross-source identity gate over the fired rules.
+
+    Extracts the entity each primary source's corroborating records reference and
+    asks :mod:`app.corroboration_identity_gate` whether a claimed shared identity
+    is genuinely resolved. Returns the gate outcome, or ``None`` when the gate is
+    unavailable.
+
+    Never raises: corroboration is advisory and must never break scoring, so an
+    import or extraction failure degrades to "no gate" — logged, and visible as an
+    empty ``identity_gate`` on the result rather than a silently ungated HIGH.
+    """
+    try:
+        from .corroboration_identity_gate import (
+            default_resolver,
+            first_entity_ref,
+            gate_cross_source_corroboration,
+        )
+    except Exception as exc:  # noqa: BLE001 — gate unavailable, never fatal.
+        logger.warning(
+            "2.0-B2 T6: cross-source identity gate unavailable (%s) — "
+            "corroboration elevation is NOT identity-verified this run", exc,
+        )
+        return None
+
+    try:
+        left = first_entity_ref("servicenow", _servicenow_incidents(run_data))
+        right = first_entity_ref("jira", _jira_issues(run_data))
+        resolver = identity_resolver if identity_resolver is not None else default_resolver()
+        return gate_cross_source_corroboration(
+            org_id, fired_rules, left=left, right=right, resolver=resolver
+        )
+    except Exception as exc:  # noqa: BLE001 — see the docstring.
+        logger.warning("2.0-B2 T6: identity gate evaluation failed: %s", exc)
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Label builder
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -960,6 +1015,7 @@ def evaluate_corroboration(
     run_timestamp: datetime,
     org_id: str,
     weighting_context: Optional[Any] = None,
+    identity_resolver: Optional[Any] = None,
 ) -> CorroborationResult:
     """Evaluate all applicable corroboration rules for this detector.
 
@@ -985,6 +1041,11 @@ def evaluate_corroboration(
         per-system role and priority modulate whether fired corroboration
         rules may lead a HIGH elevation. Accepted as ``Any`` to avoid a hard
         import dependency from the app layer into discovery.
+    identity_resolver:
+        Optional override for the 2.0-B2 T6 cross-source identity resolver
+        (AC5) — the callable that answers "are these two entity references the
+        same real thing?". Defaults to the graph-backed resolver. Injected in
+        tests so the gate can be exercised without a database.
 
     Never raises for normal data issues — defensive .get() throughout. The
     caller (scoring pipeline) additionally wraps this in try/except so any
@@ -1081,12 +1142,26 @@ def evaluate_corroboration(
                 fired_rules.append("COR-05")
             sources.append(f"{_src_label} (supporting only)")
 
+    # 2.0-B2 T6 (AC5): the cross-source identity gate. "Corroborated across
+    # ServiceNow and Jira" only means something if both sides are about the SAME
+    # thing — a shared name is not a shared identity. Where the two sources'
+    # entity references claim one identity that is NOT genuinely resolved, the
+    # cross-source rules keep their evidence but lose their elevation.
+    gate_outcome = _apply_identity_gate(org_id, fired_rules, run_data, identity_resolver)
+    identity_gate = gate_outcome.to_dict() if gate_outcome is not None else {}
+    blocked_rules = set(gate_outcome.blocked_rules) if gate_outcome is not None else set()
+    if blocked_rules:
+        # The triple headline is a cross-source claim too, so it falls with the
+        # pair it is derived from.
+        triple = triple and "COR-03" not in blocked_rules
+
     # Determine elevation. R16-C1 source role/priority now shape corroboration
     # contribution, while COR-05 remains supporting-only.
     weight_debug = _build_corroboration_weight_debug(fired_rules, weighting_context)
     elevating_rules = [
         r for r in fired_rules
         if r != "COR-05" and r in _CORROBORATION_RULE_SYSTEMS
+        and r not in blocked_rules
     ]
     elevated = (
         CONFIDENCE_HIGH
@@ -1107,6 +1182,7 @@ def evaluate_corroboration(
         confidence_elevated=CONFIDENCE_ORDER[elevated] > CONFIDENCE_ORDER[original],
         elevation_target=elevated,
         corroboration_weight_debug=weight_debug,
+        identity_gate=identity_gate,
     )
 
 
