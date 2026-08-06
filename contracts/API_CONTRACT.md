@@ -1,6 +1,45 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.23
+Version: v1.24
 Date: 2026-08-06
+
+> v1.24 — 2.0-C4 T5 (Deprecation Lifecycle Audit): all three deprecation transitions
+> are audit events, and are readable as one trail. One new route and one new audit
+> event type; no existing response shape changes.
+>
+> **The gap this closes.** Migration (`pack_migration_applied` /
+> `pack_migration_reverted`, v1.22) and post-grace disable (`pack_deprecation_disabled`,
+> v1.23) already reached the audit log. **Deprecation itself did not** — a declaration
+> is a registry fact, and nothing recorded that a particular organisation had ever come
+> under it.
+>
+> **New audit event — `pack_deprecation_announced`.** Written when an org's pack
+> selection is resolved for a run while a deprecated pack is in it: the org-scoped
+> moment the deprecation actually bears on a customer. Payload: `pack_id`,
+> `pack_version`, `phase`, `reason`, `deprecated_on`, `grace_ends_on`,
+> `replacement_pack_id`, `fingerprint`.
+>
+> Emitted **once per (org, pack, declared terms)** — a repeat run is silent, but moving
+> the grace date, changing the replacement, or restating the reason announces again,
+> because that is materially different notice. A pack sliding from `grace` into
+> `grace_expired` is NOT new terms (that is the announced terms coming true, and
+> `pack_deprecation_disabled` records it).
+>
+> **New route — `GET /api/packs/deprecation/audit` (owner).**
+> Query: `packId` (optional), `limit` (1–1000, default 200).
+> Returns `{ orgId, packId, eventTypes[], transitions{}, entries[] }`, newest first.
+> Each entry is `{ id, eventType, transition, actorId, runId, packId, payload, at }`.
+>
+> `transitions` maps the three the story names to the audit event types that record
+> each — `deprecated` → `[pack_deprecation_announced]`, `migrated` →
+> `[pack_migration_applied, pack_migration_reverted]`, `retired` →
+> `[pack_deprecation_disabled]` — so a consumer does not hard-code that applied and
+> reverted are two halves of one transition.
+>
+> **Owner, deliberately** — the same bar as `GET /api/audit-log`, whose rows these are.
+> These events remain available there too; this route is the same data through a
+> narrower, transition-labelled lens. A read failure is an error, never an empty
+> `entries` list: an audit surface reporting "nothing happened" when it could not read
+> would mislead a reviewer.
 
 > v1.23 — 2.0-C4 T4 (Deprecation Grace Behaviour): a pack whose announced grace
 > period has ended is moved to safe-disabled and dropped from future runs. Additive

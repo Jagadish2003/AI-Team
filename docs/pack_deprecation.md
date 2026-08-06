@@ -3,10 +3,10 @@
 Read this before deprecating a pack, changing a deprecation declaration, or writing
 any code that reads a pack's deprecation state.
 
-This document currently covers **T1 (AT-842) — deprecation metadata**,
-**T2 (AT-843) — notice surfacing**, **T3 (AT-844) — migration assist**, and
-**T4 (AT-845) — grace behaviour**. The consolidated audit view (AT-846) is a separate
-sub-task that layers on these and adds its own section here as it lands.
+This document covers the whole of 2.0-C4: **T1 (AT-842) — deprecation metadata**,
+**T2 (AT-843) — notice surfacing**, **T3 (AT-844) — migration assist**,
+**T4 (AT-845) — grace behaviour**, and **T5 (AT-846) — the lifecycle audit**. With T5
+the story is complete: all four acceptance criteria are discharged.
 
 ---
 
@@ -546,3 +546,119 @@ Contract **v1.23**. Additive only: a new `reason` value on the existing
   during grace is byte-identical after the retirement**.
 * `frontend/src/__tests__/PackGraceBehaviour.test.tsx` — that the two remedies stay
   distinguishable, and that a retirement never reads as an error.
+
+---
+
+# 12. The lifecycle audit (T5 / AT-846)
+
+## 12.1 What was missing
+
+Two of the three transitions already reached the audit log when this task started:
+
+| Transition | Event | Since |
+|---|---|---|
+| Migration | `pack_migration_applied` / `pack_migration_reverted` | T3 (AT-844) |
+| Post-grace disable | `pack_deprecation_disabled` | T4 (AT-845) |
+| **Deprecation itself** | — **nothing** | — |
+
+T1 declares a deprecation in `PACK_REGISTRY` — a property of the shipped registry,
+changed by a code deploy — and T2 renders the notice on three surfaces. Neither leaves
+a record that a particular *organisation* was ever subject to it. So an auditor could
+see that a pack had been migrated or retired with **no recorded moment at which the
+customer came under notice in the first place**, which is the one entry that makes the
+other two make sense. Closing that is the substance of T5.
+
+## 12.2 What counts as "the deprecation transition" for an org
+
+A declaration is global; an audit entry is org-scoped. The auditable org-level fact is
+the first time a deprecation actually *bears* on this organisation — when the platform
+resolves its pack selection for a run with a superseded pack in it.
+
+So the announcement is emitted from the **activation path** (`pack_activation`'s
+stage 0), not from a read:
+
+* it is a fact with a **consequence** — the org configured or ran discovery under
+  those terms;
+* it is on the ONE resolution both API edges and `discovery/runner.py` share, so a CLI
+  caller cannot produce a run whose deprecation exposure went unrecorded;
+* rendering the pack picker is not a transition. Emitting audit rows from a GET would
+  make the trail a record of page views rather than of decisions.
+
+Ordering is deliberate: **announce, then retire**. A trail should read in the order the
+facts happened — told, then acted upon.
+
+## 12.3 Announced once, and again only when the terms change
+
+A deprecated pack is re-evaluated on *every* activation, so a naive emit would bury the
+trail under one row per run forever. The announcement is keyed on
+`(org_id, pack_id, declaration fingerprint)` and written once.
+
+The fingerprint covers the declared **terms** — reason, both dates, replacement,
+version scope, status. That is the load-bearing choice: if the vendor moves the grace
+end date, changes the replacement, or restates the reason, the customer is under
+materially different notice and must be told again. Keying on the pack id alone would
+silently swallow exactly the changes that matter most.
+
+It deliberately excludes the evaluation date and the derived phase. A pack sliding from
+`grace` into `grace_expired` is the announced terms *coming true*, not new terms — and
+T4's retirement event already records that moment.
+
+## 12.4 The ledger, and what it is not
+
+`kv`, under `pack_deprecation_announcements:{org_id}` — the same choice, for the same
+reasons, as T3's migration ledger: `kv` is in `history_retention.PROTECTED_TABLES`, so
+it inherits the 2.0-C1 T4 never-delete guarantee and needs no schema migration.
+
+It is a **de-duplication record**, not the trail. The audit log is the trail. Losing the
+ledger causes a re-announcement, never a lost entry — which is why an unreadable ledger
+errs toward announcing again: a duplicate row is noise, a missing one is a hole.
+
+## 12.5 The trail endpoint, and why it is Owner
+
+`GET /api/packs/deprecation/audit` selects exactly the three transitions, stamps each
+row with *which* transition it is, and optionally narrows to one pack.
+
+It exists because reachable is not the same as usable. These rows were always in
+`/api/audit-log`, but that is an unfiltered firehose across every event type in the
+product; answering "what has happened to this pack's lifecycle" by scrolling it is
+archaeology, not audit.
+
+**Owner**, deliberately the same bar as `/api/audit-log` itself. These are the same
+audit rows through a narrower lens, and serving them to a lower role would be a
+privilege bypass dressed as a convenience — a row is either audit-sensitive or it is
+not, and the shape of the query does not change that.
+
+A read failure **raises**. Every other read in the pack-lifecycle surface is fail-soft,
+because a missing label beats a blocked page. This one is not: an audit surface that
+reports "nothing happened" when it merely could not read is worse than one that reports
+an error, and it is the single place that distinction can mislead a reviewer.
+
+## 12.6 The claim is checkable
+
+"All three transitions are audit events" is only worth something if it cannot quietly
+stop being true. `DEPRECATION_AUDIT_EVENTS` writes the mapping down once, and
+structural tests assert that:
+
+* every declared event type is in `AUDIT_EVENT_REGISTRY`;
+* every declared event type has a real emission site in the source;
+* every `PACK_DEPRECATION_*` / `PACK_MIGRATION_*` constant is mapped to a transition —
+  the reverse direction, so a lifecycle event nobody mapped cannot render with a blank
+  transition.
+
+Adding a fourth transition without an audit event, or an event nobody can find, fails
+the build.
+
+## 12.7 Contract
+
+Contract **v1.24**. One new route and one new audit event type; no existing response
+shape changes.
+
+## 12.8 Tests
+
+* `backend/tests/unit/test_pack_deprecation_audit.py` — DB-free: the announcement,
+  once-only, re-announce-on-changed-terms, phase-change-is-not-new-terms, org scoping,
+  ordering, the fail-soft paths, and the structural checks above.
+* `backend/tests/contract/test_pack_deprecation_audit_api.py` — over HTTP: a pack
+  driven through its **entire** lifecycle (deprecated → migrated → retired) with all
+  three landing in the audit log and coming back together on the trail, plus the
+  Owner-only boundary and org scoping.

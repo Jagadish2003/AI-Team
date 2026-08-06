@@ -310,7 +310,10 @@ def resolve_activatable_packs(
 
     Five stages, in this order:
 
-    0. **Retire packs whose deprecation grace has ended** (AT-845). The expiry is
+    0. **Record and enforce deprecation** (AT-846, then AT-845). First the org is
+       recorded as having come under each selected pack's deprecation terms — once
+       per set of declared terms, and never able to fail the activation. Then:
+       **retire packs whose deprecation grace has ended** (AT-845). The expiry is
        DERIVED from the declared dates on every activation, and the pack is moved to
        safe-disabled through 2.0-C1's own path so its history stays intact. A pack
        still INSIDE its grace is untouched here and runs exactly as before — that
@@ -376,7 +379,15 @@ def resolve_activatable_packs(
     # The state read below happens AFTER this call so it sees the rows just written —
     # but the exclusion does not depend on that. `grace_expired` is derived, so a pack
     # whose disable could not be persisted is still excluded from this run.
+    # 2.0-C4 T5 (AT-846): record that this org has come under each selected pack's
+    # deprecation terms — the FIRST of the story's three transitions, and the only
+    # one with no audit record before that task. Emitted BEFORE the retirement below
+    # so the trail reads in the order the facts happened: told, then retired. Written
+    # once per (org, pack, declared terms), and it can never fail an activation.
+    from .pack_deprecation_audit import announce_deprecations
     from .pack_grace import enforce_grace_expiry
+
+    announce_deprecations(org_id=org_id, pack_ids=selection, run_id=run_id)
 
     grace_expired = {
         item.pack_id

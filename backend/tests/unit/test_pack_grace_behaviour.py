@@ -347,12 +347,23 @@ def test_the_retirement_emits_its_own_telemetry(deprecate, captured_telemetry):
     assert emitted[0]["run_id"] == "run_1"
 
 
-def test_a_pack_in_grace_is_never_audited(deprecate, captured_audit):
+def test_a_pack_in_grace_is_never_audited_as_retired(deprecate, captured_audit):
+    """No RETIREMENT entry while the pack still runs.
+
+    Scoped to this event type on purpose. 2.0-C4 T5 (AT-846) legitimately writes a
+    `pack_deprecation_announced` entry on the same activation — the org has come
+    under the terms — and that is a different fact from the pack being retired. A
+    blanket "nothing was audited" assertion would forbid it.
+    """
     deprecate(grace_ends_on=OPEN_UNTIL)
 
     resolve_activatable_packs(org_id=ORG, pack_ids=[PACK])
 
-    assert captured_audit == []
+    assert not [
+        payload
+        for event_type, payload in captured_audit
+        if event_type == "pack_deprecation_disabled"
+    ]
 
 
 # ── History intact, never deleted ─────────────────────────────────────────────

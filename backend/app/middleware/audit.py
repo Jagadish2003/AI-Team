@@ -94,6 +94,14 @@ PACK_MIGRATION_REVERTED = "pack_migration_reverted"
 # reviewer must be able to tell them apart without inferring it from the actor.
 # Telemetry counterpart: "pack.deprecation_disabled" (app/telemetry.py).
 PACK_DEPRECATION_DISABLED = "pack_deprecation_disabled"
+# 2.0-C4 T5 (AT-846): this org came under a pack's deprecation terms — the FIRST of
+# the story's three transitions, and the one that had no audit record before. A
+# declaration lives in the registry and is global; this is the org-scoped moment it
+# actually bears on a customer (their pack selection was resolved for a run while a
+# superseded pack was in it). Written once per (org, pack, declared terms), so moving
+# a grace date or changing the replacement re-announces but a repeat run does not.
+# Telemetry counterpart: "pack.deprecation_announced" (app/telemetry.py).
+PACK_DEPRECATION_ANNOUNCED = "pack_deprecation_announced"
 
 # ---------------------------------------------------------------------------
 # Registry — every accepted event type listed here.
@@ -122,6 +130,7 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     PACK_MIGRATION_APPLIED,
     PACK_MIGRATION_REVERTED,
     PACK_DEPRECATION_DISABLED,
+    PACK_DEPRECATION_ANNOUNCED,
 })
 
 # ---------------------------------------------------------------------------

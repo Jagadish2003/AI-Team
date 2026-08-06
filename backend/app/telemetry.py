@@ -268,6 +268,21 @@ class PackDeprecationDisabledPayload(TypedDict, total=False):
     actor_id: NotRequired[str]
 
 
+class PackDeprecationAnnouncedPayload(TypedDict, total=False):
+    """2.0-C4 T5 (AT-846) — an org came under a pack's deprecation terms.
+
+    Emitted once per (org, pack, declared terms), so a repeat run is silent but a
+    change to the grace date or the replacement announces again. Pack ids, phase, and
+    dates only.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    phase: NotRequired[str]
+    grace_ends_on: NotRequired[str]
+    replacement_pack_id: NotRequired[str]
+
+
 class PackVersionPinnedPayload(TypedDict, total=False):
     """2.0-C1 T3 (AT-828) — a run executed a ROLLED-BACK pack version.
 
@@ -1099,6 +1114,9 @@ register_event_type("pack.migration_reverted", PackMigrationPayload)
 # 2.0-C4 T4 (AT-845): the end of a grace period, enforced. Distinct from
 # "pack.state_changed" because the actor is the platform, not an owner.
 register_event_type("pack.deprecation_disabled", PackDeprecationDisabledPayload)
+# 2.0-C4 T5 (AT-846): the FIRST of the three deprecation transitions — the org coming
+# under a pack's deprecation terms, which had no record at all before this task.
+register_event_type("pack.deprecation_announced", PackDeprecationAnnouncedPayload)
 # T3-S11-A Sprint 11
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
 # T3-S12-A T7 Sprint 12
