@@ -31,6 +31,14 @@ vi.mock('../api/enrichmentApi', () => ({
   fetchOppEnrichment: vi.fn().mockResolvedValue(null),
 }));
 
+// Release 2.0 Arc A UI (the projection surfaces this file tests) is hidden by
+// default for the demo (see src/config/releaseFlags.ts). These tests exist to
+// verify the underlying implementation still renders correctly when the flag
+// is on, so they mock it true rather than asserting against hidden output.
+vi.mock('../config/releaseFlags', () => ({
+  showRelease2ArcAUi: true,
+}));
+
 import OpportunityDetail from '../components/analyst_review/OpportunityDetail';
 import TopQuickWins from '../components/executive_report/TopQuickWins';
 import { BlueprintContent } from '../pages/BlueprintPage';

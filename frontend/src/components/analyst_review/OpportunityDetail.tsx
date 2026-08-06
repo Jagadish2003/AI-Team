@@ -13,6 +13,7 @@ import {
 } from "../../api/enrichmentApi";
 import { useRunContext } from "../../context/RunContext";
 import BaselineContextPanel from "./BaselineContextPanel";
+import TraceGraphPanel from "./TraceGraphPanel";
 import ProjectionAssumptionLedger from "../projection/ProjectionAssumptionLedger";
 import ProjectionBandPanel from "../projection/ProjectionBand";
 import ProjectionBasisPanel from "../projection/ProjectionBasis";
@@ -833,6 +834,11 @@ export default function OpportunityDetail({
 
         {/* ENT-6/T9: Causal hypothesis evidence trace — after entity trace. */}
         <CausalHypothesisPanel causal_hypothesis={enrichment?.causal_hypothesis} />
+
+        {/* 2.0-B1 T3: interrogation UI — drill down to the full finding ->
+            evidence -> source-record chain, join/window info, and the
+            retrieval candidates assembly considered (used and unused). */}
+        <TraceGraphPanel runId={runId} oppId={opp.id} />
 
         {/* T41-7: Required Permissions section removed from Opportunity Review.
             Permissions are now shown on the Agent Blueprint screen in
