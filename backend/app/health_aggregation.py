@@ -227,6 +227,17 @@ def _read_stream_checkpoint(org_id: str, connector_id: str) -> Optional[Dict[str
     try:
         cur = con.cursor()
         cur.execute(
+            # NULLS LAST is load-bearing, not tidiness. PostgreSQL's DESC default
+            # is NULLS FIRST, and a stream can legitimately carry a NULL
+            # captured_at — an optional ServiceNow table (sn_si_incident,
+            # sn_vul_*) that is absent or unreadable records a row with no
+            # timestamp. Such a row sorting first made it the "newest" stream, so
+            # the connector reported checkpoint_age_seconds = None and
+            # _checkpoint_attention_items skipped it (captured_at is None ->
+            # continue) — silently suppressing the stall alert for a connector
+            # whose every real stream had been quiet for days. Ordering real
+            # timestamps ahead of NULLs means the newest stream is the newest
+            # stream that actually has a time.
             "SELECT connector_id, value, captured_at FROM ingestion_checkpoints "
             "WHERE org_id = %s AND left(connector_id, %s) = %s AND is_deleted = FALSE "
             "ORDER BY captured_at DESC NULLS LAST, connector_id ASC",

@@ -196,11 +196,26 @@ function checkpointReadTime(values: unknown[]): string | null {
   return null;
 }
 
+/**
+ * The ONE place a raw checkpoint position is decoded.
+ *
+ * A checkpoint value is opaque to the frontend by design — it is a plain ISO
+ * string for a single-cursor connector and a nested per-scope map for the cloud
+ * ones. Decoding it in exactly one function means a serialisation change (a key
+ * rename, a new nesting level) has a single site to update; when two callers
+ * each parsed it independently, one could be updated and the other would
+ * silently render nothing.
+ */
+function parseCheckpointPosition(raw: string | null | undefined): unknown | null {
+  if (!raw || !raw.trim()) return null;
+  // A bare ISO timestamp is not JSON, so a parse failure is expected, not an
+  // error: fall back to the raw string and let the caller read a time off it.
+  return parseJson(raw) ?? raw;
+}
+
 function checkpointProgressRows(item: ConnectorHealthItem): Array<{ label: string; value: string; readTime?: string }> {
-  const position = item.checkpoint_position;
-  if (!position || !position.trim()) return [];
-  const parsed = parseJson(position);
-  const source = parsed ?? position;
+  const source = parseCheckpointPosition(item.checkpoint_position);
+  if (source === null) return [];
 
   if (isPlainRecord(source)) {
     return Object.entries(source).flatMap(([key, value]) => {
@@ -222,9 +237,14 @@ function checkpointProgressRows(item: ConnectorHealthItem): Array<{ label: strin
   return readTime ? [{ label: "Data checkpoint", value: `Continues after ${readTime}`, readTime }] : [];
 }
 
+/**
+ * The supporting-details view of the same rows, minus the readTime the progress
+ * view uses for ordering. Derived from `checkpointProgressRows` rather than
+ * re-parsing the position, so the two views cannot disagree about what a
+ * checkpoint says.
+ */
 function checkpointSupportingRows(item: ConnectorHealthItem): Array<{ label: string; value: string }> {
-  const progressRows = checkpointProgressRows(item);
-  return progressRows.map(({ label, value }) => ({ label, value }));
+  return checkpointProgressRows(item).map(({ label, value }) => ({ label, value }));
 }
 
 function sentenceCase(value: string): string {

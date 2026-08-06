@@ -266,7 +266,7 @@ def apply_learned_adjustment(roadmap: PilotRoadmapModel) -> PilotRoadmapModel:
     if not isinstance(roadmap, dict) or not roadmap.get("stages"):
         return roadmap
     try:
-        from .learning_adjustment import adjust_ranking
+        from .learning_adjustment import RANK_SCOPE_ROADMAP_STAGE, adjust_ranking
         from .learning_adjustment_state import get_adjustments
         from .learning_signals import collect_learning_signals
         from .middleware.tenancy import get_current_org_id
@@ -292,6 +292,12 @@ def apply_learned_adjustment(roadmap: PilotRoadmapModel) -> PilotRoadmapModel:
                         adjustments,
                         is_active=True,
                         inactive_reason=signal_set.inactive_reason,
+                        # Ranks here index THIS STAGE, not the run. The explain
+                        # endpoint adjusts the flat list and so reports a
+                        # run-global rank for the same finding — declaring the
+                        # scope is what stops the two "moved N places" figures
+                        # being read as a contradiction.
+                        rank_scope=RANK_SCOPE_ROADMAP_STAGE,
                     ).ordered
                 ),
             }

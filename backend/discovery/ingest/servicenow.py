@@ -3463,6 +3463,16 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
         # passthrough, so a requested-but-uncopied column is still dropped here —
         # this is the second half of the mapping. Copied verbatim (no parsing or
         # renaming); the shared reader validates the value's shape.
+        #
+        # Verbatim is deliberate and stays that way: this query runs with
+        # sysparm_display_value=all, so a live multi-value field arrives wrapped
+        # as {"value": "sigA,sigB", "display_value": ...} rather than as a list.
+        # Unwrapping it HERE would put a second shape-handling rule in the
+        # ingestor while the reader kept its own, and the two would drift. The
+        # single reader — ops_recurrence_joins.extract_event_signatures — now
+        # accepts the plain list, the {value: [...]} wrapper and the
+        # comma-separated wrapped string, validating every candidate against the
+        # signature regex. Do not normalise here without deleting that.
         for signature_field in INCIDENT_EVENT_SIGNATURE_FIELDS:
             if record.get(signature_field) is not None:
                 incident[signature_field] = record.get(signature_field)
