@@ -228,7 +228,7 @@ def check_pack_compatibility(
     *,
     platform_version: Optional[str] = None,
 ) -> PackCompatibility:
-    """Check one pack against a platform version and report every unmet requirement.
+    """Check one REGISTERED pack against a platform version.
 
     ``pack_id`` is resolved through ``get_pack()``, so an unknown id is checked as
     the default pack (unchanged behaviour). ``platform_version`` defaults to the
@@ -238,8 +238,36 @@ def check_pack_compatibility(
     :func:`assert_pack_activatable` when a refusal should raise.
     """
     pack = get_pack(pack_id)
-    resolved_id = pack["packId"]
-    declaration = get_pack_compatibility_declaration(pack_id)
+    return check_declaration_compatibility(
+        pack_id=pack["packId"],
+        pack_name=pack.get("packName", pack["packId"]),
+        pack_version=get_pack_version(pack_id),
+        declaration=get_pack_compatibility_declaration(pack_id),
+        platform_version=platform_version,
+    )
+
+
+def check_declaration_compatibility(
+    *,
+    pack_id: str,
+    pack_name: str,
+    pack_version: str,
+    declaration: Dict[str, Any],
+    platform_version: Optional[str] = None,
+) -> PackCompatibility:
+    """Check a compatibility DECLARATION against a platform version.
+
+    The rule itself, separated from where the declaration came from. A registered
+    pack reads its block from ``pack_config`` (above); an AUTHORED pack being
+    installed (2.0-C3 T4 / AT-839) is not in the registry at all and supplies its
+    manifest's block directly. Both must be judged identically — an installed pack
+    held to a second, parallel implementation of this rule would drift from the one
+    the runner enforces, which is the failure the R17-A4 shared-extraction
+    discipline exists to prevent.
+
+    Never raises.
+    """
+    resolved_id = pack_id
     effective_platform = platform_version or get_platform_version()
 
     minimum = declaration["minPlatformVersion"]
@@ -349,8 +377,8 @@ def check_pack_compatibility(
 
     return PackCompatibility(
         pack_id=resolved_id,
-        pack_name=pack.get("packName", resolved_id),
-        pack_version=get_pack_version(pack_id),
+        pack_name=pack_name or resolved_id,
+        pack_version=pack_version,
         platform_version=effective_platform,
         min_platform_version=minimum,
         max_platform_version=maximum,
