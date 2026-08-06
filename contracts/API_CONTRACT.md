@@ -1,6 +1,36 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.22
-Date: 2026-08-03
+Version: v1.23
+Date: 2026-08-06
+
+> v1.23 — PR-fix pass (run-health checkpoint streams + adjustment rank scope).
+> Two additive fields that shipped in code without a contract entry, recorded
+> here so a backend reader treating this file as the source of truth sees them.
+>
+> 1. `GET /api/run-health/connectors` — each connector item may carry
+> `checkpoint_streams` (`number | null`, optional): the number of per-stream
+> checkpoint rows the reported `checkpoint_age_seconds` represents, for a
+> connector that checkpoints per stream (`{connector_id}:{stream}`) rather than
+> under its bare id. Absent/null for a single-cursor connector. The reported age
+> is that of the NEWEST stream **that carries a timestamp** — streams with a null
+> `captured_at` (an optional ServiceNow table that is absent or unreadable) sort
+> last and never displace a real one, so a stalled connector cannot report a
+> null age and thereby suppress its own stall alert. Mirrors
+> `frontend/src/types/runHealth.ts` `ConnectorHealthItem`.
+>
+> 2. `_ranking` (opportunities, roadmap entries) and
+> `GET /api/learning/adjustment/explain/{runId}/{opportunityId}` now carry
+> `rankScope` (`string`): what `baseRank`/`adjustedRank` are relative to —
+> `"run"` for the run-scoped surfaces, which order one flat list, and
+> `"roadmap_stage"` for a roadmap entry, since the roadmap adjusts each stage
+> separately. The SAME finding therefore legitimately holds different `baseRank`
+> values across the two payloads; consumers must not compare ranks (or a
+> "moved N places" figure) across differing scopes. Additive; pre-v1.23
+> consumers are unaffected.
+>
+> Cross-org note (no shape change): the run-scoped learning-adjustment reads
+> (`/preview/{runId}`, `/explain/{runId}/{opportunityId}`, `/base-order/{runId}`)
+> now answer **404** for a run belonging to another org, matching the run-scoped
+> cloud-ops and graph routes. Previously they served it.
 
 > v1.22 — 2.0-B2 T5 (Cross-Source Entity Enrichment — unmerge & re-evaluation):
 > added authenticated Analyst+ endpoints that REVERSE a resolution:
