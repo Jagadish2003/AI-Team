@@ -1698,7 +1698,28 @@ CREATE INDEX "idx_ranking_adjustment_history_org" ON "public"."ranking_adjustmen
 
 CREATE INDEX "idx_ranking_adjustment_history_group" ON "public"."ranking_adjustment_history" USING "btree" ("org_id", "detector_id", "pack_id", "recorded_at" DESC);
 
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0037') ON CONFLICT DO NOTHING;
+--
+-- 2.0-D4 T2 (AC2): enforce audit_log immutability at the GRANT level.
+--
+-- database/models/audit_log.py has documented this posture since AT-82, but it was
+-- never applied here - the application role held UPDATE, DELETE and TRUNCATE on the
+-- table, so "audit records cannot be updated or deleted through any application
+-- path" was true only of the code, not of the database. Applied by migration 0038
+-- as well, so a deployment provisioned either way ends up in the same state.
+--
+-- LIMITATION, stated rather than discovered later: in PostgreSQL a table OWNER can
+-- re-grant itself anything, so this binds only when the application role does NOT
+-- own audit_log. Provision the table as a migration/DBA role and grant the
+-- application role INSERT + SELECT only. tests/unit/test_audit_log_immutability.py
+-- reports the ownership caveat explicitly rather than implying protection.
+--
+-- Retention is deliberately NOT a DELETE grant here. See
+-- docs/audit_export_and_retention.md: the deletion path is outside the application
+-- by design, run by a separate role.
+--
+REVOKE UPDATE, DELETE, TRUNCATE ON "public"."audit_log" FROM PUBLIC;
+
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0038') ON CONFLICT DO NOTHING;
 
 
 --
