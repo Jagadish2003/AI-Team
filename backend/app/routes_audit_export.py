@@ -40,7 +40,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from .audit_export import AuditExportError, build_signed_export
+from .audit_export import AuditExportError, build_signed_export, normalise_period
 from .export_signing import ExportSigningError, verify_export
 from .middleware.audit import (
     AUDIT_EXPORT_GENERATED,
@@ -114,56 +114,105 @@ def generate_audit_export(
 ) -> Dict[str, Any]:
     """Owner-only: a signed audit export for this org and period.
 
-    The audit row is written BEFORE the payload is assembled, so a disclosure can
-    never go unrecorded because serialisation failed after the read. The trade-off
-    is stated in :mod:`app.audit_export`: an export therefore never contains its own
-    generation record, only those of previous exports.
+    **Exactly one audit row is written per request, carrying the real outcome.**
+
+    The first version wrote a ``success`` row up front, reasoning that a
+    disclosure must never go unrecorded if assembly failed after the read. That
+    was the wrong trade. When ``build_signed_export`` then raised — an inverted
+    period, an unconfigured signing key — a second row was appended with
+    ``failure``, and the trail permanently held a success disclosure for a period
+    that was never exported. An auditor reading it could not tell which row
+    reflected reality, which is precisely the ambiguity this feature exists to
+    remove. A missing row is a gap you can see; a false success is a lie you
+    cannot detect.
+
+    So the row is written once, at the point the outcome is known: after the
+    payload is built and before it is returned. The residual risk — the response
+    failing to reach the caller after the row is written — is both far smaller and
+    far less damaging, because it errs toward recording a disclosure that did not
+    complete rather than inventing one that never happened.
+
+    The period recorded is the NORMALISED one, identical to the boundaries the
+    signed file carries, so the trail and the artifact it describes can be
+    compared without apparent contradiction.
+
+    The consequence stated in :mod:`app.audit_export` still holds: an export never
+    contains its own generation record, only those of previous exports.
     """
     org_id = get_current_org_id()
     actor = _actor(token)
 
-    audit_log_event(
-        AUDIT_EXPORT_GENERATED,
-        org_id=org_id,
-        user_id=actor,
-        target=f"audit_log:{body.period_from}..{body.period_to}",
-        outcome=OUTCOME_SUCCESS,
-        period_from=body.period_from,
-        period_to=body.period_to,
-    )
+    def _audit(outcome: str, *, target: str, **detail: Any) -> None:
+        audit_log_event(
+            AUDIT_EXPORT_GENERATED,
+            org_id=org_id,
+            user_id=actor,
+            target=target,
+            outcome=outcome,
+            **detail,
+        )
+
+    # Normalise up front so a refused period is reported with the same boundaries
+    # a successful one would have used, and so the failure row below is not
+    # forced to fall back to the raw request strings.
+    try:
+        period_from, period_to = normalise_period(body.period_from, body.period_to)
+    except AuditExportError as exc:
+        _audit(
+            OUTCOME_FAILURE,
+            target="audit_log",
+            reason=str(exc),
+            requested_from=str(body.period_from),
+            requested_to=str(body.period_to),
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
     try:
-        return build_signed_export(
+        export = build_signed_export(
             org_id,
-            body.period_from,
-            body.period_to,
+            period_from,
+            period_to,
             generated_by=actor,
         )
     except AuditExportError as exc:
         # A bad period is the caller's error; record the refused attempt so an
         # auditor sees that an export was tried, not just that one succeeded.
-        audit_log_event(
-            AUDIT_EXPORT_GENERATED,
-            org_id=org_id,
-            user_id=actor,
-            target="audit_log",
-            outcome=OUTCOME_FAILURE,
+        _audit(
+            OUTCOME_FAILURE,
+            target=f"audit_log:{period_from}..{period_to}",
             reason=str(exc),
+            period_from=period_from,
+            period_to=period_to,
         )
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except ExportSigningError as exc:
         # No signing key: fail loudly rather than return an unsigned artifact that
         # looks like evidence.
-        audit_log_event(
-            AUDIT_EXPORT_GENERATED,
-            org_id=org_id,
-            user_id=actor,
-            target="audit_log",
-            outcome=OUTCOME_FAILURE,
+        _audit(
+            OUTCOME_FAILURE,
+            target=f"audit_log:{period_from}..{period_to}",
             reason="signing_key_unavailable",
+            period_from=period_from,
+            period_to=period_to,
         )
         logger.error("audit export refused: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from None
+
+    # The disclosure has happened: the rows are read, signed, and about to leave.
+    # sign_export returns the payload FLAT with a `signature` block added, so the
+    # counts are top-level rather than nested under a "payload" key.
+    signed = export if isinstance(export, dict) else {}
+    _audit(
+        OUTCOME_SUCCESS,
+        target=f"audit_log:{period_from}..{period_to}",
+        period_from=period_from,
+        period_to=period_to,
+        record_count=signed.get("record_count"),
+        # Recorded because a capped export discloses less than the period the row
+        # names; without it the trail overstates what was handed over.
+        complete=signed.get("complete"),
+    )
+    return export
 
 
 @router.post(

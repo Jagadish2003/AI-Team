@@ -82,23 +82,94 @@ def _connector_components(run: Mapping[str, Any]) -> List[ComponentDegradation]:
 
     out: List[ComponentDegradation] = []
     for system in requested:
-        if system in succeeded_set and system not in errors:
-            continue
         reason = errors.get(system) if isinstance(errors, Mapping) else None
-        reason_text = str(reason) if reason else "the source reported no successful read"
+        delivered_something = system in succeeded_set
+
+        if delivered_something and not reason:
+            continue
+
+        if delivered_something and reason:
+            # PARTIAL, not failed. A source can succeed and error in the same run
+            # — Salesforce delivers 400 records and then times out — and it lands
+            # in BOTH sets. Reporting that as `failed` with "No salesforce data
+            # contributed" is factually wrong: it did contribute, and saying
+            # otherwise makes every finding drawn from it look unsupported. The
+            # customer's real question is "how much did I get?", so the answer
+            # says partial and does not pretend to a record count the run record
+            # does not carry.
+            out.append(
+                ComponentDegradation(
+                    kind=COMPONENT_CONNECTOR,
+                    component=system,
+                    status=STATUS_PARTIAL,
+                    native_status="partial",
+                    attempted=f"Ingest {system} for this run",
+                    delivered=(
+                        f"{system} contributed data before failing — findings "
+                        "citing it are supported, but incomplete"
+                    ),
+                    missing=(
+                        f"An unknown remainder of {system} data was not read for "
+                        "this run"
+                    ),
+                    reason=str(reason),
+                    remedy=(
+                        f"Re-run discovery to pick up the {system} records this "
+                        "run did not reach. Findings from other sources are "
+                        "unaffected."
+                    ),
+                )
+            )
+            continue
+
+        if reason:
+            # Requested, attempted, and failed with a named reason.
+            out.append(
+                ComponentDegradation(
+                    kind=COMPONENT_CONNECTOR,
+                    component=system,
+                    status=STATUS_FAILED,
+                    native_status="error",
+                    attempted=f"Ingest {system} for this run",
+                    delivered=None,
+                    missing=f"No {system} data contributed to this run's findings",
+                    reason=str(reason),
+                    remedy=(
+                        f"Check the {system} connection on the Integration Hub, "
+                        "then re-run discovery. Findings from other sources "
+                        "remain valid."
+                    ),
+                )
+            )
+            continue
+
+        # Requested, but the run recorded NEITHER a success nor an error for it.
+        # This is deliberately UNKNOWN rather than UNAVAILABLE. `unavailable`
+        # means "produced nothing, for a reason that is not an error, and the
+        # customer can act on it" — a missing credential, a plugin that is not
+        # activated. A silent empty from a source that was asked for does not
+        # meet that bar: it is equally likely to be an ingestor defect that
+        # swallowed its own failure, and labelling it `unavailable` sends an
+        # operator hunting for a credential problem that may not exist.
         out.append(
             ComponentDegradation(
                 kind=COMPONENT_CONNECTOR,
                 component=system,
-                status=STATUS_FAILED if reason else STATUS_UNAVAILABLE,
-                native_status="error" if reason else "skipped",
+                status=STATUS_UNKNOWN,
+                native_status=None,
                 attempted=f"Ingest {system} for this run",
                 delivered=None,
                 missing=f"No {system} data contributed to this run's findings",
-                reason=reason_text,
+                reason=(
+                    f"{system} was requested but reported neither a successful "
+                    "read nor an error, so why it produced nothing could not be "
+                    "established."
+                ),
                 remedy=(
-                    f"Check the {system} connection on the Integration Hub, then "
-                    "re-run discovery. Findings from other sources remain valid."
+                    f"Check the {system} connection on the Integration Hub AND "
+                    "this run's ingest logs — a source that fails silently is "
+                    "usually a credential or configuration problem, but may be a "
+                    "connector defect."
                 ),
             )
         )
@@ -271,10 +342,20 @@ def storage_degradation() -> List[ComponentDegradation]:
 
         freshness_metrics("__degradation_probe__")
     except Exception as exc:
+        # STATUS_FAILED, not STATUS_UNAVAILABLE. An exception out of a database
+        # query is a component that was reached and did not work, which is this
+        # module's definition of `failed`. `unavailable` is explicitly "not an
+        # error, and actionable by the customer" — a missing plugin, an absent
+        # credential — and a pgvector misconfiguration (say, retrieval_chunks
+        # absent after a half-applied migration raising UndefinedTable) is
+        # neither. Getting this wrong understated the problem twice over: it
+        # ranks below `failed` in worst(), so a run-wide roll-up read one notch
+        # healthier than reality, and it pointed the remedy at the customer's
+        # configuration rather than at the operator who needs to fix a migration.
         out.append(
             ComponentDegradation(
                 kind=COMPONENT_STORAGE, component="retrieval_store",
-                status=STATUS_UNAVAILABLE, native_status="error",
+                status=STATUS_FAILED, native_status="error",
                 attempted="Read retrieval freshness metrics",
                 missing=(
                     "Findings for this run could not cite indexed document or "
@@ -282,8 +363,11 @@ def storage_degradation() -> List[ComponentDegradation]:
                 ),
                 reason=f"The retrieval store did not answer: {str(exc)[:180]}",
                 remedy=(
-                    "Check the pgvector extension and the retrieval_chunks table. "
-                    "Findings from structured sources are unaffected."
+                    "Check that the pgvector extension is installed and that the "
+                    "retrieval_chunks table exists and is readable — an error "
+                    "here usually means a migration did not complete, not a "
+                    "customer configuration problem. Findings from structured "
+                    "sources are unaffected."
                 ),
             )
         )

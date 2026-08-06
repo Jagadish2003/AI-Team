@@ -164,6 +164,31 @@ def fetch_audit_rows(
     return out, complete
 
 
+def normalise_period(period_from: Any, period_to: Any) -> Tuple[str, str]:
+    """The period boundaries exactly as an export will record them.
+
+    Public because the ROUTE needs the same values for its audit row. The audit
+    trail previously recorded the raw strings the caller sent (``"2026-07-20"``)
+    while the signed file recorded the normalised end-of-day boundary
+    (``"2026-07-20T23:59:59.999999+00:00"``). Each was right in isolation, but an
+    auditor comparing the trail against the file it describes saw two different
+    periods and had every reason to ask which one was real — in an artifact whose
+    whole purpose is being checkable, that is a defect.
+
+    Deriving both from one function means they cannot drift.
+
+    Raises:
+        AuditExportError: if a boundary is missing or unparseable, or the range is
+            inverted — so a caller validating up front refuses a bad period on
+            exactly the terms the export itself would.
+    """
+    start = _parse_boundary(period_from, field="from")
+    end = _parse_boundary(period_to, field="to")
+    if end < start:
+        raise AuditExportError("`to` must not be earlier than `from`")
+    return start, end
+
+
 def build_export(
     org_id: str,
     period_from: Any,
@@ -174,10 +199,7 @@ def build_export(
     limit: int = MAX_EXPORT_ROWS,
 ) -> Dict[str, Any]:
     """Build the UNSIGNED export payload for one org and period."""
-    start = _parse_boundary(period_from, field="from")
-    end = _parse_boundary(period_to, field="to")
-    if end < start:
-        raise AuditExportError("`to` must not be earlier than `from`")
+    start, end = normalise_period(period_from, period_to)
 
     rows, complete = fetch_audit_rows(org_id, start, end, limit=limit)
 
