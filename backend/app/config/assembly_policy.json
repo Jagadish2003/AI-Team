@@ -51,5 +51,44 @@
     "entity",
     "relationship",
     "evidence"
-  ]
+  ],
+  "_contradictions": "2.0-B3 T3: which attributes two sources may be compared on, and what counts as a MATERIAL disagreement. When sources disagree the finding names the disagreement and carries both sides — assembly never chooses a winner. A position is only ever taken from a structured field; narrative text is never parsed for claims, because a claim read out of a paragraph is an inference presented as an observation. A MISSING value is not a position: absence of information is not disagreement.",
+  "contradictions": {
+    "_comparable_attributes": "Each entry declares one attribute, the real field spellings connectors use for it ('aliases', matched case- and separator-insensitively), how its values compare ('categorical' or 'numeric'), and optional 'equivalences' — groups of spellings that mean the same value, so a formatting difference is not reported as a disagreement. Equivalences are DECLARED, never guessed: a fuzzy similarity rule here would manufacture agreement, suppressing a real finding.",
+    "comparable_attributes": [
+      {
+        "name": "owner",
+        "kind": "categorical",
+        "aliases": ["owned_by", "owner_team", "assignment_group", "assigned_to", "support_group", "responsible_team", "managed_by"]
+      },
+      {
+        "name": "state",
+        "kind": "categorical",
+        "aliases": ["status", "lifecycle_state", "operational_status", "install_status"]
+      },
+      {
+        "name": "criticality",
+        "kind": "categorical",
+        "aliases": ["business_criticality", "priority", "impact", "severity"]
+      },
+      {
+        "name": "environment",
+        "kind": "categorical",
+        "aliases": ["env", "deployment_environment"]
+      },
+      {
+        "name": "escalation_target",
+        "kind": "categorical",
+        "aliases": ["escalation_group", "escalates_to", "on_call"]
+      }
+    ],
+    "_numeric_tolerance_ratio": "Two numbers disagree only when they differ by more than this fraction of the larger. Keeps 4.0 and 4.01 hours from reading as a conflict.",
+    "numeric_tolerance_ratio": 0.1,
+    "_require_observed": "Every position must be observed. An inferred value disagreeing with an observed one is the platform disagreeing with a source, and reporting that as 'two sources disagree' would overstate what was observed.",
+    "require_observed": true,
+    "_min_distinct_sources": "A disagreement needs two SYSTEMS, not two records. One system holding two conflicting rows is a data-quality problem inside that system.",
+    "min_distinct_sources": 2,
+    "_max_reported": "Bound on what is listed, so a pathological estate cannot flood a prompt. Whatever is omitted is COUNTED and reported — never silently dropped.",
+    "max_reported": 5
+  }
 }

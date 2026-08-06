@@ -82,6 +82,18 @@ class GraphContext(BaseModel):
     # dropped and why ... traceable in B1"). B1 is not on this branch, so the wiring
     # is deliberately left to it rather than half-built here.
     budget_report: Dict[str, Any] = Field(default_factory=dict)
+    # 2.0-B3 T3 (AC3): material disagreements between the sources this context is
+    # composed from, each naming the subject, the attribute and every side. Empty
+    # when the sources agree. ``contradiction_note`` is the rendered block the prompt
+    # carries — rendered once, in app/context_contradictions.py, so no surface
+    # composes its own wording and none can quietly resolve the disagreement.
+    contradictions: List[Dict[str, Any]] = Field(default_factory=list)
+    contradiction_note: str = ""
+    # 2.0-B3 T5 (AC5): the conversation MEDIUM ceiling as assessed over the evidence
+    # actually composed here. Non-empty means the support is conversation content
+    # only and this finding must not be presented above MEDIUM.
+    confidence_ceiling: str = ""
+    ceiling_assessment: Dict[str, Any] = Field(default_factory=dict)
 
 
 def _entity_get(entity: Any, key: str, default: Any = None) -> Any:
@@ -303,6 +315,22 @@ def build_graph_context(
 
     observed_summary = _render_observed_summary(shown_entities, shown_relationships)
 
+    # 2.0-B3 T3 (AC3): render the disagreement block once, here, from the package's
+    # own records. Kept OUT of observed_summary deliberately — that section lists what
+    # the sources say; this one says where they contradict each other, and folding the
+    # two would let a disagreement read as one more observed fact.
+    contradiction_note = ""
+    try:
+        from app.context_contradictions import render_reported_section
+
+        contradiction_note = render_reported_section(package.contradiction_report)
+    except Exception as exc:  # noqa: BLE001 — enrichment must not fail the run.
+        logger.error(
+            "graph_context: contradiction note unavailable for run %s (%s) — the "
+            "prompt will NOT name any source disagreement, which is not the same as "
+            "there being none", run_id, exc,
+        )
+
     return GraphContext(
         entity_count=total,
         entity_count_shown=shown,
@@ -314,4 +342,8 @@ def build_graph_context(
         relationship_count=len(shown_relationships),
         selection_log=package.selection_log,
         budget_report=package.budget_report or {},
+        contradictions=list(package.contradictions or []),
+        contradiction_note=contradiction_note,
+        confidence_ceiling=package.confidence_ceiling or "",
+        ceiling_assessment=package.ceiling_assessment or {},
     )

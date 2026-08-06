@@ -126,6 +126,10 @@ class DeclaredAssemblyPolicy:
     #: 2.0-B3 T2 — which kind yields first when the total budget binds. Trimmed from
     #: the LAST entry backwards, so the most substitutable kind is listed last.
     kind_precedence: Tuple[str, ...] = (KIND_ENTITY, KIND_RELATIONSHIP, KIND_EVIDENCE)
+    #: 2.0-B3 T3 — which attributes two sources may be compared on and what counts as
+    #: a material disagreement. Owned by ``app.context_contradictions``; declared here
+    #: so a deployment has ONE assembly-policy file rather than two.
+    contradictions: Optional[Any] = None
     source_path: str = ""
 
     @property
@@ -173,6 +177,21 @@ class DeclaredAssemblyPolicy:
                 "total_items": self.max_total_items,
             },
             "kind_precedence": list(self.kind_precedence),
+            "contradictions": {
+                "comparable_attributes": [
+                    a.name for a in getattr(self.contradictions, "comparable_attributes", ())
+                ],
+                "numeric_tolerance_ratio": getattr(
+                    self.contradictions, "numeric_tolerance_ratio", None
+                ),
+                "require_observed": getattr(
+                    self.contradictions, "require_observed", None
+                ),
+                "min_distinct_sources": getattr(
+                    self.contradictions, "min_distinct_sources", None
+                ),
+                "max_reported": getattr(self.contradictions, "max_reported", None),
+            },
         }
 
 
@@ -356,6 +375,27 @@ def parse_declared_policy(
     if isinstance(version, bool) or not isinstance(version, int):
         raise AssemblyPolicyConfigError(f"version must be an integer, got {version!r}")
 
+    # 2.0-B3 T3 — the contradiction block. Parsed by the module that owns the concept
+    # so its rules live in one place, and its error is re-raised as an
+    # AssemblyPolicyConfigError so a caller catching this file's error type sees every
+    # way this file can be wrong. An ABSENT block yields the documented defaults (a
+    # config written before T3 still detects disagreements); a PRESENT but invalid one
+    # raises, because an operator who configured this and got it wrong must be told.
+    try:
+        from .context_contradictions import (
+            ContradictionConfigError,
+            parse_contradiction_policy,
+        )
+    except ImportError:  # pragma: no cover — flat-layout import inside backend/.
+        from app.context_contradictions import (  # type: ignore[no-redef]
+            ContradictionConfigError,
+            parse_contradiction_policy,
+        )
+    try:
+        contradictions = parse_contradiction_policy(data.get("contradictions"))
+    except ContradictionConfigError as exc:
+        raise AssemblyPolicyConfigError(str(exc)) from exc
+
     return DeclaredAssemblyPolicy(
         version=int(version),
         budget_partitions=budget_partitions,
@@ -374,6 +414,7 @@ def parse_declared_policy(
         ),
         max_total_items=total_items,
         kind_precedence=kind_precedence,
+        contradictions=contradictions,
         source_path=source_path,
     )
 
