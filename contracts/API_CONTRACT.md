@@ -1,6 +1,36 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.21
+Version: v1.22
 Date: 2026-08-05
+
+> v1.22 — 2.0-C3 T6 (Sandbox Validation): installing a pack runs its manifest
+> through validation and its fixtures through the harness, and **activation re-runs
+> both** against today's platform rather than trusting the install-time verdict.
+> Additive; no existing field changed meaning.
+>
+> **New endpoint**
+> - `GET /api/packs/installed/{packId}/validation` (**analyst+**) —
+>   `{ packId, packVersion, status, fixtureCount, validation }`. **404** when the
+>   pack is not installed. Analyst rather than viewer because the reasons quote
+>   partner-supplied manifest and fixture text.
+>
+> **`SandboxValidation`** (the `validation` object, also additive on every
+> `InstalledPack`): `ok` (boolean), `stage`
+> (`admission` | `validation` | `fixtures` | `lint` | `passed`), `reasons[]`,
+> `notes[]`, `caseCount`, `recordCount`, `durationMs`, `platformVersion`,
+> `checkedAt`, and `limits` (`maxCases`, `maxRecordsPerCase`, `maxTotalRecords`,
+> `maxFixtureBytes`, `timeoutSeconds`). `InstalledPack` also gains `fixtureCount`.
+> `validation` is **null** only for a record written before this version — an
+> absent verdict is reported as absent, never as a pass.
+>
+> **New status code** — **409** `sandbox_limit_exceeded` on install or activation:
+> the pack's fixtures are too large or too slow to judge within this deployment's
+> limits. Deliberately distinct from `validation_failed` — "too expensive to judge"
+> and "judged and found wrong" need different actions from the author.
+>
+> **Activation re-runs the gates.** `PUT .../activation` with `active: true` now
+> runs sandbox validation *before* compatibility and the certification floor, so a
+> pack that was installable last month can be refused today with specific reasons.
+> `active: false` runs no gates and is never blocked.
 
 > v1.21 — 2.0-C3 T4 (Pack Packaging & Installation): an authored ("partner") pack
 > installs from a **signed bundle**, gated by C1 compatibility and C2 certification
@@ -19,7 +49,8 @@ Date: 2026-08-05
 > (`installed` | `active` | `inactive`), `active` (boolean), `manifestFingerprint`,
 > `bundleDigest`, `publisher`, `signingKeyId`, `certificationLevel` (always
 > `community` — see below), `certificationLabel`, `requestedCertificationLevel`,
-> `revision`, `installedBy`, `createdAt`, `updatedAt`.
+> `revision`, `installedBy`, `createdAt`, `updatedAt` (v1.22 adds `validation`
+> and `fixtureCount`).
 >
 > **An authored pack is always `community`.** `requestedCertificationLevel` is what
 > the publisher ASKED for; only a CloudFulcrum signature (2.0-C2) grants a level. A

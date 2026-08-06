@@ -109,9 +109,18 @@ class PackCheckReport:
 
 
 def check_manifest_document(
-    document: Any, cases: Optional[List[Dict[str, Any]]] = None
+    document: Any,
+    cases: Optional[List[Dict[str, Any]]] = None,
+    *,
+    deadline: Optional[float] = None,
 ) -> PackCheckReport:
-    """Run the three stages over an in-memory manifest document."""
+    """Run the three stages over an in-memory manifest document.
+
+    ``deadline`` (an absolute :func:`time.monotonic` instant) is passed straight
+    to the harness and raises :class:`HarnessTimeout` if the suite runs past it.
+    Only a bounded caller supplies one — the authoring loop does not, because an
+    author's own slow fixture is their business.
+    """
     report = PackCheckReport()
     validation = validate_manifest(document)
     if not validation.ok or validation.manifest is None:
@@ -121,7 +130,7 @@ def check_manifest_document(
     manifest = validation.manifest
     report.manifest = manifest
     if cases:
-        report.harness = run_cases(manifest, cases)
+        report.harness = run_cases(manifest, cases, deadline=deadline)
         findings = report.harness.findings
     else:
         findings = []

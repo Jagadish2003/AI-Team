@@ -354,3 +354,109 @@ def test_activation_writes_its_own_audit_event(client, org, bundle_b64):
     ]
     assert changes, "no pack_activation_changed audit entry was written"
     assert (changes[0].get("payload") or {}).get("status") == "active"
+
+
+# ── Sandbox validation (2.0-C3 T6 / AT-841) ───────────────────────────────────
+
+
+def test_the_install_verdict_is_readable_afterwards(client, org, bundle_b64):
+    """AT-841: an operator must be able to see what was validated without
+    re-uploading the bundle."""
+    install(client, org, bundle_b64)
+    response = client.get(
+        f"/api/packs/installed/{PACK_ID}/validation", headers=auth(org, ANALYST_TOKEN)
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["packId"] == PACK_ID
+    assert body["fixtureCount"] == 3
+    assert body["validation"]["ok"] is True
+    assert body["validation"]["stage"] == "passed"
+    assert body["validation"]["caseCount"] == 3
+    assert body["validation"]["limits"]["maxCases"] >= 1
+
+
+def test_the_validation_verdict_is_analyst_only(client, org, bundle_b64):
+    """The reasons quote partner-supplied manifest and fixture text."""
+    install(client, org, bundle_b64)
+    response = client.get(
+        f"/api/packs/installed/{PACK_ID}/validation", headers=auth(org, VIEWER_TOKEN)
+    )
+    assert response.status_code == 403
+
+
+def test_the_validation_verdict_of_an_uninstalled_pack_is_404(client, org):
+    response = client.get(
+        "/api/packs/installed/never_installed/validation",
+        headers=auth(org, ANALYST_TOKEN),
+    )
+    assert response.status_code == 404
+
+
+def test_activation_re_runs_validation_and_blocks_with_specific_reasons(
+    client, org, bundle_b64
+):
+    """The AT-841 requirement, end to end: the stored manifest is re-judged
+    against today's platform before the pack is allowed to execute, and a refusal
+    lists what actually failed."""
+    from dataclasses import replace
+
+    from app.pack_installation import get_installed_pack, get_installed_pack_store
+
+    assert install(client, org, bundle_b64).status_code == 201
+    record = get_installed_pack(org, PACK_ID)
+    broken = json.loads(json.dumps(dict(record.manifest)))
+    broken["detectors"][0]["primitive"] = "not_a_primitive"
+    get_installed_pack_store().upsert(replace(record, manifest=broken))
+
+    response = client.put(
+        f"/api/packs/installed/{PACK_ID}/activation",
+        json={"active": True},
+        headers=auth(org),
+    )
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["error"] == "validation_failed"
+    assert any("not_a_primitive" in failure for failure in detail["failures"])
+    assert get_installed_pack(org, PACK_ID).status != "active"
+
+    # ...and the reasons survive the request.
+    stored = client.get(
+        f"/api/packs/installed/{PACK_ID}/validation", headers=auth(org, ANALYST_TOKEN)
+    ).json()["validation"]
+    assert stored["ok"] is False
+    assert stored["stage"] == "validation"
+
+
+def test_withdrawal_is_never_blocked_by_validation(client, org, bundle_b64):
+    """Taking a pack out of service runs no gates."""
+    from dataclasses import replace
+
+    from app.pack_installation import get_installed_pack, get_installed_pack_store
+
+    install(client, org, bundle_b64, activate=True)
+    record = get_installed_pack(org, PACK_ID)
+    broken = json.loads(json.dumps(dict(record.manifest)))
+    broken["detectors"][0]["primitive"] = "not_a_primitive"
+    get_installed_pack_store().upsert(replace(record, manifest=broken))
+
+    response = client.put(
+        f"/api/packs/installed/{PACK_ID}/activation",
+        json={"active": False},
+        headers=auth(org),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "inactive"
+
+
+def test_fixtures_beyond_the_sandbox_limits_are_refused_as_a_limit(
+    client, org, bundle_b64, monkeypatch
+):
+    """A distinct reason from validation_failed: 'too expensive to judge' and
+    'judged and found wrong' need different actions from the author."""
+    monkeypatch.setenv("PACK_SANDBOX_MAX_TOTAL_RECORDS", "1")
+    response = install(client, org, bundle_b64)
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["error"] == "sandbox_limit_exceeded"
+    assert detail["failures"]

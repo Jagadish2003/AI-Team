@@ -15,6 +15,7 @@ on:
     paths:
       - "backend/discovery/packs/**"
       - "backend/app/pack_installation.py"
+      - "backend/app/pack_sandbox.py"
       - "backend/scripts/pack_sdk.py"
       - "backend/tests/unit/test_pack_*.py"
       - "backend/tests/unit/test_partner_documentation.py"
@@ -24,6 +25,7 @@ on:
     paths:
       - "backend/discovery/packs/**"
       - "backend/app/pack_installation.py"
+      - "backend/app/pack_sandbox.py"
       - "backend/scripts/pack_sdk.py"
       - "backend/tests/unit/test_pack_*.py"
       - "backend/tests/unit/test_partner_documentation.py"
@@ -105,4 +107,5 @@ jobs:
             tests/unit/test_pack_primitive_library.py \
             tests/unit/test_pack_authoring_toolkit.py \
             tests/unit/test_pack_bundle_packaging.py \
-            tests/unit/test_pack_installation.py
+            tests/unit/test_pack_installation.py \
+            tests/unit/test_pack_sandbox_validation.py

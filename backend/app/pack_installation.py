@@ -1,4 +1,4 @@
-"""Authored-pack installation — 2.0-C3 T4 (AT-839).
+"""Authored-pack installation — 2.0-C3 T4 (AT-839), T6 (AT-841).
 
 The rule this module owns:
 
@@ -15,9 +15,11 @@ an operator handed "installation failed" cannot act on it:
        written anywhere. Extraction is the step that puts partner-supplied content
        on disk, so nothing precedes verification.
     2. **validation** — the manifest schema, the author's fixtures, and the lint
-       pass, run through the SAME ``check_pack_directory`` the author ran locally.
-       One code path means "it passed on my machine" and "it passed on install"
-       cannot diverge.
+       pass, run through the SAME ``check_pack_directory`` the author ran locally,
+       BOUNDED by the sandbox (T6 / :mod:`app.pack_sandbox`). One code path means
+       "it passed on my machine" and "it passed on install" cannot diverge; the
+       bounds mean a fixture suite nobody could afford to run is a named refusal
+       rather than a request that never returns.
     3. **compatibility (2.0-C1)** — the manifest's declared platform range and
        required concepts, judged by the shared
        ``check_declaration_compatibility`` rule the runner enforces, not a copy.
@@ -29,12 +31,23 @@ an operator handed "installation failed" cannot act on it:
 
 Installing does not activate
 -----------------------------
-Installation records a pack; activation is a separate, explicit decision. The
-two gates that can change underneath an installed pack — the platform version and
-the org's certification floor — are therefore re-checked at activation rather
-than trusted from install time. A pack that was installable last month is not
-automatically activatable today, and pretending otherwise is how a
-Certified-only deployment ends up running a Community pack.
+Installation records a pack; activation is a separate, explicit decision, and
+EVERYTHING that can change underneath an installed pack is re-checked when it is
+activated rather than trusted from install time:
+
+  * the **sandbox validation** (T6) — the stored manifest and the author's stored
+    fixtures, re-judged against the platform as it is today. This is why the
+    fixtures are persisted at all: a pack that cannot be re-validated is one the
+    platform would have to take on trust at the moment it starts executing;
+  * the **platform version** and the org's **certification floor**.
+
+A pack that was installable last month is not automatically activatable today,
+and pretending otherwise is how a Certified-only deployment ends up running a
+Community pack — or how a pack whose concepts the platform has since withdrawn
+starts producing nothing while reporting success.
+
+Withdrawal runs no gates. Taking a pack OUT of service must never be blocked by
+the pack's own condition.
 
 Nothing is ever deleted
 -----------------------
@@ -55,7 +68,7 @@ import json
 import logging
 import tempfile
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
@@ -69,7 +82,12 @@ from discovery.packs.pack_compatibility import (
 from discovery.packs.pack_config import PACK_REGISTRY
 from discovery.packs.sdk.bundle import BundleVerification, extract_bundle, verify_bundle
 from discovery.packs.sdk.manifest import PackManifest, manifest_to_pack_config
-from discovery.packs.sdk.toolkit import check_pack_directory
+from .pack_sandbox import (
+    STAGE_ADMISSION,
+    SandboxReport,
+    run_sandbox_validation,
+    sandbox_pack_directory,
+)
 
 from .pack_certification_policy import (
     PackCertificationPolicyUnavailable,
@@ -93,6 +111,10 @@ INSTALLED_PACK_STATUSES = frozenset({STATUS_INSTALLED, STATUS_ACTIVE, STATUS_INA
 
 REASON_BUNDLE_UNVERIFIED = "bundle_unverified"
 REASON_VALIDATION_FAILED = "validation_failed"
+#: The pack's own fixtures are too large or too slow to judge. Distinct from a
+#: validation failure on purpose: "your pack is wrong" and "your fixtures cost
+#: more than this deployment will spend" need different actions from an author.
+REASON_SANDBOX_LIMIT = "sandbox_limit_exceeded"
 REASON_INCOMPATIBLE = "incompatible_with_platform"
 REASON_CERTIFICATION_POLICY = "certification_policy_violation"
 REASON_CERTIFICATION_POLICY_UNAVAILABLE = "certification_policy_unavailable"
@@ -155,6 +177,12 @@ class InstalledPack:
     publisher: str = ""
     signing_key_id: str = ""
     requested_level: str = LEVEL_COMMUNITY
+    #: The author's fixtures, kept so activation can re-run them (AT-841). A pack
+    #: that cannot be re-validated is one the platform must take on trust at the
+    #: moment it starts executing.
+    fixtures: Sequence[Mapping[str, Any]] = ()
+    #: The most recent sandbox verdict, as ``SandboxReport.to_dict()``.
+    validation: Mapping[str, Any] = field(default_factory=dict)
     revision: int = 1
     installed_by: str = ""
     created_at: str = ""
@@ -189,6 +217,8 @@ class InstalledPack:
             "certificationLabel": LEVEL_LABELS.get(self.certification_level, ""),
             "requestedCertificationLevel": self.requested_level,
             "revision": self.revision,
+            "validation": dict(self.validation) if self.validation else None,
+            "fixtureCount": len(self.fixtures),
             "installedBy": self.installed_by,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
@@ -211,6 +241,17 @@ class InstalledPackStore:
         raise NotImplementedError
 
     def set_status(self, org_id: str, pack_id: str, status: str, actor_id: str) -> InstalledPack:
+        raise NotImplementedError
+
+    def record_validation(
+        self, org_id: str, pack_id: str, validation: Mapping[str, Any]
+    ) -> InstalledPack:
+        """Store a fresh sandbox verdict without touching status.
+
+        Separate from ``set_status`` because a re-validation that REFUSES must
+        still be recorded — an operator needs to see why activation was blocked,
+        and folding it into the status write would only ever save the passes.
+        """
         raise NotImplementedError
 
 
@@ -269,6 +310,34 @@ class InMemoryInstalledPackStore(InstalledPackStore):
             self._rows[key] = updated
             return updated
 
+    def record_validation(
+        self, org_id: str, pack_id: str, validation: Mapping[str, Any]
+    ) -> InstalledPack:
+        with self._lock:
+            key = (_required(org_id, "org_id"), _required(pack_id, "pack_id"))
+            existing = self._rows.get(key)
+            if existing is None:
+                raise PackInstallRefused(
+                    REASON_NOT_INSTALLED,
+                    f"pack '{pack_id}' is not installed for this org",
+                    pack_id=str(pack_id),
+                )
+            updated = InstalledPack(
+                **{**existing.__dict__, "validation": dict(validation)}
+            )
+            self._rows[key] = updated
+            return updated
+
+
+#: The stored column list, written once. It appears in five statements below and
+#: is positionally coupled to ``_row_to_record`` — five hand-maintained copies of
+#: a column order is a bug waiting for the next column.
+_COLUMNS = (
+    "org_id, pack_id, pack_version, status, manifest, manifest_fingerprint, "
+    "bundle_digest, publisher, signing_key_id, requested_level, fixtures, "
+    "validation, revision, installed_by, created_at, updated_at"
+)
+
 
 class PostgresInstalledPackStore(InstalledPackStore):
     """Production store. Migration 0036 / provision.sql provision the table."""
@@ -280,10 +349,8 @@ class PostgresInstalledPackStore(InstalledPackStore):
         try:
             cur = con.cursor()
             cur.execute(
-                "SELECT org_id, pack_id, pack_version, status, manifest, "
-                "       manifest_fingerprint, bundle_digest, publisher, signing_key_id, "
-                "       requested_level, revision, installed_by, created_at, updated_at "
-                "FROM installed_packs WHERE org_id = %s AND pack_id = %s",
+                f"SELECT {_COLUMNS} FROM installed_packs "
+                "WHERE org_id = %s AND pack_id = %s",
                 (org, pack),
             )
             row = cur.fetchone()
@@ -297,10 +364,8 @@ class PostgresInstalledPackStore(InstalledPackStore):
         try:
             cur = con.cursor()
             cur.execute(
-                "SELECT org_id, pack_id, pack_version, status, manifest, "
-                "       manifest_fingerprint, bundle_digest, publisher, signing_key_id, "
-                "       requested_level, revision, installed_by, created_at, updated_at "
-                "FROM installed_packs WHERE org_id = %s ORDER BY pack_id",
+                f"SELECT {_COLUMNS} FROM installed_packs "
+                "WHERE org_id = %s ORDER BY pack_id",
                 (org,),
             )
             rows = cur.fetchall()
@@ -314,12 +379,13 @@ class PostgresInstalledPackStore(InstalledPackStore):
         try:
             cur = con.cursor()
             cur.execute(
-                """
+                f"""
                 INSERT INTO installed_packs (
                     org_id, pack_id, pack_version, status, manifest,
                     manifest_fingerprint, bundle_digest, publisher, signing_key_id,
-                    requested_level, revision, installed_by, created_at, updated_at
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1,%s,%s,%s)
+                    requested_level, fixtures, validation, revision, installed_by,
+                    created_at, updated_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1,%s,%s,%s)
                 ON CONFLICT (org_id, pack_id) DO UPDATE SET
                     pack_version = EXCLUDED.pack_version,
                     status = EXCLUDED.status,
@@ -329,13 +395,12 @@ class PostgresInstalledPackStore(InstalledPackStore):
                     publisher = EXCLUDED.publisher,
                     signing_key_id = EXCLUDED.signing_key_id,
                     requested_level = EXCLUDED.requested_level,
+                    fixtures = EXCLUDED.fixtures,
+                    validation = EXCLUDED.validation,
                     revision = installed_packs.revision + 1,
                     installed_by = EXCLUDED.installed_by,
                     updated_at = EXCLUDED.updated_at
-                RETURNING org_id, pack_id, pack_version, status, manifest,
-                          manifest_fingerprint, bundle_digest, publisher,
-                          signing_key_id, requested_level, revision, installed_by,
-                          created_at, updated_at
+                RETURNING {_COLUMNS}
                 """,
                 (
                     record.org_id,
@@ -348,6 +413,8 @@ class PostgresInstalledPackStore(InstalledPackStore):
                     record.publisher,
                     record.signing_key_id,
                     record.requested_level,
+                    json.dumps(list(record.fixtures)),
+                    json.dumps(dict(record.validation)),
                     record.installed_by,
                     record.created_at or now,
                     now,
@@ -366,17 +433,14 @@ class PostgresInstalledPackStore(InstalledPackStore):
         try:
             cur = con.cursor()
             cur.execute(
-                """
+                f"""
                 UPDATE installed_packs
                    SET status = %s,
                        revision = revision + 1,
                        installed_by = COALESCE(NULLIF(%s, ''), installed_by),
                        updated_at = %s
                  WHERE org_id = %s AND pack_id = %s
-                RETURNING org_id, pack_id, pack_version, status, manifest,
-                          manifest_fingerprint, bundle_digest, publisher,
-                          signing_key_id, requested_level, revision, installed_by,
-                          created_at, updated_at
+                RETURNING {_COLUMNS}
                 """,
                 (status, actor_id or "", _now(), org, pack),
             )
@@ -392,14 +456,49 @@ class PostgresInstalledPackStore(InstalledPackStore):
             )
         return _row_to_record(row)
 
+    def record_validation(
+        self, org_id: str, pack_id: str, validation: Mapping[str, Any]
+    ) -> InstalledPack:
+        org = _required(org_id, "org_id")
+        pack = _required(pack_id, "pack_id")
+        con = db.connect()
+        try:
+            cur = con.cursor()
+            cur.execute(
+                f"""
+                UPDATE installed_packs
+                   SET validation = %s,
+                       updated_at = %s
+                 WHERE org_id = %s AND pack_id = %s
+                RETURNING {_COLUMNS}
+                """,
+                (json.dumps(dict(validation)), _now(), org, pack),
+            )
+            row = cur.fetchone()
+            con.commit()
+        finally:
+            con.close()
+        if row is None:
+            raise PackInstallRefused(
+                REASON_NOT_INSTALLED,
+                f"pack '{pack}' is not installed for this org",
+                pack_id=pack,
+            )
+        return _row_to_record(row)
+
+
+def _json_column(value: Any, fallback: Any) -> Any:
+    """Read a JSONB column that psycopg2 may hand back as text."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:  # pragma: no cover - defensive
+            return fallback
+    return value if value is not None else fallback
+
 
 def _row_to_record(row: Sequence[Any]) -> InstalledPack:
-    manifest = row[4]
-    if isinstance(manifest, str):
-        try:
-            manifest = json.loads(manifest)
-        except json.JSONDecodeError:  # pragma: no cover - defensive
-            manifest = {}
+    manifest = _json_column(row[4], {})
     return InstalledPack(
         org_id=str(row[0]),
         pack_id=str(row[1]),
@@ -411,10 +510,12 @@ def _row_to_record(row: Sequence[Any]) -> InstalledPack:
         publisher=str(row[7] or ""),
         signing_key_id=str(row[8] or ""),
         requested_level=str(row[9] or LEVEL_COMMUNITY),
-        revision=int(row[10] or 1),
-        installed_by=str(row[11] or ""),
-        created_at=_iso(row[12]),
-        updated_at=_iso(row[13]),
+        fixtures=tuple(_json_column(row[10], []) or ()),
+        validation=_json_column(row[11], {}) or {},
+        revision=int(row[12] or 1),
+        installed_by=str(row[13] or ""),
+        created_at=_iso(row[14]),
+        updated_at=_iso(row[15]),
     )
 
 
@@ -457,23 +558,43 @@ def _verify_bundle_or_refuse(bundle: Any) -> BundleVerification:
     return verification
 
 
-def _validate_or_refuse(bundle: Any, pack_id: str) -> PackManifest:
-    """Run the author's own toolkit check over the extracted bundle.
+def _refuse_sandbox(report: SandboxReport, pack_id: str) -> "PackInstallRefused":
+    """Translate a failed sandbox verdict into the refusal for its stage."""
+    if report.stage == STAGE_ADMISSION:
+        return PackInstallRefused(
+            REASON_SANDBOX_LIMIT,
+            (
+                f"Pack '{pack_id}' could not be validated within this deployment's "
+                f"sandbox limits"
+            ),
+            failures=report.reasons,
+            pack_id=pack_id,
+        )
+    return PackInstallRefused(
+        REASON_VALIDATION_FAILED,
+        f"Pack '{pack_id}' failed {report.stage} validation",
+        failures=report.reasons,
+        pack_id=pack_id,
+    )
+
+
+def _validate_or_refuse(
+    bundle: Any, pack_id: str
+) -> "tuple[PackManifest, List[Dict[str, Any]], SandboxReport]":
+    """Run the author's own toolkit check over the extracted bundle, bounded.
 
     Extraction happens into a temporary directory that is removed on the way out,
     whatever the outcome: an installation that refused must leave nothing behind.
+    The fixtures are read out before that directory goes, because activation
+    (AT-841) has to be able to run them again later — see
+    :func:`set_installed_pack_activation`.
     """
     with tempfile.TemporaryDirectory(prefix="agentiq-pack-install-") as workspace:
         extract_bundle(bundle, workspace)
-        report = check_pack_directory(Path(workspace))
+        report = sandbox_pack_directory(Path(workspace))
         if not report.ok or report.manifest is None:
-            raise PackInstallRefused(
-                REASON_VALIDATION_FAILED,
-                f"Pack '{pack_id}' failed installation validation",
-                failures=report.reasons(),
-                pack_id=pack_id,
-            )
-        return report.manifest
+            raise _refuse_sandbox(report, pack_id)
+        return report.manifest, list(report.cases), report
 
 
 def check_installed_compatibility(manifest: PackManifest) -> PackCompatibility:
@@ -588,7 +709,7 @@ def install_pack_bundle(
             pack_id=verification.pack_id,
         )
 
-    manifest = _validate_or_refuse(bundle, verification.pack_id)
+    manifest, cases, validation = _validate_or_refuse(bundle, verification.pack_id)
     compatibility = _compatibility_or_refuse(manifest)
     _certification_policy_or_refuse(org, manifest.pack_id)
 
@@ -604,6 +725,8 @@ def install_pack_bundle(
         publisher=manifest.author.name,
         signing_key_id=verification.key_id,
         requested_level=manifest.requested_certification_level,
+        fixtures=tuple(cases),
+        validation=validation.to_dict(),
         installed_by=actor_id,
         created_at=now,
         updated_at=now,
@@ -644,11 +767,46 @@ def set_installed_pack_activation(
     if not active:
         return store.set_status(org, pack, STATUS_INACTIVE, actor_id)
 
-    manifest = _manifest_of(existing)
+    # AT-841: the manifest and the author's fixtures are re-run against TODAY's
+    # platform before the pack is allowed to execute. The install-time verdict is
+    # not carried forward — a pack installed months ago was judged by a platform
+    # that has since moved.
+    revalidated = revalidate_installed_pack(existing)
+    if not revalidated.ok:
+        raise _refuse_sandbox(revalidated, pack)
+
+    manifest = revalidated.manifest or _manifest_of(existing)
     if manifest is not None:
         _compatibility_or_refuse(manifest)
     _certification_policy_or_refuse(org, pack)
     return store.set_status(org, pack, STATUS_ACTIVE, actor_id)
+
+
+def revalidate_installed_pack(
+    record: InstalledPack, *, persist: bool = True
+) -> SandboxReport:
+    """Re-run the sandbox over an installed pack's stored manifest and fixtures.
+
+    The verdict is persisted whether it passed or failed (``persist``), because an
+    operator looking at a pack that will not activate needs the reasons without
+    re-uploading the bundle. A persistence failure is logged and swallowed: the
+    verdict itself is what the caller acts on, and losing the audit copy must not
+    turn a passing pack into a refused one.
+    """
+    report = run_sandbox_validation(
+        dict(record.manifest or {}), list(record.fixtures or ())
+    )
+    if persist:
+        try:
+            get_installed_pack_store().record_validation(
+                record.org_id, record.pack_id, report.to_dict()
+            )
+        except Exception:  # noqa: BLE001 - the verdict outranks its audit copy
+            logger.warning(
+                "Could not persist the sandbox verdict for pack %s", record.pack_id,
+                exc_info=True,
+            )
+    return report
 
 
 def _manifest_of(record: InstalledPack) -> Optional[PackManifest]:
@@ -671,6 +829,12 @@ def get_installed_pack(org_id: str, pack_id: str) -> Optional[InstalledPack]:
 
 def list_installed_packs(org_id: str) -> List[InstalledPack]:
     return get_installed_pack_store().list(_required(org_id, "org_id"))
+
+
+def get_installed_pack_validation(org_id: str, pack_id: str) -> Optional[Dict[str, Any]]:
+    """The stored sandbox verdict for an installed pack, or ``None`` if unknown."""
+    record = get_installed_pack(org_id, pack_id)
+    return dict(record.validation or {}) if record is not None else None
 
 
 def installed_packs_safe(org_id: str) -> List[InstalledPack]:
@@ -722,6 +886,7 @@ __all__ = [
     "REASON_INCOMPATIBLE",
     "REASON_NOT_INSTALLED",
     "REASON_RESERVED_PACK_ID",
+    "REASON_SANDBOX_LIMIT",
     "REASON_VALIDATION_FAILED",
     "STATUS_ACTIVE",
     "STATUS_INACTIVE",
@@ -736,10 +901,12 @@ __all__ = [
     "check_installed_compatibility",
     "get_installed_pack",
     "get_installed_pack_store",
+    "get_installed_pack_validation",
     "install_pack_bundle",
     "installed_pack_config",
     "installed_packs_safe",
     "list_installed_packs",
+    "revalidate_installed_pack",
     "set_installed_pack_activation",
     "set_installed_pack_store",
 ]

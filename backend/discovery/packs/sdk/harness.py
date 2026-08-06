@@ -26,6 +26,7 @@ comes from the latest record in the case's own signal. Nothing reads the clock.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
@@ -57,6 +58,16 @@ DETECTOR_EXPECT_FIELDS = (
 
 class HarnessError(ValueError):
     """A case file cannot be read or is not a well-formed case."""
+
+
+class HarnessTimeout(HarnessError):
+    """A suite ran past the deadline it was given.
+
+    Raised only when a caller supplies one (2.0-C3 T6 / AT-841's sandbox does).
+    It is deliberately NOT a case failure: a suite that ran out of time has not
+    been shown to fail, it has been shown to be too expensive to judge, and those
+    are different verdicts.
+    """
 
 
 @dataclass(frozen=True)
@@ -365,10 +376,29 @@ def run_case(manifest: PackManifest, case: Mapping[str, Any]) -> CaseResult:
 
 
 def run_cases(
-    manifest: PackManifest, cases: Sequence[Mapping[str, Any]]
+    manifest: PackManifest,
+    cases: Sequence[Mapping[str, Any]],
+    *,
+    deadline: Optional[float] = None,
 ) -> HarnessResult:
-    """Run a whole suite. Every case runs even after one fails."""
-    return HarnessResult(cases=[run_case(manifest, case) for case in cases])
+    """Run a whole suite. Every case runs even after one fails.
+
+    ``deadline`` is an absolute :func:`time.monotonic` instant, checked BETWEEN
+    cases; passing it raises :class:`HarnessTimeout`. The check lives here because
+    this loop is the only place that can make it — a caller wanting a bounded run
+    would otherwise have to re-implement the loop, which is exactly the drift the
+    toolkit exists to prevent. Work *inside* one case is bounded by the caller's
+    record limits rather than by this deadline.
+    """
+    results: List[CaseResult] = []
+    for case in cases:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise HarnessTimeout(
+                f"fixture suite exceeded its time budget after {len(results)} "
+                f"of {len(cases)} case(s)"
+            )
+        results.append(run_case(manifest, case))
+    return HarnessResult(cases=results)
 
 
 def run_pack_directory(directory: Any, manifest: Optional[PackManifest] = None) -> HarnessResult:
@@ -389,6 +419,7 @@ __all__ = [
     "CaseResult",
     "HarnessError",
     "HarnessResult",
+    "HarnessTimeout",
     "load_case",
     "load_cases",
     "run_case",

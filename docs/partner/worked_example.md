@@ -297,15 +297,25 @@ Five gates run in order, and a refusal names the one that stopped it:
 
 1. **signature** — verified before anything is written to disk;
 2. **validation** — your manifest, your fixtures, and lint, through the same
-   `check` you ran locally;
+   `check` you ran locally, run inside the platform's sandbox limits (case count,
+   records, and a time budget). Fixtures too large to judge are refused as
+   `sandbox_limit_exceeded`, which is a different answer from "your pack is
+   wrong" — keep your suite representative rather than exhaustive;
 3. **compatibility** — your declared platform range and required concepts;
 4. **certification policy** — a Certified-only org refuses a Community pack,
    naming its floor;
 5. **persist**.
 
-Installing is not activating, and gates 3 and 4 are re-run on activation, because
-both can move underneath an installed pack: the platform can be upgraded past your
-declared ceiling, and an Owner can raise the certification floor.
+Installing is not activating, and gates **2, 3 and 4** are re-run on activation,
+because all three can move underneath an installed pack: your fixtures are
+re-judged against the platform as it is *that day*, the platform can be upgraded
+past your declared ceiling, and an Owner can raise the certification floor. This
+is why the platform keeps your fixtures — a pack it cannot re-validate is one it
+would have to take on trust at the moment it starts running.
+
+A refusal always lists the specific failures, and they stay readable afterwards
+at `GET /api/packs/installed/{packId}/validation`, so the Owner installing your
+pack can send you the reasons without re-uploading anything.
 
 Withdrawing a pack (`{"active": false}`) runs no gates and deletes nothing —
 findings your pack produced stay retrievable, labelled with the pack and version
