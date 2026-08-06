@@ -227,6 +227,33 @@ def test_connector_checkpoint_age_falls_back_to_newest_per_stream_checkpoint(cli
     assert sn["checkpoint_streams"] == 2
 
 
+def test_tied_per_stream_checkpoints_resolve_deterministically(client):
+    """Streams sharing a captured_at must not report a different one call to call.
+
+    ServiceNow's six streams routinely advance in the same run and are written from
+    one timestamp, so ties are the normal case rather than a corner. With a bare
+    ``ORDER BY captured_at DESC`` the winning row was arbitrary, so the reported
+    ``checkpoint_position``/stream could flip between two reads of identical data.
+    The age was never wrong (tied rows share a timestamp) — the reported stream was.
+    """
+    org = _owner_org("rh_tie")
+    tied = _now_iso(-600)
+    for stream in ("servicenow:sn_si_incident", "servicenow:cmdb_ci", "servicenow:cmdb_rel_ci"):
+        _seed_checkpoint(org, stream, f"pos-{stream.split(':')[1]}", tied)
+
+    seen = set()
+    for _ in range(4):
+        resp = client.get("/api/run-health/connectors", headers=_auth(org))
+        assert resp.status_code == 200
+        sn = next(c for c in resp.json()["connectors"] if c["connector_id"] == "servicenow")
+        assert sn["checkpoint_streams"] == 3
+        seen.add(sn["checkpoint_position"])
+
+    assert len(seen) == 1, f"tie resolved inconsistently across reads: {seen}"
+    # Lowest connector_id wins the tie, so the choice is stated rather than emergent.
+    assert seen == {"pos-cmdb_ci"}
+
+
 def test_bare_connector_checkpoint_wins_over_per_stream_rows(client):
     """A bare-id checkpoint is authoritative; the per-stream scan is only a fallback."""
     org = _owner_org("rh_bare_wins")

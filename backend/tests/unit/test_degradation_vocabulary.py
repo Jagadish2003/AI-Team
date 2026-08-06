@@ -285,3 +285,176 @@ class TestStoragePressureIsDistinguishedNotCollapsed:
                             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
         names = {c.component for c in rc.storage_degradation()}
         assert {"primary_database", "retrieval_store"} <= names
+
+
+# --------------------------------------------------------------------------
+# PR #561 review fixes — cases the first implementation got wrong.
+# --------------------------------------------------------------------------
+
+
+class TestASourceThatPartlySucceededIsNotCalledFailed:
+    """A source can succeed AND error in the same run.
+
+    Salesforce delivers 400 records and then times out, so it appears in both
+    ``succeeded`` and ``ingestErrors``. The first implementation fell through to
+    the failure branch and reported "No salesforce data contributed to this run's
+    findings" — factually wrong, and damaging in a specific way: it makes every
+    finding drawn from that source look unsupported.
+    """
+
+    def test_it_is_reported_as_partial(self):
+        c = build_run_completeness(
+            run(
+                succeeded=["salesforce", "servicenow", "jira"],
+                ingestErrors={"salesforce": "read timed out after 400 records"},
+            ),
+            include_environment=False,
+        )
+        sf = next(x for x in c.components if x.component == "salesforce")
+        assert sf.status == STATUS_PARTIAL
+        assert sf.status != STATUS_FAILED
+
+    def test_it_does_not_claim_the_source_contributed_nothing(self):
+        """The specific false statement the review found."""
+        c = build_run_completeness(
+            run(
+                succeeded=["salesforce", "servicenow", "jira"],
+                ingestErrors={"salesforce": "read timed out"},
+            ),
+            include_environment=False,
+        )
+        sf = next(x for x in c.components if x.component == "salesforce")
+        assert "No salesforce data contributed" not in (sf.missing or "")
+        assert sf.delivered, "a partial source must say what it DID deliver"
+
+    def test_the_run_is_still_incomplete(self):
+        """Softening the status must not soften the verdict — a partial read is
+        still not a complete run."""
+        c = build_run_completeness(
+            run(
+                succeeded=["salesforce", "servicenow", "jira"],
+                ingestErrors={"salesforce": "read timed out"},
+            ),
+            include_environment=False,
+        )
+        assert c.complete is False
+
+    def test_a_source_that_only_errored_is_still_failed(self):
+        """Guards the fix from over-reaching: no success entry means no data."""
+        c = build_run_completeness(
+            run(
+                succeeded=["servicenow", "jira"],
+                ingestErrors={"salesforce": "auth failed"},
+            ),
+            include_environment=False,
+        )
+        sf = next(x for x in c.components if x.component == "salesforce")
+        assert sf.status == STATUS_FAILED
+        assert "No salesforce data contributed" in (sf.missing or "")
+
+
+class TestASilentSourceIsUnknownNotUnavailable:
+    """Requested, but the run recorded neither a success nor an error.
+
+    ``unavailable`` is defined as "not an error, and actionable by the customer"
+    — an absent credential, an unactivated plugin. A silent empty does not meet
+    that bar: it is equally likely to be an ingestor defect that swallowed its own
+    failure, and the wrong label sends an operator hunting for a credential
+    problem that may not exist.
+    """
+
+    def test_it_is_unknown(self):
+        c = build_run_completeness(
+            run(succeeded=["salesforce", "jira"]),  # servicenow: no success, no error
+            include_environment=False,
+        )
+        sn = next(x for x in c.components if x.component == "servicenow")
+        assert sn.status == STATUS_UNKNOWN
+        assert sn.status != STATUS_UNAVAILABLE
+
+    def test_the_reason_says_the_cause_could_not_be_established(self):
+        c = build_run_completeness(
+            run(succeeded=["salesforce", "jira"]), include_environment=False
+        )
+        sn = next(x for x in c.components if x.component == "servicenow")
+        assert "neither" in (sn.reason or "").lower()
+
+    def test_the_remedy_does_not_send_the_operator_only_to_credentials(self):
+        """The practical harm of the old label was a misdirected investigation."""
+        c = build_run_completeness(
+            run(succeeded=["salesforce", "jira"]), include_environment=False
+        )
+        sn = next(x for x in c.components if x.component == "servicenow")
+        assert "defect" in (sn.remedy or "").lower()
+
+    def test_the_run_is_still_incomplete(self):
+        c = build_run_completeness(
+            run(succeeded=["salesforce", "jira"]), include_environment=False
+        )
+        assert c.complete is False
+
+
+class TestARetrievalStoreExceptionIsFailedNotUnavailable:
+    """A pgvector misconfiguration raises out of a DB query.
+
+    That is a component reached and not working — ``failed``. Labelling it
+    ``unavailable`` understated it twice: it ranks lower in ``worst()``, so a
+    run-wide roll-up read one notch healthier than reality, and it pointed the
+    remedy at customer configuration rather than at a half-applied migration.
+    """
+
+    def test_the_status_is_failed(self, monkeypatch):
+        from app import run_completeness as rc
+
+        monkeypatch.setattr("app.db.connect", lambda *a, **k: _WorkingConnection())
+        monkeypatch.setattr(
+            "app.retrieval.metrics.freshness_metrics",
+            lambda *a, **k: (_ for _ in ()).throw(
+                RuntimeError('relation "retrieval_chunks" does not exist')
+            ),
+        )
+        retrieval = [
+            c for c in rc.storage_degradation() if c.component == "retrieval_store"
+        ]
+        assert retrieval and retrieval[0].status == STATUS_FAILED
+
+    def test_the_rollup_reflects_the_worse_severity(self, monkeypatch):
+        """The reason the status matters beyond wording."""
+        assert worst([STATUS_OK, STATUS_FAILED]) == STATUS_FAILED
+        assert worst([STATUS_OK, STATUS_UNAVAILABLE]) == STATUS_UNAVAILABLE
+        assert worst([STATUS_UNAVAILABLE, STATUS_FAILED]) == STATUS_FAILED
+
+    def test_the_remedy_points_at_the_migration_not_the_customer(self, monkeypatch):
+        from app import run_completeness as rc
+
+        monkeypatch.setattr("app.db.connect", lambda *a, **k: _WorkingConnection())
+        monkeypatch.setattr(
+            "app.retrieval.metrics.freshness_metrics",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("UndefinedTable")),
+        )
+        remedy = [
+            c for c in rc.storage_degradation() if c.component == "retrieval_store"
+        ][0].remedy or ""
+        assert "migration" in remedy.lower()
+
+
+class _WorkingConnection:
+    """A primary DB that answers, so the retrieval probe is actually reached."""
+
+    def cursor(self):
+        return self
+
+    def execute(self, *a, **k):
+        return None
+
+    def fetchone(self):
+        return (1,)
+
+    def close(self):
+        return None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False

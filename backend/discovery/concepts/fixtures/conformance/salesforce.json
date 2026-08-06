@@ -1,0 +1,83 @@
+{
+  "_meta": {
+    "story": "2.0-B4 T5 (AT-814)",
+    "purpose": "Conformance golden fixture for one shipped connector (AC4). Locks the connector's per-concept conformance declaration (status/reason/mapper/field_gaps) from discovery/concepts/conformance.py. The CI gate (tests/contract/test_r2_0_b4_t5_conformance_fixtures.py) fails if a shipped connector has no fixture here, and pins each fixture to the registry so a conformance change cannot ship without updating its golden.",
+    "note": "Every 'supported' concept's mapper must resolve in T2's mapper registry (discovery.concepts.mappers.resolve_mapper) — the gate checks it. The raw→concept correctness of each mapper is proven by T2's connector-mapping test."
+  },
+  "connector_id": "salesforce",
+  "source_family": "crm",
+  "concept_set_version": 1,
+  "concepts": {
+    "actor_group": {
+      "status": "supported",
+      "reason": "only Group records with Type='Queue'. Roles, RoleAndSubordinates and territory groups are also Salesforce Groups and are refused: an org-chart node is not a work queue.",
+      "mapper": "discovery.concepts.mappers.salesforce:map_queue_actor_group",
+      "field_gaps": []
+    },
+    "approval": {
+      "status": "supported",
+      "reason": "ProcessInstance is a first-class approval record, which is why Salesforce supports this concept where Jira cannot; Status='Removed' maps to 'withdrawn', never 'rejected'. NOTE approval_type is always 'other': Salesforce does not classify a process as managerial / compliance / financial, and inferring it from the process NAME is the naming heuristic the platform refuses. That is recorded here rather than as a field gap because the field IS populated — with the vocabulary's neutral value — so calling it absent would be false.",
+      "mapper": "discovery.concepts.mappers.salesforce:map_process_instance_approval",
+      "field_gaps": [
+        {
+          "field": "approver_group",
+          "kind": "absent",
+          "reason": "the approver is on ProcessInstanceWorkitem.ActorId, which is a User in the common configuration; a queue-based approver cannot be distinguished from a person-based one without reading that child object"
+        }
+      ]
+    },
+    "artifact": {
+      "status": "not_applicable",
+      "reason": "the Salesforce ingest surface reads records, not files; attachments reach the platform through the document path instead",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "assignment": {
+      "status": "supported",
+      "reason": "",
+      "mapper": "discovery.concepts.mappers.salesforce:map_case_owner_assignment",
+      "field_gaps": [
+        {
+          "field": "assigned_to",
+          "kind": "partial",
+          "reason": "populated only when the new owner is a Queue (00G). A case handed to a person still produces the Assignment — the hop happened and a churn detector counts hops — but with no recipient, because naming it would name an individual."
+        }
+      ]
+    },
+    "entity_reference": {
+      "status": "supported",
+      "reason": "",
+      "mapper": "discovery.concepts.mappers.salesforce:map_record_reference",
+      "field_gaps": []
+    },
+    "state_transition": {
+      "status": "supported",
+      "reason": "",
+      "mapper": "discovery.concepts.mappers.salesforce:map_case_history_transition",
+      "field_gaps": [
+        {
+          "field": "actor_group",
+          "kind": "absent",
+          "reason": "CaseHistory records the field change and the user who made it, never a group"
+        }
+      ]
+    },
+    "work_item": {
+      "status": "supported",
+      "reason": "",
+      "mapper": "discovery.concepts.mappers.salesforce:map_case_work_item",
+      "field_gaps": [
+        {
+          "field": "assigned_group",
+          "kind": "partial",
+          "reason": "populated only when the case OwnerId is a Queue (key prefix 00G). A case owned by a User (005) carries no group, because there is no group to name — the record instead notes owner_is_individual so an empty field is explicable."
+        },
+        {
+          "field": "resolved_at",
+          "kind": "absent",
+          "reason": "Salesforce records ClosedDate only; a resolved-but-open state is expressed through Status, so mirroring ClosedDate here would invent a resolution time"
+        }
+      ]
+    }
+  }
+}

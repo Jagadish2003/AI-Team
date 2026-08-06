@@ -73,6 +73,7 @@ from .routes_graph import register_graph_routes
 from .routes_trace_graph import register_trace_graph_routes
 from .routes_evidence_export import register_evidence_export_routes
 from .routes_retrieval import register_retrieval_routes
+from .routes_concepts import register_concept_routes
 from .routes_cloud_ops_signatures import register_cloud_ops_signature_routes
 from .routes_run_health import register_run_health_routes
 from .routes_auth import register_auth_routes
@@ -373,6 +374,8 @@ register_trace_graph_routes(app)
 register_evidence_export_routes(app)
 # R18-B2 T6: retrieval freshness metrics for the run-health dashboard (AC7).
 register_retrieval_routes(app)
+# 2.0-B4 T2 (AC5): the normalised-concept contracts, conformance and declared gaps.
+register_concept_routes(app)
 # Read-only view of the cloud-event signature rows a run assembled — the values
 # needed to author matching ServiceNow incidents. Additive; nothing else reads it.
 register_cloud_ops_signature_routes(app)

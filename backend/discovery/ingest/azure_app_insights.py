@@ -37,8 +37,10 @@ objects, so a re-introduced private copy fails the build.
 What remains genuinely this module's own:
 
   * :data:`ALLOWED_ARM_PATHS` — the ARM paths D3 permits,
-  * :data:`EXCLUDED_ENDPOINT_MARKERS` and :func:`assert_read_allowed` — the
-    call-time refusal of an out-of-scope surface,
+  * :data:`EXCLUDED_ENDPOINT_MARKERS`, :func:`is_allowed_arm_path` and
+    :func:`assert_read_allowed` — the call-time refusal of an out-of-scope surface,
+    enforcing the deny-list and the ARM allow-list together so the two constants
+    cannot describe different boundaries,
   * :class:`AppInsightsScopeViolation`.
 
 **What is excluded, and why it is enforced in code.** D3 must not turn AgentIQ
@@ -54,7 +56,11 @@ are out of scope. Two independent guards, because a comment is not an enforcemen
     it can never swallow a legitimate B2 record.
   * :func:`assert_read_allowed` refuses a URL that targets an excluded surface, so
     the exclusion also holds for anything that tries to CALL such an endpoint
-    rather than merely hand us its output.
+    rather than merely hand us its output. It additionally refuses an ARM provider
+    path outside :data:`ALLOWED_ARM_PATHS`, so the permitted set is enforced on the
+    live request path and not only by the build-time AST test over string literals —
+    an ARM read no exclusion marker happens to match is refused rather than allowed
+    by omission.
 
 Transport-only, like every other value this connector adds: the scope is attached
 to the record WRAPPER (never to the MSP-B0 event), so no provider-specific
@@ -153,12 +159,31 @@ class AppInsightsScopeViolation(RuntimeError):
 
 
 def assert_read_allowed(url: str) -> None:
-    """Refuse a URL that targets an excluded telemetry/analytics surface.
+    """Refuse a URL that is not a surface D3 permits.
 
     The second of the two AC2 guards: :func:`is_excluded_telemetry` stops excluded
     DATA from being ingested, this stops an excluded ENDPOINT from being called at
     all. Applied to the live request path, so the boundary holds even for a caller
     that never hands us a record.
+
+    Enforces BOTH halves of the scope policy, because either alone leaves a hole and
+    the two are not symmetric:
+
+    1. :data:`EXCLUDED_ENDPOINT_MARKERS` — the deny-list. Names the surface that was
+       refused, which is the message worth having when a change trips the boundary.
+    2. :data:`ALLOWED_ARM_PATHS` — the allow-list, applied to ARM management-plane
+       reads. Without it, the deny-list was the whole effective boundary while
+       ``ALLOWED_ARM_PATHS`` was enforced only by a build-time AST test over string
+       literals in ``discovery/ingest/azure_*.py``. So a new ARM read that no marker
+       happened to match — ``providers/microsoft.security/alerts``, or a component's
+       own ARM sub-resource — was permitted at runtime, and adding an entry to
+       ``ALLOWED_ARM_PATHS`` without a matching marker silently widened what the
+       process would actually call. Enforcing both makes the two constants describe
+       one boundary instead of drifting apart.
+
+    The allow-list applies only to URLs carrying an ARM provider path (``/providers/``),
+    so the token exchange and any future non-ARM call are unaffected: this guard
+    decides which ARM surfaces may be read, not which hosts may be reached.
     """
     low = str(url or "").lower()
     for marker in EXCLUDED_ENDPOINT_MARKERS:
@@ -168,9 +193,21 @@ def assert_read_allowed(url: str) -> None:
                 f"raw telemetry, metrics, transactions and Log Analytics/KQL "
                 f"analytics are out of scope for AgentIQ"
             )
+    if "/providers/" in low and not is_allowed_arm_path(low):
+        raise AppInsightsScopeViolation(
+            f"2.0-D3 scope: refusing to read ARM path {url!r} — not one of the "
+            f"permitted surfaces {sorted(ALLOWED_ARM_PATHS)}. D3 adds no read "
+            f"surface; a genuinely new one must be added to ALLOWED_ARM_PATHS "
+            f"deliberately, with its scope reviewed"
+        )
 
 
 def is_allowed_arm_path(path: str) -> bool:
-    """Whether ``path`` is one of the ARM paths D3 permits (see ALLOWED_ARM_PATHS)."""
+    """Whether ``path`` is one of the ARM paths D3 permits (see ALLOWED_ARM_PATHS).
+
+    Used by :func:`assert_read_allowed` on the live request path AND by the
+    build-time AST scope test, so the runtime boundary and the structural one are
+    the same predicate over the same set.
+    """
     low = str(path or "").lower()
     return any(allowed in low for allowed in ALLOWED_ARM_PATHS)

@@ -205,6 +205,23 @@ def _read_stream_checkpoint(org_id: str, connector_id: str) -> Optional[Dict[str
     # Matched with a plain prefix comparison rather than LIKE: connector ids
     # legitimately contain '_' (aws_events, ops_event_bridge), which is a LIKE
     # single-character wildcard, so a LIKE pattern would also match unrelated ids.
+    #
+    # ORDER BY spells out both halves of "newest stream" rather than relying on a
+    # default, because this row IS the stall verdict and getting row 0 wrong
+    # suppresses the alert:
+    #   * NULLS LAST — PostgreSQL orders DESC as NULLS FIRST, so a row with no
+    #     captured_at would sort ahead of every real one and hand row 0 a NULL,
+    #     which `_checkpoint_attention_items` skips (`captured_at is None`) — a
+    #     stalled connector reporting nothing at all. `captured_at` is NOT NULL in
+    #     `database/models/ingestion_checkpoints.py`, so this cannot fire today; it
+    #     is stated so the guarantee survives the column becoming nullable, and
+    #     costs nothing while the column stays NOT NULL.
+    #   * connector_id ASC — this one is load-bearing NOW. Streams of one connector
+    #     routinely share a captured_at (ServiceNow's six advance in the same run,
+    #     written from one `now()`), and with a bare `captured_at DESC` the tie is
+    #     broken arbitrarily, so `stream_id`/`value` could differ between two calls
+    #     over identical rows. The age is unaffected (tied rows share a timestamp);
+    #     the reported stream is what stops flapping.
     prefix = f"{connector_id}:"
     con = db.connect()
     try:
@@ -223,7 +240,7 @@ def _read_stream_checkpoint(org_id: str, connector_id: str) -> Optional[Dict[str
             # stream that actually has a time.
             "SELECT connector_id, value, captured_at FROM ingestion_checkpoints "
             "WHERE org_id = %s AND left(connector_id, %s) = %s AND is_deleted = FALSE "
-            "ORDER BY captured_at DESC NULLS LAST",
+            "ORDER BY captured_at DESC NULLS LAST, connector_id ASC",
             (org_id, len(prefix), prefix),
         )
         rows = cur.fetchall() or []
