@@ -65,7 +65,11 @@ the same scope:
    admission. Once :meth:`OpsEventStream.has_capacity` is False every further event
    would be deferred anyway, so continuing to page the provider buys nothing.
 2. **Per-scope poll cap** (:data:`DEFAULT_MAX_POLLS_PER_SCOPE`) — one scope's
-   backlog can never monopolise the run.
+   backlog can never monopolise the run. The cap counts TOTAL polls of a scope in
+   one run, first poll included: ``4`` means at most four polls, ``1`` means poll
+   once and never continue, ``0`` means unbounded. (Counting continuations instead
+   would leave "poll once, never continue" inexpressible, since ``0`` is already
+   taken by unbounded.)
 3. **Wall-clock deadline** (:data:`DEFAULT_POLL_DEADLINE_SECONDS`) — volume is not
    time: a throttled provider can spend minutes on a single page. The deadline is
    consulted for CONTINUATION polls only, so every scope still gets its first poll
@@ -110,10 +114,11 @@ CHECKPOINT_VERSION = 1
 #: ``source_artifact_type`` stamped on every event's OBSERVED evidence pointer.
 CLOUD_EVENT_ARTIFACT_TYPE = "cloud_event"
 
-#: Default cap on CONTINUATION polls of a single scope within one run (the first
-#: poll of a scope is always performed). Each poll already follows the provider's
-#: own pagination internally, so this bounds a scope to a few thousand events per
-#: run and leaves the remainder to the next run. ``0`` = unbounded.
+#: Default cap on TOTAL polls of a single scope within one run — the first poll
+#: included, so ``4`` is four polls (three of them continuations) and ``1`` is a
+#: single poll with no continuation. Each poll already follows the provider's own
+#: pagination internally, so this bounds a scope to a few thousand events per run
+#: and leaves the remainder to the next run. ``0`` = unbounded.
 DEFAULT_MAX_POLLS_PER_SCOPE = 4
 
 #: Default wall-clock budget (seconds) for one run's whole poll phase. Bounds TIME
@@ -128,7 +133,9 @@ STOP_DEADLINE = "poll_deadline_seconds"
 
 
 def _configured_max_polls_per_scope() -> int:
-    """Per-scope continuation cap from ``CLOUD_EVENT_MAX_POLLS_PER_SCOPE``.
+    """Per-scope TOTAL-poll cap from ``CLOUD_EVENT_MAX_POLLS_PER_SCOPE``.
+
+    ``1`` polls each scope once and never continues; ``0`` is unbounded.
 
     The env name is spelled literally (not via a constant) so the ingest-layer env
     guard can statically confirm it is a numeric tuning knob and not a credential.
@@ -524,6 +531,10 @@ class CloudEventConnector(ChangeBasedIngestor):
         Called ONLY when a scope reports a remaining backlog, and only after at least
         one poll of that scope — so no scope is ever starved of its first poll by an
         earlier scope's backlog or by the deadline.
+
+        ``polls_done`` is the number of polls of THIS scope already performed in this
+        run (>= 1 here). The poll cap is compared against it directly, so the cap is
+        a bound on total polls per scope, first poll included.
         """
         # 1. B7 budget: past it every further event is deferred at admission, so
         #    fetching more provider pages buys nothing (MSP-B7 T4 — the budget must
@@ -531,9 +542,18 @@ class CloudEventConnector(ChangeBasedIngestor):
         try:
             if not self.stream.has_capacity():
                 return STOP_BUDGET
-        except Exception:  # pragma: no cover - a stream without the read side
-            pass
-        # 2. Per-scope continuation cap.
+        except Exception:  # a stream without the read side — never silently
+            # This bound is one of only three that terminate the poll loop, so
+            # losing it must be visible: with the poll cap and the deadline both
+            # disabled the loop would otherwise revert to the unbounded hang this
+            # module exists to prevent. The other two bounds still apply below.
+            logger.warning(
+                "%s: budget bound unavailable — stream.has_capacity() failed, so the "
+                "poll loop is bounded only by the poll cap (%s) and deadline (%s)",
+                self.connector_id, self.max_polls_per_scope, self.poll_deadline_seconds,
+                exc_info=True,
+            )
+        # 2. Per-scope poll cap (TOTAL polls of one scope in this run).
         if self.max_polls_per_scope and polls_done >= self.max_polls_per_scope:
             return STOP_POLL_CAP
         # 3. Wall-clock deadline for the whole poll phase.

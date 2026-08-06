@@ -104,6 +104,65 @@ def _is_persistable_checkpoint(value: str, connector_id: str, org_id: str) -> bo
     return False
 
 
+def _emit_ingestion_completed(org_id: str, connector_id: str, result: "IngestionResult") -> None:
+    """Emit the ONE connector-agnostic ``ingestion.completed`` event for this pass.
+
+    This runner is the single completion path every ``ChangeBasedIngestor``
+    travels, and it already holds the whole outcome — so this is the one place
+    that can report "connector X finished ingesting for org Y at time T" for
+    EVERY change-based connector, present and future, with no per-connector code
+    and no connector named here. The Run-Health connectors panel
+    (``app/health_aggregation.py``) reads it for "Last ingestion", which was
+    otherwise unavailable for any connector outside the native-DB ingestors and
+    the three ids ``app/connector_metrics.py`` hardcodes.
+
+    Deliberately NOT ``db.ingestor_completed`` (DB-shaped payload whose
+    ``degraded_count`` drives the panel's ``last_error``) and deliberately not
+    inferred from the checkpoint (which only moves when the position advances) —
+    see ``IngestionCompletedPayload`` for the full rejection rationale.
+
+    Called ONLY for a pass the runner itself judged successful (no captured
+    error). A clean poll that found nothing new still counts — that is a real
+    successful ingestion, and reporting it is the difference between "checked,
+    nothing new" and "never ran".
+
+    ``record_event`` is imported lazily (like ``_emit_artifact_changed`` below) to
+    avoid an import cycle with the app package at module load. Fire-and-forget:
+    a telemetry import/write failure must NEVER break ingestion.
+    """
+    try:
+        from app.telemetry import record_event
+    except Exception:  # pragma: no cover — telemetry must not break ingestion
+        logger.warning(
+            "change-ingest: telemetry unavailable; skipping ingestion.completed "
+            "for connector=%s org=%s.",
+            connector_id,
+            org_id,
+        )
+        return
+    try:
+        record_event(
+            "ingestion.completed",
+            {
+                "org_id": org_id,
+                "connector_id": connector_id,
+                "count": int(result.records),
+                "batches": int(result.batches),
+                "complete": bool(result.complete),
+                "checkpoint_advanced": bool(result.checkpoint_advanced),
+                "first_run": bool(result.first_run),
+                "observed_at": _utc_iso(),
+            },
+        )
+    except Exception:  # noqa: BLE001 — observability must never break ingestion
+        logger.warning(
+            "change-ingest: ingestion.completed emit failed for connector=%s org=%s.",
+            connector_id,
+            org_id,
+            exc_info=True,
+        )
+
+
 def _emit_artifact_changed(
     org_id: str, connector_id: str, records: list, *, notify_freshness: bool = True
 ) -> None:
@@ -400,6 +459,15 @@ def ingest_with_checkpoint(
                 type(exc).__name__,
                 exc,
             )
+
+    # The connector-agnostic completion fact (Run Health "Last ingestion"). Emitted
+    # here — outside the try/except, after the whole lifecycle settled — so it
+    # reports the FINAL outcome of the pass and can never be mistaken for a
+    # mid-stream state. Only a pass with no captured error is a successful
+    # ingestion; a failed pass already logged loudly above and must not stamp a
+    # success time. Fire-and-forget inside the helper.
+    if result.error is None:
+        _emit_ingestion_completed(org_id, connector_id, result)
 
     return result
 

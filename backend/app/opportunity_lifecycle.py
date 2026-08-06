@@ -420,6 +420,13 @@ def _apply_transition(
             )
         con.commit()
 
+    if validated.clear_action_date:
+        _invalidate_action_dependent_movements(
+            org_id=org,
+            opportunity_identity=identity,
+            actor_id=who,
+        )
+
     _audit_and_emit(
         org_id=org,
         opportunity_identity=identity,
@@ -432,6 +439,38 @@ def _apply_transition(
         run_id=run_id,
     )
     return get_lifecycle_or_raise(org, identity)
+
+
+def _invalidate_action_dependent_movements(
+    *,
+    org_id: str,
+    opportunity_identity: str,
+    actor_id: str,
+) -> None:
+    """Mark outcome measurements stale when the action they followed is cleared."""
+    try:
+        from .opportunity_movement import invalidate_movements_for_action_reversal
+
+        invalidated = invalidate_movements_for_action_reversal(
+            org_id,
+            opportunity_identity,
+            invalidated_by=actor_id,
+        )
+        if invalidated:
+            logger.info(
+                "Invalidated %d movement record(s) after action reversal for %s",
+                invalidated,
+                opportunity_identity,
+            )
+    except Exception as exc:  # noqa: BLE001
+        # Movement read paths independently require a current matching action
+        # date, so stale rows are suppressed even if this audit marker cannot be
+        # written. Log loudly because the marker is the durable explanation.
+        logger.warning(
+            "Could not mark movement records invalid after action reversal for %s: %s",
+            opportunity_identity,
+            exc,
+        )
 
 
 def _audit_and_emit(

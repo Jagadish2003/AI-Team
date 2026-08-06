@@ -147,26 +147,51 @@ beforeEach(() => {
 });
 
 describe("RunHealthDashboardPage", () => {
-  it("renders all five areas from live response data with direct attention links", async () => {
+  it("renders the visible areas from live response data with direct attention links", async () => {
     renderPage("/run-health?panel=connectors&connector=salesforce");
 
     expect(await screen.findByText("Salesforce authentication expired")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Connectors" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Runs" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Content and Freshness" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Packs" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Attention Strip" })).toBeInTheDocument();
 
     expect(screen.getByText("ServiceNow")).toBeInTheDocument();
-    expect(screen.getByText("Recommendation generation timed out")).toBeInTheDocument();
-    expect(screen.getByText("Commercial Lending")).toBeInTheDocument();
-    expect(screen.getByText("Loan Workflow")).toBeInTheDocument();
+    expect(screen.getByText(/Recommendation generation timed out/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /view connectors details/i })).toHaveAttribute(
       "href",
       "/run-health?panel=connectors&connector=salesforce",
     );
     // Selected panel is highlighted with the app accent ring (theme-aware).
     expect(screen.getByTestId("panel-connectors")).toHaveClass("ring-accent/30");
+  });
+
+  // The Content-and-Freshness and Packs panels are hidden from the dashboard, but
+  // their health reads still run so both keep feeding the tenant summary and the
+  // Attention Strip — hiding a card must not make a degraded tenant read healthy.
+  it("hides the Content and Packs panels while still performing their health reads", async () => {
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "Connectors" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Content and Freshness" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Packs" })).toBeNull();
+    expect(screen.queryByTestId("panel-content")).toBeNull();
+    expect(screen.queryByTestId("panel-packs")).toBeNull();
+
+    expect(api.fetchContentHealth).toHaveBeenCalledTimes(1);
+    expect(api.fetchPackHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it("still degrades the tenant summary from a hidden panel's signal", async () => {
+    // No connector, run or attention problem — the ONLY issue is stale content,
+    // reported by a panel that is no longer rendered.
+    api.fetchConnectorHealth.mockResolvedValue(makeConnectors(1));
+    api.fetchRunHealth.mockResolvedValue(makeRuns(1));
+    api.fetchContentHealth.mockResolvedValue({ ...contentResponse, pending_embeddings: 0, stale_chunks: 7, failed_refreshes: 0 });
+    api.fetchAttentionHealth.mockResolvedValue({ org_id: "org-health", severity_order: ["critical", "high", "medium", "low"], items: [] });
+    renderPage();
+
+    expect(await screen.findByText("Tenant health is degraded")).toBeInTheDocument();
+    expect(screen.queryByTestId("panel-content")).toBeNull();
   });
 
   it("distinguishes successful, degraded, failed, and in-progress runs", async () => {
@@ -177,6 +202,64 @@ describe("RunHealthDashboardPage", () => {
     expect(within(panel).getAllByText("Failed")[0].parentElement).toHaveTextContent("1");
     expect(within(panel).getByText("In progress").parentElement).toHaveTextContent("1");
     expect(panel).toHaveAttribute("data-state", "degraded");
+  });
+
+  it("shows connector checkpoint support details without exposing raw JSON", async () => {
+    api.fetchConnectorHealth.mockResolvedValue({
+      org_id: "org-health",
+      connectors: [{
+        ...connectorResponse.connectors[0],
+        connector_id: "azure_events",
+        name: "Azure Events",
+        auth_mode: "static",
+        checkpoint_position: JSON.stringify({
+          activity_log: { "5c43a0b5-1ca6-4d98-a58b-f1dcb13f1307": "2026-07-28T15:49:24.660908Z" },
+          alerts: {},
+          service_health: {},
+        }),
+        checkpoint_captured_at: "2026-07-29T13:23:00Z",
+      }],
+    });
+    renderPage();
+
+    const panel = await screen.findByTestId("panel-connectors");
+    expect(within(panel).getByText("Activity Log")).toBeInTheDocument();
+    expect(within(panel).getByText(/Continues after/i)).toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("No checkpoint saved yet");
+    expect(panel).not.toHaveTextContent("Alerts");
+    expect(panel).not.toHaveTextContent("Service Health");
+    expect(panel).not.toHaveTextContent("activity_log");
+    expect(panel).not.toHaveTextContent("5c43a0b5");
+    expect(panel).not.toHaveTextContent("service_health");
+  });
+
+  it("turns run support details into customer-readable issues and hides normal INFO events", async () => {
+    api.fetchRunHealth.mockResolvedValue({
+      org_id: "org-health",
+      runs: [{
+        ...runResponse.runs[1],
+        run_id: "run-salesforce-auth",
+        degraded_stages: [{
+          stage: "salesforce",
+          reason: 'HTTP 401: [{"message":"Session expired or invalid","errorCode":"INVALID_SESSION_ID"}] Query: SELECT COUNT(Id) FROM Case WHERE CreatedDate = LAST_N_DAYS:90',
+        }],
+        stage_outcomes: [
+          { stage: "queued", level: "INFO", message: "Queued" },
+          { stage: "connect", level: "INFO", message: "Connected" },
+          { stage: "ingest", level: "INFO", message: "Ingested" },
+        ],
+      }],
+    });
+    renderPage();
+
+    const panel = await screen.findByTestId("panel-runs");
+    expect(within(panel).getByText("Salesforce session expired or is no longer valid.")).toBeInTheDocument();
+    expect(within(panel).getByText("Reconnect Salesforce, then rerun discovery.")).toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("INVALID_SESSION_ID");
+    expect(panel).not.toHaveTextContent("SELECT COUNT");
+    expect(panel).not.toHaveTextContent("Queued: INFO");
+    expect(panel).not.toHaveTextContent("Connect: INFO");
+    expect(panel).not.toHaveTextContent("Ingest: INFO");
   });
 
   it("labels the Analyst experience read-only while preserving all health reads", async () => {
@@ -202,39 +285,16 @@ describe("RunHealthDashboardPage", () => {
     api.fetchContentHealth.mockRejectedValue(new Error("Retrieval store unavailable"));
     renderPage();
 
-    const contentPanel = await screen.findByTestId("panel-content");
-    expect(await within(contentPanel).findByText("Content health unavailable")).toBeInTheDocument();
-    expect(within(contentPanel).getByText("Retrieval store unavailable")).toBeInTheDocument();
-    expect(contentPanel).toHaveAttribute("data-state", "error");
-    expect(within(contentPanel).queryByText("Indexed chunks")).toBeNull();
-    expect(screen.getByText("Health partially unavailable")).toBeInTheDocument();
+    // The content panel is hidden, so the failure surfaces through the tenant
+    // summary rather than a panel-level error. It must never read as healthy.
+    expect(await screen.findByText("Health partially unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Tenant health is healthy")).toBeNull();
+    expect(screen.queryByText("Indexed chunks")).toBeNull();
   });
 
-  it("keeps supporting source details constrained inside the content panel", async () => {
-    api.fetchContentHealth.mockResolvedValue({
-      ...contentResponse,
-      indexed_by_source: [{
-        source_system: "sharepoint_workspace_with_extremely_long_identifier_that_used_to_expand_the_table",
-        chunk_count: 120,
-        embedded_count: 110,
-      }],
-      skipped: [{ reason: "very_long_skip_reason_that_should_wrap_inside_the_panel", count: 3 }],
-    });
-    renderPage();
-
-    const panel = await screen.findByTestId("panel-content");
-    expect(panel).toHaveClass("min-w-0");
-    expect(panel).toHaveClass("overflow-hidden");
-
-    const details = within(panel).getByText("Supporting source details").closest("details");
-    expect(details).toHaveClass("min-w-0");
-    expect(details).toHaveClass("overflow-hidden");
-    expect(details?.querySelector("table")?.className).toContain("table-fixed");
-
-    const sourceCell = within(panel).getByText(/Sharepoint Workspace With Extremely Long Identifier/i).closest("td");
-    expect(sourceCell).toHaveClass("break-words");
-    expect(within(panel).getByText(/Very Long Skip Reason That Should Wrap Inside The Panel/i)).toHaveClass("break-words");
-  });
+  // Removed with the Content panel's visibility: it asserted the long-identifier
+  // table/wrapping layout INSIDE that panel, which no longer renders. The panel
+  // component itself is retained unchanged, so re-showing it restores that layout.
 
   it("shows independent loading states for every health read", () => {
     const pending = new Promise(() => undefined);
@@ -245,13 +305,14 @@ describe("RunHealthDashboardPage", () => {
     api.fetchAttentionHealth.mockReturnValue(pending);
     renderPage();
 
-    // Each panel now shows a layout-shaped skeleton (labelled for a11y) rather
+    // Each visible panel shows a layout-shaped skeleton (labelled for a11y) rather
     // than a spinner + text, so the rows fill the reserved space with no shift.
+    // Content and pack skeletons are absent: those panels are hidden.
     expect(screen.getByLabelText("Loading connector health")).toBeInTheDocument();
     expect(screen.getByLabelText("Loading run health")).toBeInTheDocument();
-    expect(screen.getByLabelText("Loading content health")).toBeInTheDocument();
-    expect(screen.getByLabelText("Loading pack health")).toBeInTheDocument();
     expect(screen.getByLabelText("Loading attention items")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Loading content health")).toBeNull();
+    expect(screen.queryByLabelText("Loading pack health")).toBeNull();
   });
 
   it("uses explicit empty states when successful reads contain no activity", async () => {
@@ -276,10 +337,11 @@ describe("RunHealthDashboardPage", () => {
 
     expect(await screen.findByText("No connectors configured")).toBeInTheDocument();
     expect(screen.getByText("No discovery runs yet")).toBeInTheDocument();
-    expect(screen.getByText("No indexed content yet")).toBeInTheDocument();
-    expect(screen.getByText("No pack executions yet")).toBeInTheDocument();
     expect(screen.getByText("No current attention items")).toBeInTheDocument();
     expect(screen.getByText("Waiting for health data")).toBeInTheDocument();
+    // Hidden panels contribute no empty state of their own.
+    expect(screen.queryByText("No indexed content yet")).toBeNull();
+    expect(screen.queryByText("No pack executions yet")).toBeNull();
   });
 
   it("marks incomplete successful responses as partial instead of healthy", async () => {
@@ -295,51 +357,26 @@ describe("RunHealthDashboardPage", () => {
 
     await waitFor(() => expect(screen.getByTestId("panel-connectors")).toHaveAttribute("data-state", "partial"));
     expect(screen.getByTestId("panel-runs")).toHaveAttribute("data-state", "partial");
-    expect(screen.getByTestId("panel-content")).toHaveAttribute("data-state", "partial");
-    expect(screen.getByTestId("panel-packs")).toHaveAttribute("data-state", "partial");
-    expect(screen.getAllByText("Partial data")).toHaveLength(4);
+    // Only the two visible panels report a partial badge now.
+    expect(screen.getAllByText("Partial data")).toHaveLength(2);
   });
 
+  // Retargeted from the (now hidden) Packs panel to a visible one: the behaviour
+  // under test is that a retry refetches ONLY its own panel's read.
   it("retries only the failed panel", async () => {
-    api.fetchPackHealth.mockRejectedValueOnce(new Error("Pack read failed")).mockResolvedValueOnce(packResponse);
+    api.fetchRunHealth.mockRejectedValueOnce(new Error("Run read failed")).mockResolvedValueOnce(runResponse);
     renderPage();
-    const retry = await screen.findByRole("button", { name: /retry pack health/i });
+    const retry = await screen.findByRole("button", { name: /retry run health/i });
     retry.click();
-    await waitFor(() => expect(api.fetchPackHealth).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.fetchRunHealth).toHaveBeenCalledTimes(2));
     expect(api.fetchConnectorHealth).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText("Commercial Lending")).toBeInTheDocument();
+    expect(await screen.findByText("Run run-healthy-0001")).toBeInTheDocument();
   });
 
-  // R191-P1 T5 (AC5): a multi-pack run reports one pack row PER pack.
-  it("renders one Packs row per pack for a multi-pack run", async () => {
-    api.fetchPackHealth.mockResolvedValue({
-      run_id: "run-multi-0001",
-      packs: [
-        {
-          pack_id: "service_cloud",
-          pack_name: "Service Cloud",
-          pack_version: "1.0.0",
-          detector_count: 2,
-          detectors: ["repetition", "handoff_friction"],
-        },
-        {
-          pack_id: "enterprise_ops",
-          pack_name: "Enterprise Operations Intelligence",
-          pack_version: "1.0.0",
-          detector_count: 1,
-          detectors: ["ent_incident_resolution_lag"],
-        },
-      ],
-    });
-    renderPage();
-
-    const packsPanel = await screen.findByTestId("panel-packs");
-    // Both packs render as distinct rows in the Packs panel.
-    expect(await within(packsPanel).findByText("Service Cloud")).toBeInTheDocument();
-    expect(within(packsPanel).getByText("Enterprise Operations Intelligence")).toBeInTheDocument();
-    expect(within(packsPanel).getByText("service_cloud")).toBeInTheDocument();
-    expect(within(packsPanel).getByText("enterprise_ops")).toBeInTheDocument();
-  });
+  // R191-P1 T5 (AC5) — "one Packs row per pack for a multi-pack run" — was removed
+  // with the Packs panel's visibility, since it asserted rows in a panel that no
+  // longer renders. The per-pack backend shape is still covered by the backend
+  // pack-health contract tests; the panel component is retained unchanged.
 
   // Internal scroll: the Connectors and Runs card lists scroll once they exceed
   // three cards, so the panels stay compact instead of growing with the list.
@@ -406,13 +443,140 @@ describe("RunHealthDashboardPage", () => {
   it("gives the Runs card list an internal scrollbar only when there are more than three runs", async () => {
     api.fetchRunHealth.mockResolvedValue(makeRuns(4));
     const { unmount } = renderPage();
-    await screen.findByText("Run run-0-00");
+    await screen.findByText("Run run-0-000");
     expect(cardListOf(screen.getByTestId("panel-runs"))?.className).toContain("overflow-y-auto");
     unmount();
 
     api.fetchRunHealth.mockResolvedValue(makeRuns(2));
     renderPage();
-    await screen.findByText("Run run-0-00");
+    await screen.findByText("Run run-0-000");
     expect(cardListOf(screen.getByTestId("panel-runs"))?.className).not.toContain("overflow-y-auto");
+  });
+
+  // ── Refresh ────────────────────────────────────────────────────────────────
+
+  it("refetches every health read when Refresh is clicked", async () => {
+    renderPage();
+    await screen.findByText("ServiceNow");
+    expect(api.fetchConnectorHealth).toHaveBeenCalledTimes(1);
+
+    screen.getByTestId("refresh-health").click();
+
+    await waitFor(() => expect(api.fetchConnectorHealth).toHaveBeenCalledTimes(2));
+    expect(api.fetchRunHealth).toHaveBeenCalledTimes(2);
+    expect(api.fetchContentHealth).toHaveBeenCalledTimes(2);
+    expect(api.fetchPackHealth).toHaveBeenCalledTimes(2);
+    expect(api.fetchAttentionHealth).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows fresh data on the panels after a refresh", async () => {
+    renderPage();
+    await screen.findByText("ServiceNow");
+    expect(screen.queryByText("Jira")).toBeNull();
+
+    // Second read returns a different estate — the refresh must render it.
+    api.fetchConnectorHealth.mockResolvedValue({
+      org_id: "org-health",
+      connectors: [{ ...connectorResponse.connectors[0], connector_id: "jira", name: "Jira" }],
+    });
+    screen.getByTestId("refresh-health").click();
+
+    expect(await screen.findByText("Jira")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("ServiceNow")).toBeNull());
+  });
+
+  // The cache keeps the previous reference when a refetch returns identical data,
+  // so an unchanged refresh emits nothing. The button must still confirm it ran —
+  // otherwise it reads as broken on a healthy, unchanging tenant.
+  it("reports completion even when the refreshed data is unchanged", async () => {
+    renderPage();
+    await screen.findByText("ServiceNow");
+    const before = screen.getByTestId("health-updated-at").textContent;
+
+    screen.getByTestId("refresh-health").click();
+
+    await waitFor(() => expect(api.fetchConnectorHealth).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      const updated = screen.getByTestId("health-updated-at").textContent ?? "";
+      expect(updated).toMatch(/^Updated /);
+      expect(updated).not.toBe(before);
+    });
+  });
+
+  it("disables the Refresh button and shows a busy state while reads are in flight", async () => {
+    renderPage();
+    await screen.findByText("ServiceNow");
+
+    let release: (value: unknown) => void = () => undefined;
+    api.fetchConnectorHealth.mockReturnValue(new Promise((resolve) => { release = resolve; }));
+
+    const button = screen.getByTestId("refresh-health");
+    button.click();
+
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).toHaveTextContent("Refreshing…");
+
+    release(connectorResponse);
+    await waitFor(() => expect(button).not.toBeDisabled());
+    expect(button).toHaveTextContent("Refresh");
+  });
+
+  it("re-enables Refresh after a failed read rather than staying stuck busy", async () => {
+    renderPage();
+    await screen.findByText("ServiceNow");
+
+    api.fetchConnectorHealth.mockRejectedValue(new Error("Connector read failed"));
+    const button = screen.getByTestId("refresh-health");
+    button.click();
+
+    await waitFor(() => expect(button).not.toBeDisabled());
+    expect(button).toHaveTextContent("Refresh");
+  });
+
+  // ── Connector ordering ─────────────────────────────────────────────────────
+
+  it("orders healthy connectors above disconnected ones", async () => {
+    api.fetchConnectorHealth.mockResolvedValue({
+      org_id: "org-health",
+      connectors: [
+        // Deliberately worst-first from the backend, to prove the UI reorders.
+        { ...connectorResponse.connectors[0], connector_id: "sap", name: "SAP", connection_state: "disconnected" },
+        { ...connectorResponse.connectors[0], connector_id: "slack", name: "Slack", connection_state: "needs_auth" },
+        { ...connectorResponse.connectors[0], connector_id: "aws_events", name: "AWS Events", connection_state: "connected" },
+        { ...connectorResponse.connectors[0], connector_id: "jira", name: "Jira", connection_state: "connected", last_error: "Rate limited" },
+        { ...connectorResponse.connectors[0], connector_id: "azure_events", name: "Azure Events", connection_state: "connected" },
+      ],
+    });
+    renderPage();
+
+    const panel = await screen.findByTestId("panel-connectors");
+    const names = within(panel).getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+    expect(names).toEqual([
+      // Healthy (alphabetical within the tier)…
+      "AWS Events",
+      "Azure Events",
+      // …then warning (connected but reporting an error)…
+      "Jira",
+      // …then disconnected/needs-auth last.
+      "SAP",
+      "Slack",
+    ]);
+  });
+
+  it("keeps the panel state derived from health, not from display order", async () => {
+    api.fetchConnectorHealth.mockResolvedValue({
+      org_id: "org-health",
+      connectors: [
+        { ...connectorResponse.connectors[0], connector_id: "aws_events", name: "AWS Events", connection_state: "connected" },
+        { ...connectorResponse.connectors[0], connector_id: "sap", name: "SAP", connection_state: "disconnected" },
+      ],
+    });
+    renderPage();
+
+    const panel = await screen.findByTestId("panel-connectors");
+    // A disconnected connector sank to the bottom but must still degrade the panel.
+    expect(panel).toHaveAttribute("data-state", "degraded");
+    expect(within(panel).getByText("Need attention").parentElement).toHaveTextContent("1");
   });
 });

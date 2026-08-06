@@ -362,6 +362,47 @@ class TestProjectionReachesEverySurface:
             served = client.get(path, headers=_auth(org)).json()["projection"]
             assert served == stored, f"{path} did not serve the stored projection"
 
+    def test_projection_surfaces_fallback_to_the_instance_copy(self, client):
+        """Opportunity Review/Blueprint still serve stored projections if KV is thin.
+
+        The instance metadata copy is the same stored projection, not a
+        recomputation. This protects demo/read paths from older run artifacts
+        whose run-scoped opportunity copy no longer carries ``projection``.
+        """
+        from app.opportunity_instances import (
+            ensure_opportunity_instances_table,
+            record_opportunity_instances,
+        )
+        from app.projection_store import (
+            projection_for_opportunity,
+            record_projections_on_instances,
+        )
+
+        org, run = _ids()
+        opps = _seed_run(org, run, [_seeded_opp()])
+        stored = _stored_projection(run)
+
+        ensure_opportunity_instances_table()
+        record_opportunity_instances(run, opps, org_id=org)
+        assert record_projections_on_instances(opps, run) == 1
+
+        thin_opp = dict(opps[0])
+        thin_opp.pop("projection", None)
+        db.run_kv_set("opps", run, [thin_opp])
+
+        assert projection_for_opportunity(thin_opp, run, org_id=org) == stored
+        served_list = client.get(
+            f"/api/runs/{run}/opportunities", headers=_auth(org)
+        ).json()
+        assert served_list[0]["projection"] == stored
+
+        for path in (
+            f"/api/runs/{run}/opportunities/opp_001/enrichment",
+            f"/api/runs/{run}/opportunities/opp_001/blueprint",
+        ):
+            served = client.get(path, headers=_auth(org)).json()["projection"]
+            assert served == stored, f"{path} did not use the instance fallback"
+
 
 # ---------------------------------------------------------------------------
 # The 2.0-A2 read surface.

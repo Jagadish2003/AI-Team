@@ -11,7 +11,11 @@
  *   npx vitest run src/__tests__/SlackChannelPicker.test.tsx
  */
 import '@testing-library/jest-dom/vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+// The picker reads its channels through the shared data cache (see
+// usePickerResource), which the app provides at its root — so these tests mount a
+// provider too. A fresh one per render keeps each test's cache isolated.
+import { renderWithCache as render } from '../test-utils/renderWithCache';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // ── Mock API client before importing the component ────────────────────────────

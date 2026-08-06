@@ -13,10 +13,12 @@ import {
 } from "../../api/enrichmentApi";
 import { useRunContext } from "../../context/RunContext";
 import BaselineContextPanel from "./BaselineContextPanel";
+import TraceGraphPanel from "./TraceGraphPanel";
 import ProjectionAssumptionLedger from "../projection/ProjectionAssumptionLedger";
 import ProjectionBandPanel from "../projection/ProjectionBand";
 import ProjectionBasisPanel from "../projection/ProjectionBasis";
 import ProjectionRecommendationPanel from "../projection/ProjectionRecommendation";
+import { showRelease2ArcAUi } from "../../config/releaseFlags";
 
 function BulletList({
   items,
@@ -797,17 +799,21 @@ export default function OpportunityDetail({
         {/* 2.0-A1 T5: the intervention-language recommendation sits directly
             under the AI analysis, so the honest statement of what the agent
             handles is read alongside the narrative rather than after the band. */}
-        <ProjectionRecommendationPanel projection={projection} />
+        {showRelease2ArcAUi && (
+          <>
+            <ProjectionRecommendationPanel projection={projection} />
 
         {/* 2.0-A1 T4: the resulting band and its evidence label, above the
             basis — the band is the answer, the basis is the working. */}
-        <ProjectionBandPanel projection={projection} />
+            <ProjectionBandPanel projection={projection} />
 
         {/* 2.0-A1 T3: every visible projection shows its computation basis. */}
-        <ProjectionBasisPanel projection={projection} />
+            <ProjectionBasisPanel projection={projection} />
 
         {/* 2.0-A1 T2: projection assumptions are rendered with the opportunity. */}
-        <ProjectionAssumptionLedger projection={projection} />
+            <ProjectionAssumptionLedger projection={projection} />
+          </>
+        )}
 
         {/* T10: Temporal baseline context panel */}
         <BaselineContextPanel enrichment={enrichment} />
@@ -825,6 +831,11 @@ export default function OpportunityDetail({
 
         {/* ENT-6/T9: Causal hypothesis evidence trace — after entity trace. */}
         <CausalHypothesisPanel causal_hypothesis={enrichment?.causal_hypothesis} />
+
+        {/* 2.0-B1 T3: interrogation UI — drill down to the full finding ->
+            evidence -> source-record chain, join/window info, and the
+            retrieval candidates assembly considered (used and unused). */}
+        <TraceGraphPanel runId={runId} oppId={opp.id} />
 
         {/* T41-7: Required Permissions section removed from Opportunity Review.
             Permissions are now shown on the Agent Blueprint screen in

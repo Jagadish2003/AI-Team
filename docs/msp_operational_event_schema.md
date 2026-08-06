@@ -183,6 +183,53 @@ never branches on provider (T3-AC3).
 | `map_azure_monitor` | Azure Monitor common-alert-schema alert | `azure_monitor` | azure |
 | `map_azure_activity_log` | Azure Activity Log administrative record | `azure_activity` | azure |
 | `map_service_health` | Azure Service Health event (service issue / maintenance / advisory) | `azure_service_health` | azure |
+| `map_app_insights` | Application Insights operational signal — availability / application-failure / dependency-failure alert, or an application health transition (2.0-D3 T2) | `azure_app_insights` | azure |
+
+#### `map_app_insights` (2.0-D3 T2)
+
+The Application Insights adapter differs from the other Azure mappers in four ways
+worth knowing before you touch it. The classification rules it depends on live in
+`discovery/signals/app_insights_signal.py` and are shared, unchanged, with D3's
+bounded read scope (`discovery/ingest/azure_app_insights.py` re-exports them) so
+the mapper and the read path can never disagree about what an App Insights signal
+is.
+
+* **It accepts two surfaces.** An Azure Monitor alert or an Azure health event; the
+  surface is resolved from the record's own shape (`detect_surface`), so the mapper
+  stays invocable standalone like every other reference mapper.
+* **The resource is the monitored application, never the alert rule.** It is the
+  explicitly-supplied monitored-application reference when Azure gives one
+  (`monitoredApplicationResourceId` / `applicationResourceId` /
+  `monitoredResourceId`), otherwise the Application Insights component itself. Both
+  are explicit references — nothing is inferred from names. `resource_type` comes
+  from the same shared `azure_resource_type_from_id` table every other Azure mapper
+  uses, so a `microsoft.insights/components` id resolves to `monitoring` and an
+  App Service id to `compute`; D3 deliberately adds no per-surface override.
+* **`event_class` maps D3's "alarm/health" wording onto the closed B0 vocabulary.**
+  A health transition is a `state_change`; an **active** availability /
+  application-failure / dependency-failure alert is an `error`; a **resolved**
+  failure alert, or an in-scope alert whose kind cannot be established, is a
+  `state_change`. Active-vs-resolved is read from Azure's own `monitorCondition`,
+  and an absent value reads as active (an alert that does not say it is resolved is
+  the firing). Consequence: a firing and its resolution carry different classes and
+  therefore different signatures — intended, since they are different operational
+  facts, and it is what lets recurrence count firings without resolutions diluting
+  the count.
+* **`event_type` is where the App Insights signal survives.** Because the class
+  collapses to two tokens, `event_type` carries the provider-native
+  `ApplicationInsights/Availability` | `/ApplicationFailure` | `/DependencyFailure`
+  | `/HealthTransition` (or `/Signal` when unclassifiable), so the four signals stay
+  distinguishable downstream. It is the KIND rather than the customer's alert-rule
+  name because two rules both reporting "availability of app X is failing" are one
+  recurring operational fact, and folding them into one signature is what stops
+  MSP-B7 counting the same problem twice. The rule name, condition type and metric
+  are carried as bounded payload.
+
+Everything else follows the standard contract: the signature comes from
+`compute_event_signature` (never computed in the mapper), the payload is curated
+(the complete Azure record lives only in the raw-event store, §6), and golden
+fixtures pin the entire normalised output in
+`discovery/tests/fixtures/app_insights_mapping_golden.json`.
 
 ### Field-by-field mapping
 
@@ -265,6 +312,70 @@ raw = resolve_raw_event(store, "acme", event)   # audit: back to the original pa
 persist an already-mapped event, use `store_raw_event(store, org_id, event, raw)`.
 
 ---
+
+### Application Insights volume discipline (2.0-D3 T4)
+
+Application Insights adds **no** volume-management code. Its events ride the four
+MSP-B7 disciplines exactly as every other cloud source does:
+
+| Discipline | Where | App Insights behaviour |
+|------------|-------|------------------------|
+| Dedup at admission | `OpsEventStream` owned by the Azure connector | re-fires fold on `(org, signature, resource, active period)` with an occurrence count and a first/last-seen span; an exact provider redelivery is idempotent |
+| Noise floors | shared `apply_noise_floors` in `cloud_ops_runtime` | an ACTIVE failure is `error`, a **protected** class absent from the floor map, so it is never suppressed; a health transition is `state_change` and takes the shared floor. Suppression is counted and reported, never silent |
+| Per-run budget | shared `CALIBRATED_RUN_EVENT_BUDGET` | one budget for the whole connector (not per surface); capacity is checked **between polls** so an exhausted budget stops the run *requesting* more, not merely discarding what it already fetched |
+| Correlation windows | shared `join_within_window` / `gate_operational_corroboration` | an event↔incident join is valid only inside the window; the trace records join type, window, delta and verdict on success **and** rejection, and an out-of-window agreement elevates nothing |
+
+Two reporting details worth knowing, both about not overstating a clean run:
+
+* **`deferral_report()` (Azure connector).** The budget's own report counts deferred
+  *events*, which it can only do for events it saw. When capacity is exhausted the
+  connector stops requesting further pages — the desired behaviour — so those polls
+  contribute no deferred-event count and `BudgetReport.breached` stays `False`. A run
+  that skipped whole subscriptions would then report a clean budget. `deferral_report`
+  closes that hole the way the AWS connector's `poll_report` does: `complete` is
+  `False` whenever anything was cut short and every affected `(stream, subscription)`
+  is named. `runner._ingest_azure_events` merges it as `health["deferrals"]` and
+  degrades the reported status.
+* **`transport` on an event-signature row is DERIVED.** It previously read
+  `event_history_bridge` unconditionally, which was already false for every natively
+  ingested Azure and AWS event. It is now resolved per folded firing from each
+  member's evidence pointer (`bridge:<provider>` ⇒ bridged, otherwise native), so the
+  row reports `transports` as a list and the scalar reads `mixed` rather than silently
+  picking one. Note an exact bridged twin shares its provider event id and is deduped
+  as a redelivery, so `mixed` arises only when two *distinct* firings of one condition
+  arrive by different routes.
+
+### Application Insights association (2.0-D3 T3)
+
+`discovery/ingest/app_insights_association.py` answers "which application
+component or configuration item does this App Insights signal affect?" — and does
+so **only** from an explicit, operator-supplied reference.
+
+| Target | Stable identifier | Resolved against |
+|--------|-------------------|------------------|
+| `dotnet_app` | `DotNetAppTarget.app_id` | `dotnet_app_config.load_targets(org_id)` — the applications the customer already declared |
+| `cmdb_ci` | ServiceNow `sys_id` | `app.entity_resolution.lookup_resolved_entity` (`entity_type='system'`, `source_system='servicenow'`) — the org-scoped, read-only identity lookup MSP-B3's CMDB ingestion feeds |
+
+Rules that matter if you touch this:
+
+* **No inference, ever.** Not a name, URL, hostname, IIS site name, resource
+  group, owner, environment, tag, or events at similar times. "Orders API" in both
+  systems is not evidence.
+* **The CMDB lookup is never given a `display_name`.** That parameter makes
+  `lookup_resolved_entity` fall back to canonical-name matching when an id finds
+  nothing — which would smuggle in exactly the association above forbids.
+* **Ambiguity is refused with a named reason**, never resolved by picking. A
+  component with more than one configuration entry is refused *even when the
+  entries agree*, because such a config is ambiguous about intent.
+* **The association never enters the B0 event.** It rides the record wrapper
+  inside the `app_insights` block, so the event's identity — and therefore its
+  deterministic `event_signature` and its transport equivalence with every other
+  operational source — cannot depend on whether an association happens to be
+  configured. An otherwise valid event always ingests without one.
+
+Configuration is `APP_INSIGHTS_ASSOCIATIONS` (live) or
+`discovery/ingest/fixtures/app_insights_associations_sample.json` (offline),
+identifiers only; a credential-shaped field is rejected rather than ignored.
 
 ## 7. Resource entities into the graph (AT-639)
 
@@ -353,7 +464,13 @@ member's evidence pointer back to its stored raw payload, so *"this alarm fired
 - **Org-scoped** — the fold key includes `org_id`; `admit` refuses an event under
   a different org, and `resolve_raw_instances` refuses to cross an org boundary.
 - **Idempotent** — an at-least-once redelivery of an already-counted firing
-  (same provider event id) is a no-op (`disposition == "duplicate"`).
+  (same provider event id) is a no-op *in the fold* (`disposition == "duplicate"`):
+  no count, no span change, no second record. It is still **charged to the run
+  budget** (§11), because the budget bounds the work a run does rather than the
+  facts it ends up with — the redelivery cost a fetch and a mapping, and the poll
+  loop's budget check is what stops a provider redelivery storm paging for ever.
+  `BudgetReport.duplicates` reports how much of a budget went on that churn, so a
+  depleted budget is explainable instead of mysterious.
 
 ### Usage
 
@@ -782,9 +899,12 @@ the same scope, and each reported rather than silent:
    `OpsEventStream.has_capacity()`, not just the admission. Enforcing it at
    admission alone bounded the data but never the work: once exhausted the
    connector kept paying for provider pages whose every event it then deferred.
-2. **Per-scope continuation cap** — `max_polls_per_scope`
+2. **Per-scope poll cap** — `max_polls_per_scope`
    (`CLOUD_EVENT_MAX_POLLS_PER_SCOPE`, default 4): one scope's backlog can never
-   monopolise a run.
+   monopolise a run. It counts **total** polls of a scope in one run, the first
+   included — `4` is four polls, `1` is "poll once and never continue", `0` is
+   unbounded. Counting continuations instead would make the poll-once case
+   inexpressible, since `0` already means unbounded.
 3. **Wall-clock deadline** — `poll_deadline_seconds`
    (`CLOUD_EVENT_POLL_DEADLINE_SECONDS`, default 180): volume is not time. A
    throttled provider can spend minutes on a single page, so a volume bound alone
@@ -810,8 +930,33 @@ is the thin MSP-B1 binding: `AWSEventConnector` is the skeleton with
 `provider='aws'` and the three AWS surfaces (CloudWatch / EventBridge / CloudTrail)
 wired to their B0 mappers. `build_offline_aws_source()` reads the deterministic
 [`aws_native_events_sample.json`](../backend/discovery/ingest/fixtures/aws_native_events_sample.json)
-fixture so a run works with no AWS account (offline-first). MSP-B2's Azure
-connector is the SAME skeleton with `provider='azure'`.
+fixture so a run works with no AWS account (offline-first).
+
+### Azure instantiation
+
+[`backend/discovery/ingest/azure_events.py`](../backend/discovery/ingest/azure_events.py)
+is MSP-B2's connector. It predates this skeleton class and therefore rides the same
+shared `ChangeBasedIngestor` base the bridge uses rather than subclassing
+`CloudEventConnector` (that migration is mechanical and deliberately deferred) — but
+it implements the skeleton's two BEHAVIOURAL contracts natively, so the AWS and
+Azure paths do not diverge:
+
+* **Transport re-stamp (AC4)** — `_stamp_transport` sets each mapped event's
+  `source_system` to `'azure'` and re-points its OBSERVED pointer at the native
+  cloud artifact, leaving the mapper's `event_signature` untouched. An
+  `OperationalEvent` derives its signature only when the field is empty, so the
+  re-stamp provably cannot overwrite it — which is what keeps a native event equal
+  to its bridged twin in every field but that one. The mapper's per-stream B0 source
+  system (`azure_monitor` / `azure_activity` / `azure_service_health`) stays on the
+  record wrapper as `surface`, so re-stamping loses nothing.
+* **B7 admission** — the connector owns its own `OpsEventStream` and admits every
+  event inside `_ingest_stream`, exposing `active_signals()` / `budget_report()`.
+  Admission is part of ingesting a cloud event, not a step a downstream caller has
+  to remember. The budget is checked BETWEEN subscriptions (stop fetching, not just
+  admitting) and a mid-page deferral leaves that subscription's checkpoint
+  UNADVANCED, so the deferred remainder is re-polled next run instead of being lost;
+  the deferral is reported as `status='deferred'` with a named reason and surfaces in
+  the run's `azureEvents.budget` health block.
 
 ### AWS auth & cross-account access (MSP-B1 / AT-642, T2)
 

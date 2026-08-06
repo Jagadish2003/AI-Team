@@ -41,7 +41,8 @@ from pydantic import BaseModel
 from .db import org_connector_get, org_connector_set
 from .middleware.tenancy import get_current_org_id
 from .security import require_auth
-from .rbac import require_role
+from .connector_scope_audit import audit_scope_selection
+from .rbac import _get_user_id_from_token, require_role
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +151,7 @@ def register_jira_projects_routes(app: FastAPI) -> None:
         summary="Select which Jira project AgentIQ scopes discovery to",
         tags=["Integration Hub"],
     )
-    def set_jira_projects(body: JiraProjectBody) -> JiraProjectsResponse:
+    def set_jira_projects(body: JiraProjectBody, token: str = Depends(require_auth)) -> JiraProjectsResponse:
         org_id = get_current_org_id()
         connector = org_connector_get(org_id, "jira")
         if not connector:
@@ -177,12 +178,25 @@ def register_jira_projects_routes(app: FastAPI) -> None:
                 chosen.append(key)
 
         # Persist the multi-project selection; clear the legacy single-project key.
+        previous_scope = connector.get("projects")
         connector.pop("project", None)
         if chosen:
             connector["projects"] = chosen
         else:
             connector.pop("projects", None)
         org_connector_set(org_id, "jira", connector)
+        # 2.0-D4 T1 (AC1): scope pin/unpin is a data-access grant. Note that
+        # clearing the selection REMOVES the key here rather than storing [],
+        # so the audit reads the chosen list directly — an empty selection is a
+        # real unpin of everything and must still produce a row.
+        audit_scope_selection(
+            connector_id="jira",
+            scope_key="projects",
+            previous=previous_scope,
+            selected=chosen,
+            actor_id=_get_user_id_from_token(token),
+            first_selection=not isinstance(previous_scope, list),
+        )
 
         return JiraProjectsResponse(
             available=[JiraProject(**p) for p in available],

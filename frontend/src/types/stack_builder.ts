@@ -249,6 +249,12 @@ export interface SetupState {
   packId?: string | null;
   /** Full ordered pack selection for combined template runs. */
   packIds?: string[];
+  /**
+   * Whether the user has used the Step 4 analysis-pack dropdown. Distinguishes a
+   * deliberate "None" from an untouched slot, so the cloud-events → Cloud Ops
+   * default (see data/analysisPacks.ts) can be turned off and stay off.
+   */
+  analysisPackTouched?: boolean;
   templatePreselectedIds: string[];
   /** Template-suggested systems the user explicitly removed in this setup. */
   templateExcludedSystemIds?: string[];
@@ -263,6 +269,14 @@ export interface SetupState {
   selectedSalesforceClouds: string[];
   weightings: Record<string, SystemWeighting>;
   currentStep: 1 | 2 | 3 | 4;
+  /**
+   * Whether the workspace's already-connected systems have been pre-selected for
+   * this setup. The pre-selection is a one-time starting point: the catalog is
+   * refreshed in the background, and without this flag a system the user
+   * deliberately DESELECTED would be re-selected on the next refresh. Their
+   * choice has to win, so the seed runs once per setup session.
+   */
+  connectedDefaultsApplied?: boolean;
 }
 
 // ── Progress Bar Step ─────────────────────────────────────────────────────────

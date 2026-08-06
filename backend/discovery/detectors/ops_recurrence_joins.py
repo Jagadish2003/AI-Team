@@ -62,8 +62,24 @@ HOP_EVENT_TO_INCIDENT_TO_RESOLUTION = "event_signature_to_incident_to_resolution
 #: Incident (or resolution-block) fields that may carry the explicit, upstream-
 #: established event-signature link. A list field is preferred; the singular
 #: field is accepted for a one-alert incident.
-EVENT_SIGNATURE_LIST_FIELDS: Tuple[str, ...] = ("event_signatures",)
-EVENT_SIGNATURE_SCALAR_FIELDS: Tuple[str, ...] = ("event_signature",)
+#:
+#: These are SERVICENOW COLUMN names, read off an incident payload — not AgentIQ
+#: structure names. The ServiceNow instance stores the link in the scoped-
+#: application field ``x_1212781_github_0_event_signatures``, which is what the
+#: incident query requests (``servicenow.INCIDENT_EVENT_SIGNATURE_FIELDS``) and
+#: what the incident payload carries through verbatim. The internal AgentIQ key
+#: ``block["event_signatures"]`` is a DIFFERENT thing and is deliberately
+#: unchanged — nothing here reads or renames it.
+#: The SAME column is named in both tuples deliberately: ServiceNow returns a
+#: multi-valued field as a list but a single-valued one as a plain string, so the
+#: list branch handles the former and the scalar branch the latter. No invented
+#: sibling column name is used — only the field the instance actually defines.
+EVENT_SIGNATURE_LIST_FIELDS: Tuple[str, ...] = (
+    "x_1212781_github_0_event_signatures",
+)
+EVENT_SIGNATURE_SCALAR_FIELDS: Tuple[str, ...] = (
+    "x_1212781_github_0_event_signatures",
+)
 
 #: An event signature is ``"{version}:{sha256_128bit_hex}"`` (see
 #: :mod:`discovery.signals.event_signature`). We accept ONLY strings of that

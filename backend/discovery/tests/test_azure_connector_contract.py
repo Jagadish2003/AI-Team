@@ -125,8 +125,8 @@ def _connector(*, alerts=None, activity=None, health=None, subs=(SUB,)):
     )
 
 
-def _native_event(stream, raw):
-    """The event dict the connector emits for one raw record on ``stream``."""
+def _native_record(stream, raw):
+    """The full delta record the connector emits for one raw record on ``stream``."""
     if stream == "alerts":
         res = _connector(alerts=[raw]).ingest_alerts(token="T")
     elif stream == "activity_log":
@@ -134,7 +134,12 @@ def _native_event(stream, raw):
     else:
         res = _connector(health=[raw]).ingest_service_health(token="T")
     assert res.records, f"connector emitted no record for {stream}"
-    return res.records[0]["event"]
+    return res.records[0]
+
+
+def _native_event(stream, raw):
+    """The event dict the connector emits for one raw record on ``stream``."""
+    return _native_record(stream, raw)["event"]
 
 
 def _bridge_event(source_format, peid, raw):
@@ -175,7 +180,11 @@ class TestTransportEquivalence:
         native = _native_event(stream, raw)
         bridged = _bridge_event(source_format, peid, raw)
         assert bridged["source_system"] == bridge_source_system("azure") == "bridge:azure"
-        assert native["source_system"] in ("azure_monitor", "azure_activity")
+        # AC4 (shared cloud-event skeleton): a native event's source_system is the
+        # PROVIDER FAMILY — the same rule the AWS connector applies ('aws') — not the
+        # mapper's per-stream MSP-B0 source system. The stream stays visible on the
+        # record wrapper (see TestTransportRestamp below), never on the event.
+        assert native["source_system"] == ae.PROVIDER_AZURE == "azure"
         assert native["source_system"] != bridged["source_system"]
 
     @pytest.mark.parametrize("stream,source_format,peid,raw", [
@@ -190,17 +199,63 @@ class TestTransportEquivalence:
         assert native["event_signature"] == bridged["event_signature"]
         assert native["event_signature"]
 
-    def test_native_event_is_exactly_the_mapper_output(self):
-        # The native path adds NO transport mutation to the event itself (the
-        # subscription/account_scope lives on the record wrapper, not the event).
-        assert _native_event("alerts", _AZURE_MONITOR) == map_azure_monitor(_AZURE_MONITOR, org_id=ORG).to_dict()
-        assert _native_event("activity_log", _AZURE_ACTIVITY) == map_azure_activity_log(_AZURE_ACTIVITY, org_id=ORG).to_dict()
-
-    def test_service_health_equivalent_to_shared_b0_mapper(self):
+    @pytest.mark.parametrize("stream,mapper,raw", [
+        ("alerts", map_azure_monitor, _AZURE_MONITOR),
+        ("activity_log", map_azure_activity_log, _AZURE_ACTIVITY),
         # The bridge does not yet route Service Health (a B8 follow-up), so
-        # equivalence is proven against the SAME shared B0 mapper the bridge would
-        # use — the native path emits exactly map_service_health's output.
-        assert _native_event("service_health", _SERVICE_HEALTH) == map_service_health(_SERVICE_HEALTH, org_id=ORG).to_dict()
+        # equivalence is proven against the SAME shared B0 mapper the bridge would use.
+        ("service_health", map_service_health, _SERVICE_HEALTH),
+    ])
+    def test_native_event_is_the_mapper_output_except_the_transport_stamp(self, stream, mapper, raw):
+        # The native path mutates ONLY the two transport-owned fields the shared
+        # skeleton owns (source_system → provider family, and the provenance pointer
+        # re-pointed at the native cloud artifact). Every detector-visible field —
+        # including the recurrence signature — is exactly the mapper's output.
+        native = _native_event(stream, raw)
+        mapped = mapper(raw, org_id=ORG).to_dict()
+        differing = {k for k in mapped if native.get(k) != mapped[k]}
+        assert differing == {"source_system", "provenance"}, differing
+        assert native["source_system"] == ae.PROVIDER_AZURE
+        assert native["event_signature"] == mapped["event_signature"]
+        # The re-pointed pointer stays a well-formed OBSERVED pointer that resolves
+        # under the provider family (the same key the raw payload is stored under).
+        assert native["provenance"]["origin"] == "observed"
+        assert native["provenance"]["source_system"] == ae.PROVIDER_AZURE
+        assert native["provenance"]["source_artifact"] == mapped["signal_id"]
+
+
+# ── AC4 transport re-stamp — the shared-skeleton contract, on the record wrapper ──
+
+
+class TestTransportRestamp:
+    """The re-stamp must not LOSE the stream, and must never touch the signature."""
+
+    @pytest.mark.parametrize("stream,surface,raw", [
+        ("alerts", "azure_monitor", _AZURE_MONITOR),
+        ("activity_log", "azure_activity", _AZURE_ACTIVITY),
+        ("service_health", "azure_service_health", _SERVICE_HEALTH),
+    ])
+    def test_record_wrapper_carries_provider_family_and_the_surface(self, stream, surface, raw):
+        rec = _native_record(stream, raw)
+        assert rec["source_system"] == rec["provider"] == ae.PROVIDER_AZURE
+        # The mapper's per-stream MSP-B0 source system is preserved as transport
+        # metadata, so re-stamping the event loses nothing.
+        assert rec["surface"] == surface
+        assert rec["stream"] == stream
+        # artifact_id keeps the surface, so two streams cannot collide on a shared id.
+        assert rec["artifact_id"].startswith(f"{ae.PROVIDER_AZURE}:{surface}:")
+        # The signature rides the wrapper too, and equals the event's.
+        assert rec["event_signature"] == rec["event"]["event_signature"]
+
+    def test_stamping_never_recomputes_the_signature(self):
+        # Direct unit proof of the one-line contract: the mapper's signature survives
+        # the transport re-stamp byte-for-byte (source_system participates in
+        # signature derivation, so a recompute here would silently change identity).
+        ev = map_azure_monitor(_AZURE_MONITOR, org_id=ORG)
+        before = ev.event_signature
+        _connector()._stamp_transport(ev)
+        assert ev.source_system == ae.PROVIDER_AZURE
+        assert ev.event_signature == before
 
 
 # ── B0 schema compliance ────────────────────────────────────────────────────────
@@ -238,29 +293,62 @@ class TestB7Admission:
         )
         return raw
 
-    def test_refiring_alert_folds_with_a_count_on_native_path(self):
+    def test_refiring_alert_folds_with_a_count_inside_the_connector(self):
         # Two DISTINCT alert instances of the SAME recurring condition (same rule /
         # target / class → same event_signature, different alertId).
         raws = [self._refire("fire-1"), self._refire("fire-2")]
-        res = _connector(alerts=raws).ingest_alerts(token="T")
+        conn = _connector(alerts=raws)
+        res = conn.ingest_alerts(token="T")
         assert res.emitted_count == 2
 
-        # The connector's events are exactly the mapper's events; admit them to B7.
-        stream = OpsEventStream()
-        for raw in raws:
-            ev = map_azure_monitor(raw, org_id=ORG)
-            assert ev.to_dict() in [r["event"] for r in res.records]  # native == mapper
-            stream.admit(ev)
-        signals = stream.active_signals()
+        # Admission happens INSIDE the connector (the shared-skeleton contract), so
+        # the deduplicated view is readable off the connector itself — no caller has
+        # to remember to admit. Each record also carries its admission disposition.
+        signals = conn.active_signals(ORG)
         assert len(signals) == 1                       # folded into one active signal
         assert signals[0].occurrence_count == 2        # …with a count (dedupe + count)
+        assert [r["admission"] for r in res.records] == ["new", "folded"]
 
-    def test_idempotent_redelivery_does_not_double_count(self):
-        stream = OpsEventStream()
-        ev = map_azure_monitor(self._refire("fire-1"), org_id=ORG)
-        stream.admit(ev)
-        stream.admit(ev)                                # same signal_id redelivered
-        assert stream.active_signals()[0].occurrence_count == 1
+    def test_idempotent_redelivery_does_not_double_count_inside_the_connector(self):
+        # The SAME firing delivered twice in one poll (at-least-once transport): the
+        # connector's own admission absorbs the redelivery — one occurrence, and the
+        # duplicate is not re-emitted as a second record.
+        raw = self._refire("fire-1")
+        conn = _connector(alerts=[raw, dict(raw)])
+        res = conn.ingest_alerts(token="T")
+        assert conn.active_signals(ORG)[0].occurrence_count == 1
+        assert res.emitted_count == 1
+
+    def test_connector_owns_its_admission_stream(self):
+        # Structural parity with the AWS connector: the stream is the connector's own
+        # (injectable), and the read side is on the connector, not the runner.
+        injected = OpsEventStream()
+        conn = _connector(alerts=[self._refire("fire-1")])
+        conn.stream = injected
+        conn.ingest_alerts(token="T")
+        assert injected.active_signals(ORG)                      # admitted into ours
+        assert callable(conn.active_signals) and callable(conn.budget_report)
+
+    def test_budget_deferral_is_loud_and_preserves_the_checkpoint(self):
+        # MSP-B7 T4: past the budget an event is deferred-and-COUNTED, never silently
+        # truncated — and the subscription's checkpoint must NOT advance past it, so
+        # the deferred remainder is re-polled next run instead of being lost.
+        raws = [self._refire("fire-1"), self._refire("fire-2"), self._refire("fire-3")]
+        conn = _connector(alerts=raws)
+        conn.stream = OpsEventStream(budget=1)
+        res = conn.ingest_alerts(token="T")
+        assert res.emitted_count == 1
+        status = res.subscription_status[SUB]
+        assert status["status"] == "deferred"
+        assert status["reason"] == "run_event_budget_exhausted"
+        assert status["checkpoint_advanced"] is False
+        assert ae.decode_checkpoints(res.next_checkpoint).get(SUB) in (None, "")
+        assert res.budget.get("breached") is True
+        # A deferral is a partial ingest, kept distinct from a failure and never
+        # reported as a clean poll.
+        assert res.deferred_subscriptions == [SUB]
+        assert res.failed_subscriptions == []
+        assert res.all_ok is False
 
 
 # ── T7-AC3 — shared skeleton reuse (no forked framework) ─────────────────────────

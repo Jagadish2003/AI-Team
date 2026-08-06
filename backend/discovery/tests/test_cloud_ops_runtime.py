@@ -90,7 +90,10 @@ def _incident(
         },
     }
     if event_signature:
-        incident["event_signatures"] = [event_signature]
+        # The ServiceNow column that carries the link (see
+        # servicenow.INCIDENT_EVENT_SIGNATURE_FIELDS) — an incident FIELD name,
+        # not the internal block["event_signatures"] key.
+        incident["x_1212781_github_0_event_signatures"] = [event_signature]
     return incident
 
 

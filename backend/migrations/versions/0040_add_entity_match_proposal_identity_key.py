@@ -10,8 +10,8 @@ Nullable and additive: rows written before T4 keep NULL and are backfilled from
 their stored ``evidence_payload`` by ``app.entity_match_proposals`` on the next
 scan, so no data migration runs here.
 
-Revision ID: 0033
-Revises: 0032
+Revision ID: 0040
+Revises: 0039
 Create Date: 2026-08-03
 """
 import os
@@ -20,8 +20,8 @@ from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "0033"
-down_revision: Union[str, None] = "0032"
+revision: str = "0040"
+down_revision: Union[str, None] = "0039"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

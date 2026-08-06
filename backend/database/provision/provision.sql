@@ -1,16 +1,17 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0031.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0037.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
 -- 03_lazy_runtime_tables.sql. Creates the agentiq role, all tables (incl.
 -- org_licenses, ingestion_checkpoints, opportunity_instances, opportunity_lifecycle
--- (+history), the R18-B1/B2
+-- (+history), opportunity_baselines, opportunity_movements,
+-- the R18-B1/B2
 -- pgvector-backed retrieval_chunks + retrieval_refresh_queue, the MSP-B8
 -- ops_event_staging + ops_event_load_batches, the MSP-B5 runbook_matches /
 -- runbook_match_decision_history / runbook_match_feedback, and the R-1.9.1-L3
 -- vendor-side license_registry + append-only issuance_audit),
 -- indexes/constraints/rules, seeds the connector catalog, grants the app login
--- role(s) privileges on the schema, and stamps alembic_version to head 0031.
+-- role(s) privileges on the schema, and stamps alembic_version to head 0041.
 --
 -- BEFORE RUNNING ON PRODUCTION — two values in this file are dev defaults and
 -- MUST be set for the target environment. Both are marked "TODO(deploy)" below:
@@ -484,6 +485,168 @@ CREATE TABLE "public"."opportunity_lifecycle_history" (
     "transitioned_at" timestamp with time zone NOT NULL,
     CONSTRAINT "opportunity_lifecycle_history_pkey" PRIMARY KEY ("id"),
     CONSTRAINT "opportunity_lifecycle_history_rev_key" UNIQUE ("org_id", "opportunity_identity", "revision")
+);
+
+
+--
+-- Name: opportunity_baselines; Type: TABLE; Schema: public; Owner: -
+--
+-- SOURCE OF TRUTH: database/models/opportunity_baselines.py
+-- (ALL_OPPORTUNITY_BASELINES_DDL), applied by migration 0032 and the runtime
+-- ensure_opportunity_baseline_table() helper. Keep in sync with it.
+--
+-- 2.0-A2 T2: the IMMUTABLE measurement basis a finding is born with. Write-once
+-- by primary key; the store issues no UPDATE or DELETE. In production also apply:
+--     REVOKE UPDATE, DELETE ON opportunity_baselines FROM app_user;
+--     GRANT INSERT, SELECT ON opportunity_baselines TO app_user;
+--
+
+CREATE TABLE "public"."opportunity_baselines" (
+    "org_id" character varying(64) NOT NULL,
+    "opportunity_identity" character varying(64) NOT NULL,
+    "run_id" character varying(64) NOT NULL,
+    "detector_id" character varying(128) NOT NULL,
+    "pack_id" character varying(64),
+    "pack_version" character varying(32),
+    "opportunity_ref" character varying(64),
+    "window_days" integer,
+    "window_started_at" timestamp with time zone,
+    "window_ended_at" timestamp with time zone,
+    "window_derivation" character varying(64) NOT NULL,
+    "schema_version" character varying(16) NOT NULL,
+    "artifact" "text" NOT NULL,
+    "captured_at" timestamp with time zone NOT NULL,
+    CONSTRAINT "opportunity_baselines_pkey" PRIMARY KEY ("org_id", "opportunity_identity")
+);
+
+
+--
+-- Name: opportunity_movements; Type: TABLE; Schema: public; Owner: -
+--
+-- SOURCE OF TRUTH: database/models/opportunity_movements.py
+-- (ALL_OPPORTUNITY_MOVEMENTS_DDL), applied by migration 0033 and the runtime
+-- ensure_opportunity_movement_table() helper. Keep in sync with it.
+--
+-- 2.0-A2 T3: one stored movement record per (identity, comparison run) - a
+-- STORED artifact, not a computed-at-read view, so a later pack change cannot
+-- retroactively alter a measurement that was already reported. Both run ids are
+-- real columns (AC7); comparability_verdict is NOT NULL by contract.
+--
+
+CREATE TABLE "public"."opportunity_movements" (
+    "org_id" character varying(64) NOT NULL,
+    "opportunity_identity" character varying(64) NOT NULL,
+    "current_run_id" character varying(64) NOT NULL,
+    "baseline_run_id" character varying(64) NOT NULL,
+    "detector_id" character varying(128) NOT NULL,
+    "action_date" "date" NOT NULL,
+    "comparability_verdict" character varying(24) NOT NULL,
+    "baseline_pack_version" character varying(32),
+    "current_pack_version" character varying(32),
+    "primary_signal" character varying(128),
+    "primary_baseline_value" double precision,
+    "primary_current_value" double precision,
+    "primary_delta" double precision,
+    "primary_direction" character varying(16),
+    "record" "text" NOT NULL,
+    "measured_at" timestamp with time zone NOT NULL,
+    "created_at" timestamp with time zone NOT NULL,
+    "updated_at" timestamp with time zone NOT NULL,
+    "confounder_count" integer DEFAULT 0 NOT NULL,
+    "confounder_material_count" integer DEFAULT 0 NOT NULL,
+    "confounder_types" "text",
+    "projection_validation_verdict" character varying(24) DEFAULT 'not_projected'::character varying NOT NULL,
+    "projection_pack_id" character varying(64),
+    "projection_pack_version" character varying(32),
+    "projection_confidence" character varying(16),
+    CONSTRAINT "opportunity_movements_pkey" PRIMARY KEY ("org_id", "opportunity_identity", "current_run_id")
+);
+
+
+--
+-- Name: opportunity_feedback; Type: TABLE; Schema: public; Owner: -
+--
+-- 2.0-A3 T1: the durable analyst accept/dismiss/defer record the learning
+-- signal set reads. Keyed on the stable opportunity_identity, NOT on a run:
+-- the run-scoped `opps` KV `decision` field is rewritten wholesale by
+-- materialization and reset by replay, so a learning signal stored there would
+-- not survive to inform the next run. APPEND-ONLY: an analyst who changes their
+-- mind appends a new row (see FEEDBACK_GRANTS in the model module for the
+-- production REVOKE that makes that a capability, not a convention).
+--
+
+CREATE TABLE "public"."opportunity_feedback" (
+    "feedback_id" character varying(64) NOT NULL,
+    "org_id" character varying(64) NOT NULL,
+    "opportunity_identity" character varying(64) NOT NULL,
+    "action" character varying(16) NOT NULL,
+    "reason_code" character varying(48),
+    "reason_detail" "text",
+    "actor_id" character varying(128) NOT NULL,
+    "detector_id" character varying(128),
+    "pack_id" character varying(64),
+    "signal_concept" character varying(160),
+    "run_id" character varying(64),
+    "recorded_at" timestamp with time zone NOT NULL,
+    "record" "jsonb" NOT NULL,
+    CONSTRAINT "opportunity_feedback_pkey" PRIMARY KEY ("feedback_id")
+);
+
+
+--
+-- Name: ranking_adjustments; Type: TABLE; Schema: public; Owner: -
+--
+-- 2.0-A3 T2: the per-org learned ranking adjustment, keyed on the T1 similarity
+-- group. Stored as a VALUE rather than derived at read time, so a ranking cannot
+-- shift silently as decision history accrues and T4's reset has something to
+-- reset. Base scoring is never written -- the layer applies at serve time.
+--
+
+CREATE TABLE "public"."ranking_adjustments" (
+    "org_id" character varying(64) NOT NULL,
+    "detector_id" character varying(128) DEFAULT ''::character varying NOT NULL,
+    "pack_id" character varying(64) DEFAULT ''::character varying NOT NULL,
+    "signal_concept" character varying(160),
+    "net_weight" double precision DEFAULT 0 NOT NULL,
+    "outcome_weight" double precision DEFAULT 0 NOT NULL,
+    "decision_weight" double precision DEFAULT 0 NOT NULL,
+    "has_outcome_evidence" boolean DEFAULT false NOT NULL,
+    "signal_count" integer DEFAULT 0 NOT NULL,
+    "learning_active" boolean DEFAULT false NOT NULL,
+    "contributing_refs" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "config_version" character varying(32),
+    "revision" integer DEFAULT 1 NOT NULL,
+    "computed_at" timestamp with time zone NOT NULL,
+    "updated_at" timestamp with time zone NOT NULL,
+    CONSTRAINT "ranking_adjustments_pkey" PRIMARY KEY ("org_id", "detector_id", "pack_id")
+);
+
+
+--
+-- Name: ranking_adjustment_history; Type: TABLE; Schema: public; Owner: -
+--
+-- APPEND-ONLY. Every value an adjustment has held, including the ones a reset
+-- replaced. Present from the start because history cannot be reconstructed
+-- retroactively: a table added later begins with a hole exactly where the first
+-- questions will be asked.
+--
+
+CREATE TABLE "public"."ranking_adjustment_history" (
+    "history_id" character varying(64) NOT NULL,
+    "org_id" character varying(64) NOT NULL,
+    "detector_id" character varying(128) DEFAULT ''::character varying NOT NULL,
+    "pack_id" character varying(64) DEFAULT ''::character varying NOT NULL,
+    "change_kind" character varying(32) NOT NULL,
+    "previous_net_weight" double precision,
+    "net_weight" double precision DEFAULT 0 NOT NULL,
+    "signal_count" integer DEFAULT 0 NOT NULL,
+    "learning_active" boolean DEFAULT false NOT NULL,
+    "actor_id" character varying(128),
+    "config_version" character varying(32),
+    "revision" integer DEFAULT 1 NOT NULL,
+    "record" "jsonb" NOT NULL,
+    "recorded_at" timestamp with time zone NOT NULL,
+    CONSTRAINT "ranking_adjustment_history_pkey" PRIMARY KEY ("history_id")
 );
 
 
@@ -1650,7 +1813,70 @@ CREATE INDEX "idx_opp_lifecycle_org_state" ON "public"."opportunity_lifecycle" U
 
 CREATE INDEX "idx_opp_lifecycle_history_org_identity" ON "public"."opportunity_lifecycle_history" USING "btree" ("org_id", "opportunity_identity", "revision" DESC);
 
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0031') ON CONFLICT DO NOTHING;
+CREATE INDEX "idx_opp_baselines_org_run" ON "public"."opportunity_baselines" USING "btree" ("org_id", "run_id");
+
+CREATE INDEX "idx_opp_baselines_org_detector" ON "public"."opportunity_baselines" USING "btree" ("org_id", "detector_id");
+
+CREATE INDEX "idx_opp_movements_org_identity" ON "public"."opportunity_movements" USING "btree" ("org_id", "opportunity_identity", "measured_at" DESC);
+
+CREATE INDEX "idx_opp_movements_org_run" ON "public"."opportunity_movements" USING "btree" ("org_id", "current_run_id");
+
+CREATE INDEX "idx_opp_movements_org_verdict" ON "public"."opportunity_movements" USING "btree" ("org_id", "comparability_verdict");
+
+CREATE INDEX "idx_opp_movements_org_confounders" ON "public"."opportunity_movements" USING "btree" ("org_id", "confounder_count");
+
+CREATE INDEX "idx_opp_movements_org_projection_verdict" ON "public"."opportunity_movements" USING "btree" ("org_id", "projection_validation_verdict");
+
+CREATE INDEX "idx_opp_movements_org_projection_pack" ON "public"."opportunity_movements" USING "btree" ("org_id", "projection_pack_id");
+
+CREATE INDEX "idx_opp_movements_org_detector" ON "public"."opportunity_movements" USING "btree" ("org_id", "detector_id");
+
+CREATE INDEX "idx_opp_movements_org_projection_confidence" ON "public"."opportunity_movements" USING "btree" ("org_id", "projection_confidence");
+
+
+--
+-- Name: idx_opportunity_feedback_*; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_opportunity_feedback_identity" ON "public"."opportunity_feedback" USING "btree" ("org_id", "opportunity_identity", "recorded_at" DESC);
+
+CREATE INDEX "idx_opportunity_feedback_similarity" ON "public"."opportunity_feedback" USING "btree" ("org_id", "detector_id", "pack_id", "recorded_at" DESC);
+
+CREATE INDEX "idx_opportunity_feedback_org_recorded" ON "public"."opportunity_feedback" USING "btree" ("org_id", "recorded_at" DESC);
+
+
+--
+-- Name: idx_ranking_adjustment*; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_ranking_adjustments_org" ON "public"."ranking_adjustments" USING "btree" ("org_id", "updated_at" DESC);
+
+CREATE INDEX "idx_ranking_adjustment_history_org" ON "public"."ranking_adjustment_history" USING "btree" ("org_id", "recorded_at" DESC);
+
+CREATE INDEX "idx_ranking_adjustment_history_group" ON "public"."ranking_adjustment_history" USING "btree" ("org_id", "detector_id", "pack_id", "recorded_at" DESC);
+
+--
+-- 2.0-D4 T2 (AC2): enforce audit_log immutability at the GRANT level.
+--
+-- database/models/audit_log.py has documented this posture since AT-82, but it was
+-- never applied here - the application role held UPDATE, DELETE and TRUNCATE on the
+-- table, so "audit records cannot be updated or deleted through any application
+-- path" was true only of the code, not of the database. Applied by migration 0038
+-- as well, so a deployment provisioned either way ends up in the same state.
+--
+-- LIMITATION, stated rather than discovered later: in PostgreSQL a table OWNER can
+-- re-grant itself anything, so this binds only when the application role does NOT
+-- own audit_log. Provision the table as a migration/DBA role and grant the
+-- application role INSERT + SELECT only. tests/unit/test_audit_log_immutability.py
+-- reports the ownership caveat explicitly rather than implying protection.
+--
+-- Retention is deliberately NOT a DELETE grant here. See
+-- docs/audit_export_and_retention.md: the deletion path is outside the application
+-- by design, run by a separate role.
+--
+REVOKE UPDATE, DELETE, TRUNCATE ON "public"."audit_log" FROM PUBLIC;
+
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0041') ON CONFLICT DO NOTHING;
 
 
 --

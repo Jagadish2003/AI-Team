@@ -23,6 +23,7 @@ from .projection_copy_guard import (  # noqa: F401  (re-exported)
     scrub_opportunity_narrative as _scrub_opportunity_narrative,
     scrub_opportunity_narratives,
 )
+from .outcome_surfaces import build_empty_outcome_report_section
 
 
 def build_executive_report(
@@ -30,6 +31,7 @@ def build_executive_report(
     opps: List[Dict[str, Any]],
     roadmap: Dict[str, Any],
     selected_system_ids: Optional[List[str]] = None,
+    outcome_section: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Build executive report from run-scoped data.
@@ -80,4 +82,5 @@ def build_executive_report(
 
         # T6 enrichment layer adds this later
         "aiExecutiveSummary": "",
+        "outcomeSection": outcome_section or build_empty_outcome_report_section(run_id),
     }

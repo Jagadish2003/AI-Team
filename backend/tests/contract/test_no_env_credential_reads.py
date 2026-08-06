@@ -442,6 +442,18 @@ _INGEST_ALLOWLIST: Dict[Tuple[str, str], str] = {
         "targets); configuration discovery, not a credential — the "
         "credential itself resolves via the vault only (resolve_secret)."
     ),
+    ("app_insights_association.py", "<dynamic:_raw_entries>"): (
+        "2.0-D3 T3: reads APP_INSIGHTS_ASSOCIATIONS (a JSON map of App "
+        "Insights component id -> .NET app_id / CMDB sys_id); identifiers "
+        "only, never a credential — an entry carrying a credential-shaped "
+        "field is rejected outright by find_inline_secret_keys."
+    ),
+    ("app_insights_association.py", "DATABASE_URL"): (
+        "2.0-D3 T3: presence check only, so the CMDB association lookup is a "
+        "no-op when no database is configured (the same guard "
+        "conversation_content.build_author_resolver uses). The value is never "
+        "read for connecting — the org-scoped lookup owns that."
+    ),
     ("git_content.py", "<dynamic:_path_defaults>"): (
         "Reads GIT_CONTENT_PATH_DEFAULTS (an org-level path-filter config "
         "object, AT-530); configuration discovery, not a credential."

@@ -21,7 +21,11 @@ import {
 } from '../types/stack_builder';
 import { useSetupState } from '../components/stack_builder';
 import type { LendingGuideLaunchState } from '../components/stack_builder';
-import { ANALYSIS_PACKS, analysisPackLabelFor } from '../data/analysisPacks';
+import {
+  ANALYSIS_PACKS,
+  analysisPackLabelFor,
+  resolveAnalysisPackId,
+} from '../data/analysisPacks';
 
 const SYSTEM_META: Record<string, { name: string }> = {
   sap: { name: 'SAP' },
@@ -317,25 +321,29 @@ export default function DiscoveryPlanPage({
     salesforcePacks.length > 0
       ? salesforcePacks.map(analysisPackLabelFor).join(', ')
       : '-';
-  // The analysis pack is chosen per run in this panel — ONE pack at most, with
-  // "None" as the default. It is a single-select over the ANALYSIS_PACKS options
-  // only, so the dropdown never has to represent a pack it does not offer:
+  // The analysis pack is chosen per run in this panel — ONE pack at most. It is a
+  // single-select over the ANALYSIS_PACKS options only, so the dropdown never has
+  // to represent a pack it does not offer:
   //   • the fixed Salesforce packs (declared in the Integration Hub) are shown in
   //     the read-only row above and are never dropped by a change here, and
   //   • a pack a TEMPLATE contributed that is not an offered analysis option
   //     (e.g. 'ncino') stays on state.packIds untouched.
   // Both live on state.packIds alongside the chosen analysis pack, and
   // resolvePackIds unions them for the run — unchanged by this control.
-  const analysisPackIdSet = new Set(ANALYSIS_PACKS.map(pack => pack.id));
-  const selectedAnalysisId =
-    (state.packIds ?? []).find(id => analysisPackIdSet.has(id)) ?? '';
+  //
+  // The displayed value comes from resolveAnalysisPackId, the SAME helper
+  // resolvePackIds uses to build the launch payload, so the menu always shows the
+  // pack the run will actually activate. That includes the cloud-events default:
+  // selecting AWS/Azure Events on Step 2 pre-selects Cloud Ops here (the runner
+  // only polls those connectors when a cloud_ops pack is selected). Choosing
+  // anything here — None included — marks the slot touched and wins from then on.
+  const selectedAnalysisId = resolveAnalysisPackId(
+    state.packIds,
+    state.selectedSystemIds,
+    state.analysisPackTouched,
+  );
   const selectAnalysisPack = (packId: string) => {
-    // Replace whatever analysis pack was selected (single-select), preserving
-    // every non-analysis entry. '' is the "None" option — it clears the slot.
-    const preserved = (state.packIds ?? []).filter(
-      id => id && !analysisPackIdSet.has(id),
-    );
-    setupState.setPackIds(packId ? [...preserved, packId] : preserved);
+    setupState.setAnalysisPack(packId);
   };
   const selectedAnalysisPack = ANALYSIS_PACKS.find(
     pack => pack.id === selectedAnalysisId,

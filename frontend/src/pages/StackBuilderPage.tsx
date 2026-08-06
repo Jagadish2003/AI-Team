@@ -15,7 +15,8 @@ import { isViewerRole } from '../utils/roles';
 // Import components and types
 import { CheckCircle2, Database, Layers3, Target } from 'lucide-react';
 import type { WorkspaceCatalogResponse } from '../types/workspace_catalog';
-import { getCatalogSystemIds } from '../types/workspace_catalog';
+import { getCatalogSystemIds, getConnectedCatalogSystemIds } from '../types/workspace_catalog';
+import { resolveAnalysisPackId } from '../data/analysisPacks';
 import { fetchTokenStatus, type TokenStatus } from '../services/staticApi';
 import { useToast } from '../components/common/Toast';
 import { useResource } from '../lib/dataCache';
@@ -226,9 +227,30 @@ export function resolvePackIds(
   const salesforcePacks = salesforcePacksFromCatalog(catalog);
   const analysisPacks = (state.packIds ?? []).filter(Boolean);
   const all = Array.from(new Set([...salesforcePacks, ...analysisPacks]));
-  if (all.length > 0) return all;
-  // Nothing declared or selected — fall back to a single resolved pack.
-  return [resolvePackId(state, catalog, industries, templates)];
+  const resolved = all.length > 0
+    ? all
+    // Nothing declared or selected — fall back to a single resolved pack.
+    : [resolvePackId(state, catalog, industries, templates)];
+
+  // The cloud-events default: selecting an AWS/Azure Events connector on Step 2
+  // activates cloud_ops unless the user has chosen otherwise on Step 4. Applied
+  // LAST and purely ADDITIVELY — it can never displace a declared Salesforce
+  // pack, a template's pack, or the fallback above, so no run that already
+  // resolved a pack changes shape. Deduped, so a template that already
+  // contributed cloud_ops (managed_cloud_operations) makes this a no-op.
+  //
+  // This mirrors the Step 4 dropdown, which derives its displayed value from the
+  // same resolveAnalysisPackId helper — the menu and the launched pack_ids are
+  // always the same answer.
+  const analysisSlot = resolveAnalysisPackId(
+    state.packIds,
+    state.selectedSystemIds,
+    state.analysisPackTouched,
+  );
+  if (analysisSlot && !resolved.includes(analysisSlot)) {
+    return [...resolved, analysisSlot];
+  }
+  return resolved;
 }
 
 // ── Launch payload builder ─────────────────────────────────────────────────────
@@ -597,6 +619,32 @@ export default function StackBuilderPage({
     // per fetch so this mirrors the previous per-fetch application.
   }, [catalog, catalogErrObj, setupState.setSalesforceClouds, setupState.initFromCatalog]);
 
+  // Screen 2 default: every CONNECTED system starts selected. A connected system
+  // is one the workspace has already decided to give AgentIQ, so arriving at
+  // Screen 2 with them all unticked made the common case a re-selection of work
+  // already done.
+  //
+  // Kept separate from initFromCatalog above, which seeds only while the selection
+  // is completely empty and includes `needs_auth` systems. This runs once per
+  // setup session (guarded by connectedDefaultsApplied) and is purely additive, so
+  // it also covers the case where a restored saved state landed after that seed —
+  // and the flag means a later background catalog refresh can never re-tick a
+  // system the user deliberately removed.
+  const connectedSystemIds = useMemo(
+    () => (catalog ? getConnectedCatalogSystemIds(catalog) : []),
+    [catalog],
+  );
+  const connectedDefaultsApplied = state.connectedDefaultsApplied ?? false;
+  useEffect(() => {
+    if (!catalog || connectedDefaultsApplied) return;
+    setupState.applyConnectedSystemDefaults(connectedSystemIds);
+  }, [
+    catalog,
+    connectedSystemIds,
+    connectedDefaultsApplied,
+    setupState.applyConnectedSystemDefaults,
+  ]);
+
   // R18-C1 T3: industries + templates come from the backend registry, not
   // hardcoded frontend arrays. Both come from the same source of truth, so ONE
   // cache key drives both pickers and one Retry reloads both. On the SHARED
@@ -751,6 +799,28 @@ export default function StackBuilderPage({
     );
   }
 
+  // The lending template's first-run guide, built once and placed by the step
+  // below: inside Discovery Focus on step 1, above the step content on 2-4.
+  const lendingGuide = (() => {
+    if (state.templateId !== 'commercial_lending') return null;
+    const selectedTemplate = templates.find(
+      template => template.template_id === state.templateId,
+    );
+    if (!selectedTemplate) return null;
+    return (
+      <LendingFirstRunGuide
+        template={selectedTemplate}
+        state={state}
+        packId={resolvePackId(state, catalog, industries, templates)}
+        launchState={
+          launchState === 'setup' && state.currentStep === 4
+            ? 'ready'
+            : launchState
+        }
+      />
+    );
+  })();
+
   return (
     <PageShell
       title={copy.title}
@@ -768,24 +838,12 @@ export default function StackBuilderPage({
             <StackBuilderProgressBar steps={steps} />
           </section>
 
-          {state.templateId === 'commercial_lending' && (() => {
-            const selectedTemplate = templates.find(
-              template => template.template_id === state.templateId,
-            );
-            if (!selectedTemplate) return null;
-            return (
-              <LendingFirstRunGuide
-                template={selectedTemplate}
-                state={state}
-                packId={resolvePackId(state, catalog, industries, templates)}
-                launchState={
-                  launchState === 'setup' && state.currentStep === 4
-                    ? 'ready'
-                    : launchState
-                }
-              />
-            );
-          })()}
+          {/* On step 1 the guide is rendered INSIDE DiscoveryFocusPage, directly
+              below the Industry / template pickers — the template that produces it
+              is chosen there, and a guide at the top of the page left the user
+              scrolling back up from the pill they had just clicked. Steps 2-4 have
+              no such section, so the guide stays above the step content there. */}
+          {state.currentStep !== 1 && lendingGuide}
 
           {state.currentStep === 1 && (
             <DiscoveryFocusPage
@@ -796,6 +854,7 @@ export default function StackBuilderPage({
               registryError={registryError}
               onRetryRegistry={fetchRegistry}
               fetchSystemDefaults={loadIndustrySystemDefaults}
+              guide={lendingGuide}
             />
           )}
           {state.currentStep === 2 && catalogLoading && (

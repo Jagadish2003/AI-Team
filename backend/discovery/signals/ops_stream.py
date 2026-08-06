@@ -327,9 +327,17 @@ class OpsEventStream:
             self._budget.charge()
             return Admission(self._signals[key], "new")
 
-        # An at-least-once redelivery of a firing already counted — idempotent.
+        # An at-least-once redelivery of a firing already counted — idempotent in
+        # the FOLD (no count, no span change), but still CHARGED to the budget.
+        # The budget bounds the work a run does, not the facts it ends up with: a
+        # redelivery was fetched, mapped and admitted, and the poll loop stops
+        # fetching on `has_capacity()`. Making redeliveries free would leave a
+        # provider redelivery storm doing unbounded fetch+map work with the budget
+        # never moving — the hang class the poll bounds exist to prevent. They are
+        # counted separately so a depleted budget is explainable rather than
+        # mysterious (see BudgetReport.duplicates).
         if event.signal_id in existing.provider_event_ids:
-            self._budget.charge()
+            self._budget.charge(duplicate=True)
             return Admission(existing, "duplicate")
 
         self._fold(existing, event, dt)

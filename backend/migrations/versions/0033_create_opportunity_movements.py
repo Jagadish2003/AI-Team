@@ -1,8 +1,8 @@
-"""Create the 2.0-B2 T5 unmerge suppression + finding re-evaluation flag tables.
+"""Create the 2.0-A2 stored movement-record table (post-action measurement).
 
-Revision ID: 0034
-Revises: 0033
-Create Date: 2026-08-03
+Revision ID: 0033
+Revises: 0032
+Create Date: 2026-07-30
 """
 import os
 import sys
@@ -10,8 +10,8 @@ from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "0034"
-down_revision: Union[str, None] = "0033"
+revision: str = "0033"
+down_revision: Union[str, None] = "0032"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -23,20 +23,17 @@ def _backend_on_path() -> None:
 
 
 def _ddl() -> "tuple[str, ...]":
-    # The DDL lives in database/models/entity_unmerges.py so the migration-applied
-    # schema and any runtime reader execute the exact same statements and can never
-    # drift (the locked entities pattern).
     _backend_on_path()
-    from database.models.entity_unmerges import ALL_ENTITY_UNMERGE_DDL
+    from database.models.opportunity_movements import ALL_OPPORTUNITY_MOVEMENTS_DDL
 
-    return ALL_ENTITY_UNMERGE_DDL
+    return ALL_OPPORTUNITY_MOVEMENTS_DDL
 
 
 def _drop_ddl() -> "tuple[str, ...]":
     _backend_on_path()
-    from database.models.entity_unmerges import DROP_ENTITY_UNMERGE_DDL
+    from database.models.opportunity_movements import DROP_OPPORTUNITY_MOVEMENTS_DDL
 
-    return DROP_ENTITY_UNMERGE_DDL
+    return DROP_OPPORTUNITY_MOVEMENTS_DDL
 
 
 def upgrade() -> None:

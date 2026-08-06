@@ -19,11 +19,13 @@ import SnapshotMatrix from '../components/executive_report/SnapshotMatrix';
 import KeyInsights, { resolveExecutiveSummary } from '../components/executive_report/KeyInsights';
 import TopQuickWins from '../components/executive_report/TopQuickWins';
 import PilotRoadmapHighlights from '../components/executive_report/PilotRoadmapHighlights';
+import ExecutiveOutcomeSection from '../components/outcomes/ExecutiveOutcomeSection';
 import { downloadExecutiveReportPdf } from '../utils/exportPdf';
 import { profileNameFromEmail } from '../utils/profileName';
 import { runScopedErrorMessage } from '../utils/apiErrors';
 import { useResource, useDataCache } from '../lib/dataCache';
 import { cacheKeys } from '../lib/cacheKeys';
+import { showRelease2ArcAUi } from '../config/releaseFlags';
 
 export default function ExecutiveReportPage() {
   const { push } = useToast();
@@ -153,6 +155,7 @@ export default function ExecutiveReportPage() {
           userName: profileNameFromEmail(auth?.user?.email),
           generatedAt,
           runId,
+          outcomeSection: showRelease2ArcAUi ? report?.outcomeSection ?? null : null,
         },
         {
           filename: `AgentIQ-Executive-Report-${stamp}.pdf`,
@@ -290,6 +293,10 @@ export default function ExecutiveReportPage() {
         <div className="mt-4 space-y-4">
           {/* Key Insights — full width */}
           <KeyInsights />
+
+          {showRelease2ArcAUi && (
+            <ExecutiveOutcomeSection section={report?.outcomeSection ?? null} />
+          )}
 
           {/* Top Quick Wins + Agent Roadmap Highlights — side by side */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(420px,520px)]">

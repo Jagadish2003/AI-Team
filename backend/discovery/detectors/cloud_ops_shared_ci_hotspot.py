@@ -6,6 +6,12 @@ MULTIPLE services whose CIs traverse — via MSP-B3 dependency edges — to ONE
 common CI, with event corroboration on that CI in the same windows. Twelve
 services' pain, one shared storage tier.
 
+Traversal uses the SHARED CI-dependency engine (``detectors.ci_dependency_graph``) —
+the same adjacency construction and the same bounded BFS the MSP-B12 SecOps
+concentration detector uses, so one CMDB can never yield two different notions of
+"reachable within N hops". See that module for why it is not the LLM-oriented
+``app.graph_context_builder``.
+
 Traversal is DEPTH-BOUNDED (default 2 hops, configurable via T1's schema —
 ``thresholds.shared_ci_hotspot``): a service contributes to a common CI only when
 that CI is reachable within ``max_hops`` dependency hops of the service's own CI.
@@ -30,11 +36,11 @@ Input (read from ``sn_data['cloud_ops']``):
 """
 from __future__ import annotations
 
-from collections import deque
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from ..models import DetectorResult, make_detector_evaluation
 from ..packs import cloud_ops_finding as fc
+from .ci_dependency_graph import build_adjacency, reachable_within
 
 try:
     from ..packs.cloud_ops_config import get_detector_thresholds
@@ -67,42 +73,24 @@ def _thresholds() -> Dict[str, Any]:
     return get_detector_thresholds(_THRESHOLD_SECTION, defaults)
 
 
-def _build_adjacency(block: Dict[str, Any]) -> Dict[str, List[str]]:
-    """Directed dependency graph: ``adj[from]`` = CIs that ``from`` depends on."""
-    adj: Dict[str, List[str]] = {}
-    edges = ((block.get("ci_graph") or {}).get("edges")) or block.get("ci_dependency_edges") or []
-    for edge in edges:
-        if not isinstance(edge, dict):
-            continue
-        frm = edge.get("from") or edge.get("from_ci") or edge.get("source")
-        to = edge.get("to") or edge.get("to_ci") or edge.get("target")
-        if frm and to:
-            adj.setdefault(str(frm), [])
-            if str(to) not in adj[str(frm)]:
-                adj[str(frm)].append(str(to))
-    return adj
+def _adjacency(block: Dict[str, Any]) -> Dict[str, List[str]]:
+    """Directed dependency graph: ``adj[from]`` = CIs that ``from`` depends on.
 
-
-def _reachable_within(adj: Dict[str, List[str]], start: str, max_hops: int) -> Dict[str, int]:
-    """BFS from ``start``; return {ci: shortest_hop} for hop in 1..max_hops.
-
-    Excludes ``start`` itself — the concentration target is a downstream shared
-    DEPENDENCY, not the service's own CI.
+    Reads this pack's B3 edge location (``ci_graph.edges``, or the flat
+    ``ci_dependency_edges``) and hands the edges to the SHARED
+    :func:`~discovery.detectors.ci_dependency_graph.build_adjacency` — the same
+    construction the SecOps pack's ``cmdb_adjacency`` uses, so both packs derive the
+    identical graph (including the ``used_by``/``hosts``/``runs`` direction
+    normalisation this detector previously lacked) from the same CMDB.
     """
-    reached: Dict[str, int] = {}
-    queue: deque[Tuple[str, int]] = deque([(start, 0)])
-    seen = {start}
-    while queue:
-        node, hops = queue.popleft()
-        if hops >= max_hops:
-            continue
-        for nxt in adj.get(node, []):
-            if nxt in seen:
-                continue
-            seen.add(nxt)
-            reached[nxt] = hops + 1
-            queue.append((nxt, hops + 1))
-    return reached
+    edges = ((block.get("ci_graph") or {}).get("edges")) or block.get("ci_dependency_edges") or []
+    return build_adjacency(edges)
+
+
+#: The depth-bounded walk is the SHARED one — see ``ci_dependency_graph``. The bound
+#: itself (T3-AC2: a CI reachable only beyond ``max_hops`` does not count) is that
+#: function's documented guarantee, exercised by both packs' detector tests.
+_reachable_within = reachable_within
 
 
 def _event_index(block: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
@@ -125,7 +113,7 @@ def _hotspots(block: Dict[str, Any], t: Dict[str, Any]) -> List[Dict[str, Any]]:
     min_services = int(t.get("min_services", DEFAULT_MIN_SERVICES))
     require_events = bool(t.get("require_event_corroboration", DEFAULT_REQUIRE_EVENT_CORROBORATION))
 
-    adj = _build_adjacency(block)
+    adj = _adjacency(block)
     events = _event_index(block)
     service_incidents = [s for s in (block.get("service_incidents") or []) if isinstance(s, dict)]
 
@@ -225,6 +213,9 @@ def _build_result(hotspot: Dict[str, Any], t: Dict[str, Any]) -> DetectorResult:
         sources=systems,
         label="Incidents concentrate on a shared dependency (event-corroborated, window-gated)",
         window_gated=True,
+        # 2.0-B1 (trace graph engine): carry the actual join(s) MSP-B7 recorded
+        # for this event signature so the trace can surface join type + window.
+        correlation_windows=(event or {}).get("correlation_windows") if event is not None else None,
     )
 
     contract = fc.build_finding_contract(

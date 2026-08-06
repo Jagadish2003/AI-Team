@@ -15,10 +15,21 @@ export const cacheKeys = {
   /** Prefix covering all connector-scoped keys below. */
   connectorsScope: 'connectors',
   connectors: 'connectors',
+  // Integration Hub scope pickers (which channels / projects / spaces / sites /
+  // repos / schemas AgentIQ may read). All under the `connectors` prefix, so a
+  // connect/disconnect refreshes them along with the tile list — and because each
+  // picker renders its skeleton only while it holds NO data, that refresh is
+  // silent: the current options stay on screen until the new ones arrive.
   connectorProducts: 'connectors/salesforce/products',
   connectorSpaces: 'connectors/confluence/spaces',
   connectorSites: 'connectors/sharepoint/sites',
   connectorRepos: 'connectors/github/repos',
+  connectorSlackChannels: 'connectors/slack/channels',
+  connectorTeamsChannels: 'connectors/teams/channels',
+  connectorJiraProjects: 'connectors/jira/projects',
+  connectorSqlServerScope: 'connectors/sqlserver/scope',
+  connectorOracleScope: 'connectors/oracle/scope',
+  connectorPostgresScope: 'connectors/postgresql/scope',
   connectorCredentialStatus: (id: string) => `connectors/${id}/credential-status`,
   connectorJwtStatus: (id: string) => `connectors/${id}/jwt-credentials`,
   connectorTokenStatus: (id: string) => `connectors/${id}/token-status`,
@@ -43,7 +54,15 @@ export const cacheKeys = {
   runEnrichment: (runId: string) => `runs/${runId}/enrichment`,
   runOppEnrichment: (runId: string, oppId: string) =>
     `runs/${runId}/opportunities/${oppId}/enrichment`,
+  runTraceGraph: (runId: string, oppId: string) =>
+    `runs/${runId}/opportunities/${oppId}/trace-graph`,
   runExecutiveReport: (runId: string) => `runs/${runId}/executive-report`,
+  outcomesScope: 'outcomes',
+  outcomePortfolio: 'outcomes/portfolio',
+  opportunityOutcome: (opportunityIdentity: string) =>
+    `outcomes/opportunity/${opportunityIdentity}`,
+  learningScope: 'learning',
+  learningSignals: 'learning/signals',
 
   // ── Run Health dashboard ─────────────────────────────────────────────────
   /** Prefix covering every run-health panel — invalidate to refresh them all. */

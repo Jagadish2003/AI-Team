@@ -36,6 +36,8 @@ except Exception:  # pragma: no cover - import shim
 
 from app.azure_environments import AzureEnvironment
 
+from .azure_app_insights import assert_read_allowed
+
 logger = logging.getLogger(__name__)
 
 #: Alerts Management REST API version (non-secret). Overridable per client.
@@ -195,6 +197,11 @@ class HttpAzureAlertsClient:
             f"{environment.resource_manager.rstrip('/')}/subscriptions/"
             f"{subscription_id}/{_ALERTS_PATH}"
         )
+        # 2.0-D3 T1 / AC2: refuse an out-of-scope surface at the point of the call.
+        # The URL here is a constant, so this can only fire if someone later
+        # re-points this client at telemetry, metrics, or a Log Analytics/KQL
+        # endpoint — which is exactly when a scope commitment needs to hold.
+        assert_read_allowed(url)
         params = {"api-version": self._api_version}
         # timeRange caps the server-side window; the precise since filter is applied
         # client-side (ARM's alert filters are coarse). Kept modest and outbound.

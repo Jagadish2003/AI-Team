@@ -2,10 +2,32 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import {
+  buildDiscoverySteps,
+  computeStepStates,
   DiscoveryStepList,
   orderSourcesByConnectLog,
   parseConnectOrder,
+  stepProgressPercent,
 } from "../pages/DiscoveryRunPage";
+
+// The reported estate: Salesforce declaring two products (Service Cloud + nCino)
+// alongside the two native cloud-event connectors. Before the sequential state
+// machine this rendered THREE spinners at once (Salesforce CRM + Azure Events +
+// AWS Events), because both cloud rows were generic rows sharing one
+// "active until detection starts" rule.
+const CLOUD_ESTATE_SOURCES = [
+  "salesforce",
+  "servicenow",
+  "jira",
+  "slack",
+  "teams",
+  "confluence",
+  "sharepoint",
+  "github",
+  "azure_events",
+  "aws_events",
+];
+const CLOUD_ESTATE_PRODUCTS = ["salesforce_sc", "salesforce_ncino"];
 
 describe("DiscoveryStepList step state (CS-4 T5)", () => {
   it("marks an in-progress step active and earlier steps completed", () => {
@@ -63,9 +85,11 @@ describe("DiscoveryStepList step state (CS-4 T5)", () => {
     render(<DiscoveryStepList currentStep="slack" />);
 
     expect(screen.getByText("Slack")).toBeInTheDocument();
-    // sf_crm, sn, jira precede Slack → 3 completed; Slack itself active. The pack
-    // pass (sf_ncino) now comes after Slack, so it is still pending.
-    expect(screen.getAllByLabelText("completed").length).toBe(3);
+    // sf_crm, sn, jira, azure_events, aws_events precede Slack → 5 completed;
+    // Slack itself active. The pack pass (sf_ncino) now comes after Slack, so it
+    // is still pending. (The two native cloud-event connectors each emit their own
+    // backend step and are ingested between Jira and Slack.)
+    expect(screen.getAllByLabelText("completed").length).toBe(5);
     expect(screen.getByLabelText("active")).toBeInTheDocument();
   });
 });
@@ -122,10 +146,11 @@ describe("DiscoveryStepList Salesforce product labelling (CS-4)", () => {
       />
     );
     // The pack pass (sf_ncino) is emitted last among the ingest steps, after
-    // every connected source (sf_crm, sn, jira, slack, teams, confluence,
-    // sharepoint, github, java_app, dotnet_app) → all ten source stages
-    // completed, confirming the selected pack renders after all sources.
-    expect(screen.getAllByLabelText("completed").length).toBe(10);
+    // every connected source (sf_crm, sn, jira, azure_events, aws_events, slack,
+    // teams, confluence, sharepoint, github, java_app, dotnet_app) → all twelve
+    // source stages completed, confirming the selected pack renders after all
+    // sources.
+    expect(screen.getAllByLabelText("completed").length).toBe(12);
     expect(screen.getByLabelText("active")).toBeInTheDocument();
   });
 });
@@ -242,6 +267,184 @@ describe("DiscoveryStepList dynamic connected-source progress", () => {
       "Entity Enrichment",
       "Complete",
     ]);
+  });
+});
+
+describe("DiscoveryStepList sequential progress (one spinner at a time)", () => {
+  // The reported bug: Salesforce CRM, Azure Events and AWS Events all spinning
+  // together. Every step of the pipeline must show at most one spinner, with the
+  // completed rows forming a prefix and everything after it pending.
+  const steps = buildDiscoverySteps({
+    salesforceProducts: CLOUD_ESTATE_PRODUCTS,
+    connectedSources: CLOUD_ESTATE_SOURCES,
+  });
+
+  it("renders exactly one spinner while the first source is ingesting", () => {
+    render(
+      <DiscoveryStepList
+        currentStep="sf_crm"
+        salesforceProducts={CLOUD_ESTATE_PRODUCTS}
+        connectedSources={CLOUD_ESTATE_SOURCES}
+      />
+    );
+
+    expect(screen.getAllByLabelText("active").length).toBe(1);
+    // Salesforce CRM is the row that owns the current backend step.
+    expect(screen.getByLabelText("active").closest("li")).toHaveTextContent(
+      "Salesforce CRM"
+    );
+    // Nothing is done yet, and both cloud rows are pending rather than spinning.
+    expect(screen.queryAllByLabelText("completed").length).toBe(0);
+  });
+
+  it("never shows more than one spinner at any step of the run", () => {
+    for (const step of [
+      "sf_crm",
+      "sn",
+      "jira",
+      "azure_events",
+      "aws_events",
+      "slack",
+      "teams",
+      "confluence",
+      "sharepoint",
+      "github",
+      "sf_ncino",
+      "detect",
+      "enrich",
+      "complete",
+    ]) {
+      const states = computeStepStates({ steps, currentStep: step });
+      const active = states.filter((s) => s.state === "active");
+      expect(
+        active.length,
+        `expected exactly one active row at step "${step}"`
+      ).toBe(1);
+    }
+  });
+
+  it("keeps completed rows as a contiguous prefix (never a gap)", () => {
+    for (const step of ["jira", "azure_events", "github", "detect"]) {
+      const names = computeStepStates({ steps, currentStep: step }).map(
+        (s) => s.state
+      );
+      const firstNonCompleted = names.findIndex((s) => s !== "completed");
+      // No "completed" may appear after the first non-completed row — that gap is
+      // what a per-row (non-sequential) calculation produced.
+      expect(
+        names.slice(firstNonCompleted).includes("completed"),
+        `completed row found after the frontier at step "${step}"`
+      ).toBe(false);
+    }
+  });
+
+  it("shows one spinner when several pack rows share a backend step", () => {
+    // Service Cloud and nCino Lending both track the "sf_ncino" pass, so a
+    // per-row calculation spun both at once.
+    const states = computeStepStates({ steps, currentStep: "sf_ncino" });
+    expect(states.filter((s) => s.state === "active").length).toBe(1);
+  });
+
+  it("tracks the FSC pack row on its own sf_fsc backend step", () => {
+    const fscSteps = buildDiscoverySteps({
+      salesforceProducts: ["salesforce_fsc"],
+      connectedSources: ["salesforce"],
+    });
+    const states = computeStepStates({
+      steps: fscSteps,
+      currentStep: "sf_fsc",
+    });
+    const active = states.filter((s) => s.state === "active");
+    expect(active.length).toBe(1);
+    expect(active[0].step.label).toBe("Financial Services Cloud");
+  });
+
+  it("renders a failed step as an error and keeps the run moving past it", () => {
+    render(
+      <DiscoveryStepList
+        currentStep="jira"
+        failedSteps={["sn"]}
+        salesforceProducts={CLOUD_ESTATE_PRODUCTS}
+        connectedSources={CLOUD_ESTATE_SOURCES}
+      />
+    );
+    // The failed stage never shows the green check, and the frontier has moved on.
+    expect(screen.getByLabelText("failed").closest("li")).toHaveTextContent(
+      "ServiceNow"
+    );
+    expect(screen.getAllByLabelText("active").length).toBe(1);
+    expect(screen.getByLabelText("active").closest("li")).toHaveTextContent(
+      "Jira"
+    );
+  });
+
+  it("shows no spinner before the run has emitted its first step", () => {
+    const states = computeStepStates({ steps, currentStep: null });
+    expect(states.every((s) => s.state === "pending")).toBe(true);
+  });
+});
+
+describe("stepProgressPercent (equal division across the rendered rows)", () => {
+  const steps = buildDiscoverySteps({
+    salesforceProducts: CLOUD_ESTATE_PRODUCTS,
+    connectedSources: CLOUD_ESTATE_SOURCES,
+  });
+  const pctAt = (currentStep: string | null) =>
+    stepProgressPercent(computeStepStates({ steps, currentStep }));
+
+  it("gives every rendered row an equal share of the total", () => {
+    // 10 source rows + 2 pack rows + detect + enrich + complete = 15 rows.
+    expect(steps.length).toBe(15);
+    const share = 100 / steps.length;
+    // Each completed row adds exactly one share; the in-progress row adds half,
+    // so the run never reports 0% while its first stage is working.
+    expect(pctAt("sf_crm")).toBe(Math.round(share / 2));
+    expect(pctAt("sn")).toBe(Math.round(share * 1.5));
+    expect(pctAt("jira")).toBe(Math.round(share * 2.5));
+  });
+
+  it("increases monotonically and never reaches 100 while running", () => {
+    const order = [
+      "sf_crm",
+      "sn",
+      "jira",
+      "azure_events",
+      "aws_events",
+      "slack",
+      "teams",
+      "confluence",
+      "sharepoint",
+      "github",
+      "sf_ncino",
+      "detect",
+      "enrich",
+      "complete",
+    ];
+    const pcts = order.map(pctAt);
+    for (let i = 1; i < pcts.length; i += 1) {
+      expect(pcts[i]).toBeGreaterThan(pcts[i - 1]);
+    }
+    expect(Math.max(...pcts)).toBeLessThanOrEqual(99);
+    expect(pctAt(null)).toBe(0);
+  });
+
+  it("counts a failed stage as settled so progress keeps moving", () => {
+    const withFailure = stepProgressPercent(
+      computeStepStates({ steps, currentStep: "jira", failedSteps: ["sn"] })
+    );
+    expect(withFailure).toBe(pctAt("jira"));
+  });
+
+  it("reports every row done for a finished run", () => {
+    const states = computeStepStates({
+      steps,
+      currentStep: "sf_crm", // stale current_step on an already-finished run
+      runComplete: true,
+    });
+    expect(states.every((s) => s.state === "completed")).toBe(true);
+    // The page shows the literal "Completed 100%" pill for a finished run; the
+    // step maths is clamped to 99 so a running run can never claim 100.
+    expect(stepProgressPercent(states)).toBe(99);
   });
 });
 

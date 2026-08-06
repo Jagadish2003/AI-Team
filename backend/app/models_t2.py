@@ -1,5 +1,5 @@
 import os
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -64,3 +64,9 @@ class StatusResponse(BaseModel):
     # CS-4 / AT-313: discovery steps whose ingest failed during this run. The
     # frontend renders these as failed rather than completed in the step list.
     failed_steps: List[str] = Field(default_factory=list)
+    # 2.0-D4 T5 (AC6): whether the run actually delivered everything it set out
+    # to, and what it did not. A finished run is not necessarily a complete one,
+    # and a poller that only reads `status` would never know the difference.
+    # Declared here because response_model strips anything the model omits — a
+    # field added to the handler alone would vanish silently.
+    completeness: Optional[Dict[str, Any]] = None

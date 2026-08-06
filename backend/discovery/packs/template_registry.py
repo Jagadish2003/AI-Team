@@ -294,6 +294,239 @@ TEMPLATE_REGISTRY: Dict[str, TemplateDefinition] = {
         metadata={"source": "R18-C1", "version": "1.0.0"},
     ),
 
+    # 2.0-D2 T1: the Insurance template — a registry-only instance of the same
+    # generic TemplateDefinition, added as a DICT ENTRY. No new template type, no
+    # backend route, no API contract change, no frontend template definition, and
+    # no new detectors: D2 is explicitly a CONFIGURATION exercise reusing the
+    # Service Cloud pack, which is why pack_id below is `service_cloud` rather than
+    # a new insurance pack.
+    #
+    # The three workflow areas D2 names, mapped onto the source roles:
+    #   claims handling      — claim FNOL, status and settlement records
+    #   underwriting review  — the referral-review approval step
+    #   policy servicing     — endorsement, cancellation, certificate, billing
+    # Claims and policy-service records are the PRIMARY WORKLOAD (Service Cloud as
+    # system_of_record); workflow systems supply assignment and escalation history;
+    # communication systems corroborate handoffs; documentation systems carry
+    # policy, procedure and underwriting context.
+    #
+    # HONEST SYSTEM ANCHORING (D2 AC3): every suggested system below is a SHIPPED
+    # connector. `salesforce_sc` resolves through the base Salesforce ingestor and
+    # declares its pack in app/salesforce_product_packs.py; servicenow, jira, teams,
+    # slack, confluence and sharepoint all ship ingestion. A contract test applies
+    # the R191-R1 anchor-on-shipped rule to this template's systems.
+    #
+    # FUTURE SCOPE (D2 AC4): seeded validation shows the seven existing Service
+    # Cloud detectors fire on an insurance-shaped estate, so no domain pack is
+    # needed to make the template useful. It does NOT cover insurance-specific
+    # patterns — claim leakage, subrogation recovery delay, reserve adjustment
+    # churn, fraud-triage effort. Those need FSC-style domain detectors and are
+    # recorded here as a SEPARATE FUTURE PACK STORY, deliberately not implemented
+    # in D2 (see metadata.future_scope below, which a contract test asserts).
+    "insurance": TemplateDefinition(
+        template_id="insurance",
+        label="Insurance",
+        description=(
+            "Insurance starting point: Service Cloud as the system of record for "
+            "claims and policy-service records, with workflow systems supplying "
+            "assignment and escalation history, communication systems corroborating "
+            "handoffs, and documentation systems carrying policy, procedure and "
+            "underwriting context. Covers claims handling, underwriting review and "
+            "policy servicing using the Service Cloud pack — no insurance-specific "
+            "detectors."
+        ),
+        suggested_systems=[
+            "salesforce_sc",
+            "servicenow",
+            "jira",
+            "teams",
+            "slack",
+            "confluence",
+            "sharepoint",
+        ],
+        suggested_roles={
+            # Claims + policy-service records are the primary workload.
+            "salesforce_sc": "system_of_record",
+            # Assignment and escalation history.
+            "servicenow": "workflow_system",
+            "jira": "workflow_system",
+            # Corroborating handoff signals (capped at MEDIUM by the corroboration
+            # rules, as every conversation source is).
+            "teams": "operational_signal_source",
+            "slack": "operational_signal_source",
+            # Policy wording, claims procedure and underwriting guidance.
+            "confluence": "documentation_system",
+            "sharepoint": "documentation_system",
+        },
+        # ── Insurance focus defaults (2.0-D2 T3) ─────────────────────────────
+        #
+        # An EXISTING canonical focus id and EXISTING emphasis tags, through the
+        # current focus-affinity mechanism. No new focus type, scoring rule, focus
+        # card, API property or focus-engine branch.
+        #
+        # `member_customer_service` because the general Insurance template is
+        # primarily policyholder-facing claims and policy servicing, and because
+        # focus_affinity already emphasises the Service Cloud detectors that read
+        # that workload (REPETITIVE_AUTOMATION, KNOWLEDGE_GAP) under it.
+        #
+        # This is a STARTING VALUE, not a locked configuration: an
+        # underwriting-heavy customer selects `approvals_compliance` (which owns
+        # APPROVAL_BOTTLENECK and PERMISSION_BOTTLENECK) and their choice wins,
+        # recorded as an edited field by resolve_launch_config.
+        #
+        # The tags map to the five areas T3 names:
+        #   service_casework      policyholder service
+        #   intake_requests       claims intake
+        #   approvals             underwriting review
+        #   compliance_risk       underwriting review (the regulatory half)
+        #   backlog_work_queues   operational queues
+        #   handoffs_routing      cross-team handoffs
+        #
+        # WHAT THE TAGS DO, AND DO NOT DO. They are declarative workflow-focus
+        # hints: routes_stack_builder returns them so the Stack Builder can
+        # pre-populate, and they are captured in launch provenance. RANKING comes
+        # from `focus_id` alone, via FOCUS_AFFINITY's detector-id mapping — the tags
+        # are not a scoring input, so editing this list changes what the UI
+        # pre-selects and what the API reports, never how findings rank. A contract
+        # test proves it by emptying the list and asserting ranks are unchanged.
+        # (`documents_knowledge` was dropped here: the documentation lane is
+        # expressed in suggested_roles, and T3 scopes the focus to the five areas
+        # above.)
+        #
+        # KNOWN LIMITATION, reported rather than worked around (see
+        # metadata.focus_limitation): no single canonical focus emphasises all five
+        # areas. member_customer_service emphasises 2 of the pack's 7 detectors;
+        # claims handoffs sit under cross_system_handoffs and underwriting review
+        # under approvals_compliance. Nothing is SUPPRESSED — a detector outside the
+        # focus is "surfaced but not emphasised" — so every pattern stays visible,
+        # which a seeded test asserts.
+        focus_defaults=FocusDefaults(
+            focus_id="member_customer_service",
+            emphasis=[
+                "service_casework",
+                "intake_requests",
+                "approvals",
+                "compliance_risk",
+                "backlog_work_queues",
+                "handoffs_routing",
+            ],
+        ),
+        # Service Cloud pack (pack_config.PACK_REGISTRY["service_cloud"]) — D2
+        # reuses existing detectors rather than introducing a domain pack.
+        pack_id="service_cloud",
+        # The seven Service Cloud detectors this template emphasises, which are
+        # exactly the ones the seeded insurance estate fires. PROVENANCE ONLY: the
+        # field records emphasis for the run and UI and does not itself change
+        # scoring (pack_id and focus_id do that).
+        detector_emphasis=[
+            "REPETITIVE_AUTOMATION",
+            "HANDOFF_FRICTION",
+            "APPROVAL_BOTTLENECK",
+            "KNOWLEDGE_GAP",
+            "INTEGRATION_CONCENTRATION",
+            "PERMISSION_BOTTLENECK",
+            "CROSS_SYSTEM_ECHO",
+        ],
+        # ── Insurance terminology set (2.0-D2 T2) ────────────────────────────
+        #
+        # The vocabulary that makes findings, roadmaps, blueprints, AI enrichment
+        # and executive reports readable to claims, underwriting and
+        # policy-servicing stakeholders. It lives HERE — on the template — and
+        # nowhere else: no insurance wording is hardcoded in a detector, a frontend
+        # component, a report builder or an LLM branch. The existing serve-time
+        # engine (app/terminology.py, applied by apply_run_terminology) carries it
+        # to every narrative surface, and the shared engine is unchanged.
+        #
+        # MAPPING SAFETY. app/terminology.py substitutes WHOLE WORDS in one pass
+        # over an allowlist of narrative fields, and it pluralises both sides. Three
+        # rules therefore constrain what may appear here, all pinned by contract
+        # tests in test_insurance_terminology.py:
+        #
+        #   1. No replacement may CONTAIN its own source, or text already using the
+        #      domain phrase double-expands — the "policy policy" / "claim claim"
+        #      malformation. This is not hypothetical: it shipped for FSC in 2.0-D1
+        #      T4 and was fixed in T6.
+        #   2. No replacement word may be another mapping's SOURCE, or the map
+        #      stops being idempotent across repeated application.
+        #   3. A mapping must not capture a word this product uses for something
+        #      else.
+        #
+        # Mappings deliberately REJECTED, with the reason, so nobody re-adds them:
+        #   queue -> claims queue    rule 1: yields "claims claims queue"
+        #   team  -> claims team     rule 1: yields "claims claims team"
+        #   agent -> adjuster        rule 3: "agent" is the AI agent in this
+        #                            product; blueprint agentName "Monitoring
+        #                            Agent" would become "Monitoring Adjuster"
+        #   case  -> claim           semantics: a policy-endorsement case is not a
+        #                            claim, so this would mislabel servicing work
+        #
+        # Claims and team wording is therefore carried by the narrative copy itself
+        # rather than by a substitution — the only substitutions that would add them
+        # are the unsafe ones above.
+        #
+        # Values remain SUBJECT TO BUSINESS REVIEW (D2 T2): these are the story's
+        # candidate mappings, not SME-confirmed insurance house style.
+        terminology={
+            "customer": "policyholder",
+            "account": "policy",
+            "ticket": "service request",
+            "approval": "underwriting review",
+            "obligation": "coverage requirement",
+            # Queue coverage without the unsafe `queue -> claims queue` superstring.
+            "backlog": "claims queue",
+        },
+        metadata={
+            "industry_id": "insurance",
+            "source": "2.0-D2",
+            "version": "1.0.0",
+            "workflow_areas": [
+                "claims_handling",
+                "underwriting_review",
+                "policy_servicing",
+            ],
+            # D2 AC4: recorded, not implemented. 2.0-D2 T5 turned this note into
+            # a full future-story record — see future_scope_ref below.
+            "future_scope": (
+                "Insurance-specific detectors (claim leakage, subrogation recovery "
+                "delay, reserve adjustment churn, fraud-triage effort) are NOT "
+                "covered by the Service Cloud pack and are deliberately out of "
+                "scope for 2.0-D2. They require a separate future insurance pack "
+                "story on the FSC pattern; D2 ships configuration only. The full "
+                "gap assessment (which patterns the shipped detectors DO cover) and "
+                "the per-gap future-pack record — coverage-determination loops, "
+                "reserve-change approvals, subrogation recovery handoffs, "
+                "underwriting-referral semantics, claims leakage indicators and "
+                "policy-renewal exceptions — live in the T5 record referenced by "
+                "future_scope_ref (future story D2-FS1)."
+            ),
+            # 2.0-D2 T5: the future-story record for the domain-specific detector
+            # gaps. A config-only link — no detector, pack, scorer or ingest is
+            # added by D2; the doc records them as future scope (story D2-FS1).
+            "future_scope_ref": "docs/2.0-D2_INSURANCE_FUTURE_SCOPE.md",
+            "future_story": "D2-FS1",
+            # 2.0-D2 T3: "any inability to represent Insurance priorities using
+            # existing focuses must be reported separately" — this is that report.
+            "focus_limitation": (
+                "No single canonical focus emphasises all five Insurance areas. "
+                "member_customer_service (the default) emphasises 2 of the Service "
+                "Cloud pack's 7 detectors — REPETITIVE_AUTOMATION and KNOWLEDGE_GAP, "
+                "the policyholder-service patterns. Claims handoffs "
+                "(HANDOFF_FRICTION, CROSS_SYSTEM_ECHO, INTEGRATION_CONCENTRATION) "
+                "are emphasised by cross_system_handoffs, and underwriting review "
+                "(APPROVAL_BOTTLENECK, PERMISSION_BOTTLENECK) by "
+                "approvals_compliance. Nothing is suppressed: a detector outside "
+                "the active focus is surfaced but not emphasised, so every pattern "
+                "stays visible and only relative ranking differs. Widening "
+                "member_customer_service's affinity would change ranking for every "
+                "industry that uses it (STRS, FSC, service_operations), so it is "
+                "deliberately not done here. An underwriting-heavy customer should "
+                "select approvals_compliance; a handoff-heavy one "
+                "cross_system_handoffs. A focus that spans an industry's whole "
+                "workflow would need a separate focus-model story."
+            ),
+        },
+    ),
+
     "revenue_operations": TemplateDefinition(
         template_id="revenue_operations",
         label="Revenue operations",

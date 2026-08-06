@@ -436,6 +436,25 @@ def run_trackb_and_persist(
                 if isinstance(payload_packs, list):
                     run["packs"] = payload_packs
 
+        # 2.0-D4 T3 (AC4): the per-run version record — what a support engineer needs
+        # six months later to answer "today's run of apparently the same data
+        # produces different findings; what changed?". Reads the pack stamp above
+        # rather than recomputing it, so there is one source of truth. Never fatal:
+        # a version record exists to explain a run and must not be the reason one
+        # fails.
+        try:
+            from .run_reproducibility import build_reproducibility_record
+
+            run["reproducibility"] = build_reproducibility_record(
+                run,
+                org_id=run.get("orgId") or run.get("org_id"),
+                connector_ids=[str(s) for s in (systems or [])],
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "run %s: reproducibility record unavailable", run_id, exc_info=True
+            )
+
         per_system, succeeded, ingest_errors = _ingest_summary_from_payload(
             payload, systems
         )
@@ -502,6 +521,21 @@ def run_trackb_and_persist(
         db.run_kv_set("opps", run_id, opps)
         db.run_kv_set("evidence", run_id, ev)
         if payload.get("secopsVolume") is not None:
+            # 2.0-B1 T5 (AC5): sweep the SecOps volume artifact like every other
+            # SecOps materialization output. It is designed to be aggregate-only
+            # (counts keyed on vulnerability_class x ci_class x remediation_path,
+            # never hosts), but before T5 this was the ONE SecOps KV write in this
+            # block with no floor sweep — the guarantee rested on a docstring
+            # rather than an enforced boundary. It is also viewer-readable via
+            # GET /api/runs/{id}/secops/volume, so an enumeration reaching it
+            # would be broadly exposed. Swept unconditionally (not gated on
+            # secops_enabled): if this artifact exists at all the run produced
+            # SecOps volume data, whatever the pack list says.
+            _assert_secops_materialized(
+                payload["secopsVolume"],
+                where="Security Operations volume artifact",
+                enabled=True,
+            )
             db.run_kv_set("secops_volume", run_id, payload["secopsVolume"])
 
         # R16-B1 (T4): persist one per-run opportunity_instance per opportunity.
@@ -682,6 +716,8 @@ def run_trackb_and_persist(
             raise
         except Exception as e:
             errors["exec_report"] = str(e)
+            from .outcome_surfaces import build_empty_outcome_report_section
+
             db.run_kv_set(
                 "executive_report",
                 run_id,
@@ -702,6 +738,7 @@ def run_trackb_and_persist(
                     "topQuickWins": [],
                     "snapshotBubbles": [],
                     "roadmapHighlights": [],
+                    "outcomeSection": build_empty_outcome_report_section(run_id),
                 },
             )
 
@@ -817,6 +854,73 @@ def run_trackb_and_persist(
             )
         except Exception as e:
             logger.warning("T7 temporal enrichment failed (non-blocking): %s", e)
+
+        # 2.0-A2 T2: freeze the measurement basis for every finding this run
+        # CREATED. Runs after temporal enrichment so the captured values include
+        # the baseline statistics as they stood at capture, and after identity
+        # stamping so the artifact can be keyed on the stable identity.
+        #
+        # Write-once: a finding that already has a baseline is left exactly as it
+        # was, so a re-run — or a replay of this run — never restates what the
+        # finding was born with. Non-blocking, like every other Stage-2 writer.
+        try:
+            from .opportunity_baseline import (
+                capture_baselines_for_run,
+                ensure_opportunity_baseline_table,
+            )
+
+            ensure_opportunity_baseline_table()
+            _baseline_counts = capture_baselines_for_run(
+                opps, org_id=run_org_id, run_id=run_id
+            )
+            logger.info(
+                "Baseline capture for run %s: %d created, %d already frozen, %d skipped",
+                run_id,
+                _baseline_counts["created"],
+                _baseline_counts["existing"],
+                _baseline_counts["skipped"],
+            )
+        except Exception as e:  # noqa: BLE001
+            errors["opportunity_baseline"] = str(e)
+            logger.warning("Baseline capture failed (non-blocking): %s", e)
+
+        # 2.0-A2 T3: post-action monitoring. For every opportunity a human marked
+        # actioned, re-measure the same signals this baseline froze and store the
+        # comparison. Runs AFTER baseline capture so a finding created by this run
+        # has its basis before anything tries to compare against it.
+        #
+        # No outcome without action: an opportunity that is not actioned, has no
+        # frozen baseline, or has no run after its action date produces NO record
+        # — never a zero-delta one. Non-blocking.
+        try:
+            from .opportunity_movement import measure_movements_for_run
+
+            _movement = measure_movements_for_run(run_org_id, run_id)
+            logger.info(
+                "Movement measurement for run %s: %d measured, %d skipped (%s), %d failed",
+                run_id,
+                _movement["measured"],
+                _movement["skipped"],
+                _movement["skipReasons"] or "no skips",
+                _movement["failed"],
+            )
+        except Exception as e:  # noqa: BLE001
+            errors["opportunity_movement"] = str(e)
+            logger.warning("Movement measurement failed (non-blocking): %s", e)
+
+        # 2.0-A2 T6: store the report outcome section from movement artifacts.
+        try:
+            from .outcome_surfaces import build_executive_outcome_section
+
+            _exec_report = db.run_kv_get("executive_report", run_id, {}) or {}
+            _exec_report["outcomeSection"] = build_executive_outcome_section(
+                run_org_id,
+                run_id,
+            )
+            db.run_kv_set("executive_report", run_id, _exec_report)
+        except Exception as e:  # noqa: BLE001
+            errors["outcome_section"] = str(e)
+            logger.warning("Outcome report section failed (non-blocking): %s", e)
 
         # 2.0-A1 — intervention projection (non-blocking). See the helper
         # docstring: runs after temporal enrichment, stamps provenance, and

@@ -2,9 +2,10 @@
 
 AC1 requires every registry system_default and every connectable catalog tile to
 reference a connector whose ingestion actually ships. The guard below discovers
-implemented ingestors from the codebase, then checks the registry and catalog
-configuration against that implementation set. If a roadmap connector is flipped
-to shipped/connectable before its ingestor lands, CI fails here.
+implemented ingestors from the codebase, derives which catalog ids are backed at
+test time, and asserts that derived set matches SHIPPED_CONNECTOR_IDS. If a
+roadmap connector gains an ingestor without a catalog-state update, or a tile is
+flipped to shipped before its ingestor lands, CI fails here.
 
 2.0-D1 T5 — THE PACK-LEVEL GATE
 -------------------------------
@@ -41,8 +42,13 @@ import pytest
 
 from app import connector_roadmap
 from app import salesforce_product_packs as spp
-from discovery.packs.industry_registry import INDUSTRY_REGISTRY
+from discovery.packs.industry_registry import (
+    INDUSTRY_REGISTRY,
+    IndustryConfig,
+    SystemDefaultConfig,
+)
 from discovery.packs.pack_config import PACK_REGISTRY, list_packs
+from discovery.packs.template_registry import get_template
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 DISCOVERY_INGEST_ROOT = BACKEND_ROOT / "discovery" / "ingest"
@@ -167,6 +173,16 @@ def _catalog_ids() -> set[str]:
     }
 
 
+def _dynamically_backed_catalog_ids(implemented: set[str] | None = None) -> set[str]:
+    """Catalog ids whose implementation is present according to AST discovery."""
+    implemented = _implemented_connector_ids() if implemented is None else implemented
+    return {
+        connector_id
+        for connector_id in _catalog_ids()
+        if not _missing_implementation(connector_id, implemented)
+    }
+
+
 def _format_failures(rows: Iterable[tuple[str, str, str]]) -> str:
     return ", ".join(
         f"{surface}:{owner}:{connector_id}"
@@ -213,6 +229,33 @@ def test_connectable_catalog_tiles_have_shipped_ingestors():
         "Connectable catalog tiles must reference shipped ingestors discovered "
         "from backend/discovery/ingest/ and backend/connectors/db/. Missing: "
         f"{missing_ingestors}"
+    )
+
+
+def test_shipped_connector_ids_match_dynamic_ingestor_discovery():
+    implemented = _implemented_connector_ids()
+    dynamically_backed_catalog_ids = _dynamically_backed_catalog_ids(implemented)
+    shipped_catalog_ids = set(connector_roadmap.SHIPPED_CONNECTOR_IDS)
+
+    assert dynamically_backed_catalog_ids == shipped_catalog_ids, (
+        "R191-R1 AC1 requires SHIPPED_CONNECTOR_IDS to match the catalog ids "
+        "backed by ingestors discovered from backend/discovery/ingest/ and "
+        "backend/connectors/db/. Difference: "
+        f"{sorted(dynamically_backed_catalog_ids ^ shipped_catalog_ids)}; "
+        f"raw discovered ingestor ids: {sorted(implemented)}"
+    )
+
+
+def test_dynamic_cross_check_detects_unclassified_new_roadmap_ingestor():
+    implemented = _implemented_connector_ids() | {"sap"}
+    newly_backed = (
+        _dynamically_backed_catalog_ids(implemented)
+        - set(connector_roadmap.SHIPPED_CONNECTOR_IDS)
+    )
+
+    assert "sap" in newly_backed, (
+        "The AC1 guard must go red if a roadmap ingestor appears before the "
+        "catalog allow-list/roadmap targets are updated."
     )
 
 
@@ -350,3 +393,169 @@ def test_unimplemented_catalog_tiles_stay_roadmap_not_connectable():
         "A catalog tile without a shipped ingestor must stay roadmap/non-connectable "
         f"until its implementation lands: {unimplemented_tiles_marked_shipped}"
     )
+
+
+# ── 2.0-D2 T4 — Insurance template + industry are inside the cross-check ────────
+#
+# The connector-level check above already iterates every INDUSTRY_REGISTRY entry,
+# so the Insurance industry is covered the moment it is added. What the guard did
+# NOT cover before D2 is the Stack Builder TEMPLATE registry — a template can
+# anchor on a system just as a run can. D2 T1 proved this for the Insurance
+# template from its own test file; T4 folds the same discovery into THIS module
+# so the CI gate itself — not a satellite test — asserts the Insurance
+# configuration (template AND industry entry) resolves entirely to shipped
+# ingestors, and proves the gate rejects an unimplemented insurance platform.
+
+INSURANCE_TEMPLATE_ID = "insurance"
+INSURANCE_INDUSTRY_ID = "insurance"
+
+# Real insurance platforms with NO shipped ingestor — the ones the story names as
+# things AgentIQ must not silently advertise as supported. Used by the negative
+# control to prove the gate actively rejects, not merely that it passes today.
+UNIMPLEMENTED_INSURANCE_PLATFORMS = (
+    "guidewire",
+    "duck_creek",
+    "duckcreek",
+    "sapiens",
+    "insurity",
+    "majesco",
+)
+
+
+def _insurance_industry_system_ids() -> list[str]:
+    config = INDUSTRY_REGISTRY[INSURANCE_INDUSTRY_ID]
+    return [*config.system_defaults.keys(), *config.recommended_systems]
+
+
+def test_insurance_template_suggested_systems_have_shipped_ingestors():
+    """Every system the Insurance TEMPLATE pre-selects resolves to a shipped
+    ingestor (the coverage D2 folds into the R191-R1 gate itself)."""
+    template = get_template(INSURANCE_TEMPLATE_ID)
+    assert template is not None, "the Insurance template is not registered"
+    implemented = _implemented_connector_ids()
+    missing = [
+        system_id
+        for system_id in template.suggested_systems
+        if _missing_implementation(system_id, implemented)
+    ]
+    assert missing == [], (
+        "The Insurance template anchors on connectors with no shipped ingestion "
+        f"discovered from backend/discovery/ingest/ and backend/connectors/db/: {missing}"
+    )
+
+
+def test_insurance_industry_defaults_and_recommendations_have_shipped_ingestors():
+    """Every default and recommended system on the Insurance INDUSTRY entry
+    resolves to a shipped ingestor (explicit, story-named coverage on top of the
+    registry-wide check above)."""
+    assert INSURANCE_INDUSTRY_ID in INDUSTRY_REGISTRY, (
+        "the Insurance industry is not registered"
+    )
+    implemented = _implemented_connector_ids()
+    missing = [
+        system_id
+        for system_id in _insurance_industry_system_ids()
+        if _missing_implementation(system_id, implemented)
+    ]
+    assert missing == [], (
+        "The Insurance industry anchors defaults/recommendations on connectors "
+        f"with no shipped ingestion: {missing}"
+    )
+
+
+def test_insurance_configuration_advertises_no_unsupported_platform():
+    """No Guidewire/Duck Creek/SAP/D365/Zendesk-style insurance platform is
+    presented as connectable by the template or the industry entry. An
+    unsupported platform may exist ONLY as a non-connectable roadmap label."""
+    template = get_template(INSURANCE_TEMPLATE_ID)
+    config = INDUSTRY_REGISTRY[INSURANCE_INDUSTRY_ID]
+    connectable = (
+        set(template.suggested_systems)
+        | set(config.system_defaults)
+        | set(config.recommended_systems)
+    )
+    offenders = sorted(
+        system_id
+        for system_id in connectable
+        if connector_roadmap.is_roadmap(system_id)
+    )
+    assert offenders == [], (
+        "The Insurance configuration presents roadmap-labelled systems as "
+        f"connectable: {offenders}"
+    )
+
+
+def test_insurance_template_and_industry_agree_on_pack_and_workflow_shape():
+    """The template and the industry entry must not disagree about the primary
+    pack or the workflow shape — otherwise a user selecting the template gets a
+    different setup than one selecting the industry."""
+    template = get_template(INSURANCE_TEMPLATE_ID)
+    config = INDUSTRY_REGISTRY[INSURANCE_INDUSTRY_ID]
+
+    # Primary pack: the template's pack is the industry's first (primary) hint.
+    assert config.pack_hints[0] == template.pack_id == "service_cloud"
+
+    # Workflow shape: every system the industry classes must carry the SAME role
+    # the template gives it (the industry is a superset-free mirror of the
+    # template's system set).
+    assert set(config.system_defaults) == set(template.suggested_systems), (
+        "industry system set diverged from the template's suggested systems"
+    )
+    for system_id, defaults in config.system_defaults.items():
+        assert defaults.role == template.suggested_roles[system_id], (
+            f"role disagreement for {system_id}: industry={defaults.role} "
+            f"template={template.suggested_roles[system_id]}"
+        )
+
+
+def test_gate_rejects_an_unimplemented_insurance_platform():
+    """THE NEGATIVE CONTROL (D2 T4).
+
+    A gate never observed failing is not known to be a gate. This injects a probe
+    industry that anchors on an unimplemented insurance platform (Guidewire) and
+    runs the REAL registry-level cross-check, which must go red. Uses a probe id
+    so the real Insurance entry is never mutated, and restores the registry in a
+    finally so a failure here cannot leak into another test.
+    """
+    probe_id = "_insurance_negative_probe"
+    INDUSTRY_REGISTRY[probe_id] = IndustryConfig(
+        industry_id=probe_id,
+        label="Insurance negative probe",
+        pack_hints=["service_cloud"],
+        system_defaults={
+            "salesforce_sc": SystemDefaultConfig(
+                "system_of_record", "primary", ["service_casework"]
+            ),
+            # No shipped ingestor — this is exactly what the gate must catch.
+            "guidewire": SystemDefaultConfig(
+                "system_of_record", "primary", ["intake_requests"]
+            ),
+        },
+        recommended_systems=[],
+        llm_context_suffix="",
+    )
+    try:
+        with pytest.raises(AssertionError) as excinfo:
+            test_registry_connectable_entries_have_shipped_ingestors()
+        assert "guidewire" in str(excinfo.value), (
+            "the gate went red but not because of the unimplemented platform"
+        )
+    finally:
+        INDUSTRY_REGISTRY.pop(probe_id, None)
+
+    # And the pure helper agrees for every named unsupported platform, so the
+    # control is not a Guidewire-only accident.
+    implemented = _implemented_connector_ids()
+    for platform in UNIMPLEMENTED_INSURANCE_PLATFORMS:
+        assert _missing_implementation(platform, implemented), (
+            f"{platform} unexpectedly resolved to a shipped ingestor"
+        )
+
+
+def test_removing_the_probe_left_the_real_registry_green():
+    """Belt-and-braces: after the negative control, the real cross-check passes,
+    proving the probe was fully cleaned up and the real Insurance entry is honest."""
+    assert "_insurance_negative_probe" not in INDUSTRY_REGISTRY
+    test_registry_connectable_entries_have_shipped_ingestors()
+    test_insurance_template_suggested_systems_have_shipped_ingestors()
+    test_insurance_industry_defaults_and_recommendations_have_shipped_ingestors()

@@ -14,6 +14,7 @@
  * jsPDF is imported dynamically so it stays code-split out of the main bundle.
  */
 import type { OpportunityCandidate } from '../types/analystReview';
+import type { OutcomeReportSection } from '../types/outcome';
 import { buildMatrixSvg, LIGHT_MATRIX_PALETTE } from './matrixLayout';
 import { LEADERSHIP_ACTIONS } from '../components/executive_report/KeyInsights';
 import {
@@ -21,6 +22,7 @@ import {
   projectionBasisSummary,
 } from '../components/projection/ProjectionBasis';
 import { recommendationHeadline } from '../components/projection/ProjectionRecommendation';
+import { showRelease2ArcAUi } from '../config/releaseFlags';
 
 export interface ExecutiveReportPdfData {
   confidence: string;
@@ -39,6 +41,7 @@ export interface ExecutiveReportPdfData {
   userName?: string | null;
   generatedAt: string;
   runId?: string | null;
+  outcomeSection?: OutcomeReportSection | null;
 }
 
 export interface PdfExportOptions {
@@ -152,6 +155,16 @@ function wrapKpiValue(pdf: import('jspdf').jsPDF, value: string, maxW: number): 
   });
   if (cur) lines.push(cur);
   return lines;
+}
+
+function formatOutcomePdfNumber(value: number | null | undefined, unit?: string | null): string {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
+    return 'Unavailable';
+  }
+  const formatted = new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: unit === 'percent' ? 1 : 2,
+  }).format(Number(value));
+  return unit === 'percent' ? `${formatted}%` : formatted;
 }
 
 /** Rasterize the bundled AgentIQ logo SVG to a PNG data URL for embedding.
@@ -372,20 +385,68 @@ export async function downloadExecutiveReportPdf(
   pdf.roundedRect(MX, boxTop, CW, boxBottom - boxTop, 2.5, 2.5, 'S');
   y = boxBottom + 9;
 
+  // -- Outcome Movement ----------------------------------------------------
+  if (data.outcomeSection) {
+    heading('Outcome Movement', 'Stored movement records');
+    wrapped(data.outcomeSection.summary, 9.5, 'normal', BODY);
+    y += 2;
+
+    const aggregates = data.outcomeSection.aggregates;
+    [
+      `Actioned opportunities: ${aggregates.actionedOpportunityCount}.`,
+      `Measured opportunities: ${aggregates.measuredOpportunityCount}.`,
+      `Stored movement measurements: ${aggregates.measurementCount}.`,
+      `Measurements carrying caveats: ${aggregates.caveatedMeasurementCount}.`,
+    ].forEach((line) => wrapped(line, 9.5, 'normal', BODY));
+
+    const runIds = Array.from(
+      new Set(
+        (data.outcomeSection.numberRefs ?? [])
+          .flatMap((ref) => ref.evidence?.runIds ?? [])
+          .filter(Boolean),
+      ),
+    ).slice(0, 8);
+    if (runIds.length > 0) {
+      wrapped(`Run ids in aggregate evidence: ${runIds.join(', ')}.`, 8.5, 'normal', MUTED);
+    }
+
+    data.outcomeSection.highlights.slice(0, 3).forEach((measurement) => {
+      const primary = measurement.primaryMovement;
+      const pct =
+        primary?.deltaPct !== null && primary?.deltaPct !== undefined
+          ? `${formatOutcomePdfNumber(primary.deltaPct, 'percent')} against baseline`
+          : 'against baseline';
+      wrapped(
+        [
+          primary?.signalName ?? 'primary signal',
+          `movement ${formatOutcomePdfNumber(primary?.delta)}`,
+          pct,
+          `runs ${measurement.baselineRunId ?? 'n/a'} -> ${measurement.currentRunId ?? 'n/a'}`,
+          `projection ${measurement.projectionValidation?.verdict ?? 'unknown'}`,
+          `caveats ${measurement.confounderSummary?.count ?? 0}`,
+        ].join(' - ') + '.',
+        8.5,
+        'normal',
+        MUTED,
+      );
+    });
+    y += 5;
+  }
+
   // ── Top Quick Wins (no numbering) ────────────────────────────────────────────
   heading('Top Quick Wins');
   if (data.quickWins.length === 0) {
     wrapped('No quick wins identified for this discovery run.', 9.5, 'normal', MUTED);
   } else {
     data.quickWins.forEach((o) => {
-      const basisSummary = projectionBasisSummary(o.projection);
-      const thinEvidenceText = isThinProjectionEvidence(o.projection)
+      const basisSummary = showRelease2ArcAUi ? projectionBasisSummary(o.projection) : null;
+      const thinEvidenceText = showRelease2ArcAUi && isThinProjectionEvidence(o.projection)
         ? 'Thin evidence - projection band is wider because evidence is limited.'
         : null;
       // 2.0-A1 T5: the export carries the same intervention-language statement
       // the screens show. AC3 covers exports explicitly, and a PDF is the
       // artefact most likely to be quoted in a board paper.
-      const recommendation = recommendationHeadline(o.projection);
+      const recommendation = showRelease2ArcAUi ? recommendationHeadline(o.projection) : null;
       const recommendationLines = recommendation
         ? (pdf.splitTextToSize(sanitize(recommendation), CW - 10) as string[])
         : [];

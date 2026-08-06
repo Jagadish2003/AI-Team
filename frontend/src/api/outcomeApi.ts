@@ -1,0 +1,42 @@
+import { apiGet } from '../lib/apiClient';
+import type {
+  OpportunityOutcomeView,
+  OutcomePortfolioView,
+} from '../types/outcome';
+
+export interface OutcomePortfolioParams {
+  comparabilityVerdict?: string[];
+  projectionVerdict?: string[];
+  pack?: string[];
+  detector?: string[];
+  confidence?: string[];
+  limit?: number;
+}
+
+function appendList(params: URLSearchParams, key: string, values?: string[]) {
+  (values ?? []).forEach((value) => {
+    if (value) params.append(key, value);
+  });
+}
+
+export function fetchOutcomePortfolio(
+  filters: OutcomePortfolioParams = {},
+): Promise<OutcomePortfolioView> {
+  const params = new URLSearchParams();
+  appendList(params, 'comparabilityVerdict', filters.comparabilityVerdict);
+  appendList(params, 'projectionVerdict', filters.projectionVerdict);
+  appendList(params, 'pack', filters.pack);
+  appendList(params, 'detector', filters.detector);
+  appendList(params, 'confidence', filters.confidence);
+  if (filters.limit) params.set('limit', String(filters.limit));
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return apiGet<OutcomePortfolioView>(`/api/outcomes${suffix}`);
+}
+
+export function fetchOpportunityOutcome(
+  opportunityIdentity: string,
+): Promise<OpportunityOutcomeView> {
+  return apiGet<OpportunityOutcomeView>(
+    `/api/outcomes/${encodeURIComponent(opportunityIdentity)}`,
+  );
+}
