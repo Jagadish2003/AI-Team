@@ -18,7 +18,11 @@ function movementLabel(ranking: OpportunityRanking): string {
 function hasReason(ranking: OpportunityRanking | null | undefined): ranking is OpportunityRanking & {
   reason: AdjustmentReason;
 } {
-  return Boolean(ranking?.adjusted && ranking?.moved && ranking.reason?.summary);
+  return Boolean(
+    ranking?.adjusted &&
+      ranking.moved !== undefined &&
+      ranking.reason?.summary,
+  );
 }
 
 function referenceLabel(ref: ContributingDecisionRef | ContributingOutcomeRef): string {
@@ -102,8 +106,8 @@ export function RankingAdjustmentPanel({
 
   const reason = ranking.reason;
   const references = [
-    ...reason.contributingDecisions,
-    ...reason.contributingOutcomes,
+    ...(reason.contributingDecisions ?? []),
+    ...(reason.contributingOutcomes ?? []),
   ];
   const capLabel = reason.wasCapped
     ? `Cap applied: ${reason.cappedBy ? reason.cappedBy.replace(/_/g, " ") : "configured cap"}`

@@ -1,6 +1,14 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.23
+Version: v1.24
 Date: 2026-08-06
+
+> v1.24 - PR-fix pass (capped zero-displacement ranking adjustments).
+> `_ranking.adjusted` means the learned ranking layer applied to that finding,
+> even when `moved` is `0` because a configured cap kept the final position in
+> place. Such capped records may carry `reason`, and
+> `GET /api/learning/adjustment/explain/{runId}/{opportunityId}` explains them
+> instead of treating them as unadjusted. A finding with no learned adjustment
+> still carries no `reason`. Additive; existing `moved` semantics are unchanged.
 
 > v1.23 — PR-fix pass (run-health checkpoint streams + adjustment rank scope).
 > Two additive fields that shipped in code without a contract entry, recorded

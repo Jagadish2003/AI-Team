@@ -89,6 +89,8 @@ const mockRefetch = vi.fn();
 const mockNavigate = vi.fn();
 const mockPush = vi.hoisted(() => vi.fn());
 const mockFetchLearningSignals = vi.hoisted(() => vi.fn());
+const mockFetchOpportunityOutcome = vi.hoisted(() => vi.fn());
+const mockFetchOutcomePortfolio = vi.hoisted(() => vi.fn());
 
 function learningSignals(active = true) {
   return {
@@ -170,6 +172,12 @@ vi.mock('../api/learningApi', () => ({
   fetchLearningSignals: () => mockFetchLearningSignals(),
 }));
 
+vi.mock('../api/outcomeApi', () => ({
+  fetchOpportunityOutcome: (opportunityIdentity: string) =>
+    mockFetchOpportunityOutcome(opportunityIdentity),
+  fetchOutcomePortfolio: (...args: unknown[]) => mockFetchOutcomePortfolio(...args),
+}));
+
 vi.mock('../components/common/TopNav', () => ({
   default: () => <nav data-testid="top-nav" />,
 }));
@@ -231,6 +239,22 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     mockSelectedId = OPP_1.id;
     mockSalesforceConnected = false;
     mockFetchLearningSignals.mockResolvedValue(learningSignals(true));
+    mockFetchOpportunityOutcome.mockResolvedValue({
+      schemaVersion: '1.0.0',
+      opportunityIdentity: 'opp_identity',
+      lifecycle: null,
+      measurements: [],
+      latestMeasurement: null,
+      caveatedMeasurementCount: 0,
+      emptyState: { reason: 'no_measurements', message: 'No stored movement measurement exists yet.' },
+    });
+    mockFetchOutcomePortfolio.mockResolvedValue({
+      schemaVersion: '1.0.0',
+      generatedAt: '2026-08-06T00:00:00Z',
+      filters: {},
+      aggregates: { numberRefs: [], actionedOpportunityCount: 0, measuredOpportunityCount: 0, measurementCount: 0, caveatedMeasurementCount: 0 },
+      items: [],
+    });
   });
 
   // ── Route and redirect tests ────────────────────────────────────────────────
@@ -390,6 +414,49 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
       'href',
       '/api/opportunity-movement/opp_identity_002',
     );
+  });
+
+  it('A3 PR fix: ranked opportunities sort ahead of unranked fallback scoring', () => {
+    mockOpportunities = [
+      {
+        ...OPP_1,
+        title: 'High impact unranked fallback',
+        impact: 10,
+        effort: 1,
+      },
+      {
+        ...OPP_2,
+        title: 'Learned rank one',
+        impact: 1,
+        effort: 1,
+        _ranking: {
+          schemaVersion: '1.0.0',
+          baseRank: 4,
+          baseImpact: 1,
+          adjustedRank: 1,
+          moved: -3,
+          adjusted: true,
+          caps: { maxScoreFraction: 0.15, maxRankMove: 3 },
+        },
+      },
+    ];
+
+    renderPage();
+
+    const list = screen.getByText('Opportunity List').closest('.flex.h-full') as HTMLElement;
+    expect(list).toBeTruthy();
+    const listText = list.textContent ?? '';
+    expect(listText.indexOf('Learned rank one')).toBeLessThan(
+      listText.indexOf('High impact unranked fallback'),
+    );
+  });
+
+  it('A2 PR fix: does not fetch an outcome with a run-scoped legacy opportunity id', () => {
+    renderPage();
+
+    expect(mockFetchOpportunityOutcome).not.toHaveBeenCalled();
+    expect(mockFetchOutcomePortfolio).not.toHaveBeenCalled();
+    expect(screen.queryByText('Opportunity Outcome')).toBeNull();
   });
 
   it('AC6: Approve button calls setDecision with APPROVED', async () => {

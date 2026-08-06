@@ -154,6 +154,20 @@ class TestTheReasonIsStructuredData:
         assert build_reason(adjustment(0, [decision_ref(1)])) is None
         assert describe_adjustment(adjustment(0)) is None
 
+    def test_a_capped_finding_that_stayed_in_place_still_has_a_reason(self):
+        reason = build_reason(adjustment(0, [decision_ref(1)], capped="rank_move"))
+        assert reason is not None
+        assert reason.ranks_moved == 0
+        assert reason.was_capped
+        assert reason.direction == DIRECTION_UP
+
+    def test_zero_displacement_cap_copy_does_not_claim_zero_places(self):
+        sentence = render_reason(
+            build_reason(adjustment(0, [decision_ref(1)], capped="rank_move"))
+        )
+        assert "kept this finding in place" in sentence
+        assert "zero places" not in sentence
+
     def test_the_payload_is_json_serialisable(self):
         import json
 

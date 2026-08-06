@@ -498,7 +498,7 @@ def _annotate(
         "rankScope": rank_scope,
         "baseRank": base_rank,
         "baseImpact": round(_base_impact_of(opp), 4),
-        "adjusted": record is not None and record.moved != 0,
+        "adjusted": record is not None,
         "caps": {
             "maxScoreFraction": policy.max_score_fraction,
             "maxRankMove": policy.max_rank_move,

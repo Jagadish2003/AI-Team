@@ -93,14 +93,15 @@ export default function OpportunityReviewPage() {
           (a, b) => {
             const aAdjustedRank = a._ranking?.adjustedRank;
             const bAdjustedRank = b._ranking?.adjustedRank;
-            if (
-              typeof aAdjustedRank === "number" &&
-              Number.isFinite(aAdjustedRank) &&
-              typeof bAdjustedRank === "number" &&
-              Number.isFinite(bAdjustedRank)
-            ) {
+            const aHasAdjustedRank =
+              typeof aAdjustedRank === "number" && Number.isFinite(aAdjustedRank);
+            const bHasAdjustedRank =
+              typeof bAdjustedRank === "number" && Number.isFinite(bAdjustedRank);
+            if (aHasAdjustedRank && bHasAdjustedRank) {
               return aAdjustedRank - bAdjustedRank;
             }
+            if (aHasAdjustedRank) return -1;
+            if (bHasAdjustedRank) return 1;
             return b.impact - b.effort - (a.impact - a.effort) || b.impact - a.impact;
           },
         ),
@@ -137,8 +138,11 @@ export default function OpportunityReviewPage() {
     () => filtered.find((o) => o.id === selectedId) || null,
     [filtered, selectedId],
   );
-  const selectedOutcomeIdentity =
-    selected?.opportunity_identity ?? selected?.identifier ?? selected?.id ?? null;
+  const selectedOutcomeIdentity = selected?.opportunity_identity ?? null;
+  const hasOutcomeIdentities = useMemo(
+    () => opportunities.some((o) => Boolean(o.opportunity_identity)),
+    [opportunities],
+  );
 
   const handleSaveOverride = useCallback(
     async (
@@ -370,7 +374,7 @@ export default function OpportunityReviewPage() {
           <OpportunityOutcomePanel opportunityIdentity={selectedOutcomeIdentity} />
         )}
 
-        {showRelease2ArcAUi && (
+        {showRelease2ArcAUi && hasOutcomeIdentities && (
         <div className="mt-4">
           <OutcomePortfolioPanel />
         </div>

@@ -234,7 +234,7 @@ def explain_adjustment(
     )
 
     record = result.by_opportunity_id().get(opportunity_id)
-    if record is None or not record.moved:
+    if record is None or (not record.moved and not record.was_capped):
         raise HTTPException(404, "no ranking adjustment for this opportunity")
 
     return {
