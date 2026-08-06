@@ -11,7 +11,7 @@
 -- runbook_match_decision_history / runbook_match_feedback, and the R-1.9.1-L3
 -- vendor-side license_registry + append-only issuance_audit),
 -- indexes/constraints/rules, seeds the connector catalog, grants the app login
--- role(s) privileges on the schema, and stamps alembic_version to head 0037.
+-- role(s) privileges on the schema, and stamps alembic_version to head 0041.
 --
 -- BEFORE RUNNING ON PRODUCTION — two values in this file are dev defaults and
 -- MUST be set for the target environment. Both are marked "TODO(deploy)" below:
@@ -1590,6 +1590,163 @@ CREATE INDEX IF NOT EXISTS idx_runbook_match_feedback_org_created
 
 
 --
+-- 2.0-B2 T3 — proposed cross-source entity matches + append-only decision
+-- history (migration 0032).
+--
+-- SOURCE OF TRUTH: database/models/entity_match_proposals.py
+-- (ALL_ENTITY_MATCH_PROPOSAL_DDL), applied by migration 0032. Copied VERBATIM
+-- below — keep identical when the model changes.
+--
+-- These two tables have NO runtime ensure_* helper: app/entity_match_proposals.py
+-- only reads and writes them. Provisioning is therefore the only thing that can
+-- create them, and without them the Entity Match review API fails with
+-- 'relation "entity_match_proposals" does not exist'.
+--
+
+CREATE TABLE IF NOT EXISTS entity_match_proposals (
+    org_id              VARCHAR(64)  NOT NULL,
+    proposal_id         VARCHAR(64)  NOT NULL,
+    entity_type         VARCHAR(32)  NOT NULL,
+    -- The pair, stored in sorted order so (A,B) and (B,A) are ONE row.
+    left_entity_id      VARCHAR(36)  NOT NULL,
+    right_entity_id     VARCHAR(36)  NOT NULL,
+    -- Which resolution tier proposed it (always a propose-only tier — an
+    -- auto-merge tier never reaches this table).
+    tier                VARCHAR(32)  NOT NULL,
+    confidence          FLOAT        NOT NULL,
+    status              VARCHAR(16)  NOT NULL,
+    -- 2.0-B2 T4: the pair's STABLE source identity, independent of the entity ROW
+    -- ids above. Those ids churn (a source that starts supplying record ids makes
+    -- upsert_source_entity insert a NEW resolved row), and a decision keyed on row
+    -- ids alone would then miss its own pair and re-propose it. NULL on rows
+    -- written before T4; backfilled from evidence_payload on the next scan.
+    identity_key        VARCHAR(64),
+    -- The full proposal snapshot the reviewer sees: both entities' display names
+    -- and source identities, the reason, and the corroborating relationships.
+    evidence_payload    TEXT         NOT NULL,
+    revision            INTEGER      NOT NULL DEFAULT 0,
+    decided_by          VARCHAR(128),
+    decided_at          TIMESTAMPTZ,
+    note                TEXT,
+    first_proposed_at   TIMESTAMPTZ  NOT NULL,
+    last_proposed_at    TIMESTAMPTZ  NOT NULL,
+    created_at          TIMESTAMPTZ  NOT NULL,
+    updated_at          TIMESTAMPTZ  NOT NULL,
+    PRIMARY KEY (org_id, proposal_id)
+);
+
+CREATE TABLE IF NOT EXISTS entity_match_proposal_history (
+    id                  VARCHAR(64)  PRIMARY KEY,
+    org_id              VARCHAR(64)  NOT NULL,
+    proposal_id         VARCHAR(64)  NOT NULL,
+    revision            INTEGER      NOT NULL,
+    action              VARCHAR(16)  NOT NULL,
+    previous_status     VARCHAR(16)  NOT NULL,
+    resulting_status    VARCHAR(16)  NOT NULL,
+    actor_id            VARCHAR(128) NOT NULL,
+    note                TEXT,
+    decided_at          TIMESTAMPTZ  NOT NULL,
+    UNIQUE (org_id, proposal_id, revision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_match_proposals_org_status
+    ON entity_match_proposals (org_id, status, last_proposed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_entity_match_proposal_history_org_proposal
+    ON entity_match_proposal_history (org_id, proposal_id, revision DESC);
+
+CREATE INDEX IF NOT EXISTS idx_entity_match_proposals_org_identity
+    ON entity_match_proposals (org_id, identity_key, status);
+
+
+--
+-- 2.0-B2 T5 — unmerge suppression + the dependent-finding re-evaluation work
+-- list (migration 0034).
+--
+-- SOURCE OF TRUTH: database/models/entity_unmerges.py (ALL_ENTITY_UNMERGE_DDL),
+-- applied by migration 0034. Copied VERBATIM below — keep identical when the
+-- model changes.
+--
+-- entity_unmerges is why a reversal survives: the merge appliers are idempotent
+-- and re-run continuously, so without a recorded block the next pass re-merges a
+-- pair somebody just unmerged. finding_reevaluation_flags is the other half of
+-- AC4 — keyed on the STABLE opportunity_identity so a flag raised now is still
+-- findable by the run that re-evaluates it later.
+--
+
+CREATE TABLE IF NOT EXISTS entity_unmerges (
+    org_id                VARCHAR(64)  NOT NULL,
+    -- One of the two keys naming the pair this block covers: the exact entity-row
+    -- pair, and the churn-resistant source-identity pair. Either one matching
+    -- blocks the merge, because the two fail in opposite directions.
+    pair_key              VARCHAR(80)  NOT NULL,
+    -- Groups the rows written by ONE unmerge, so the log reads as one action.
+    unmerge_id            VARCHAR(64)  NOT NULL,
+    pair_key_kind         VARCHAR(16)  NOT NULL,
+    status                VARCHAR(16)  NOT NULL,
+    -- The entity the constituent was detached FROM, and the constituent itself.
+    survivor_entity_id    VARCHAR(36)  NOT NULL,
+    detached_entity_id    VARCHAR(36)  NOT NULL,
+    entity_type           VARCHAR(32)  NOT NULL,
+    -- The rule whose merge was reversed, so the log answers "what kind of
+    -- decision was undone?".
+    previous_rule         VARCHAR(32),
+    -- Every entity id the unmerge handed back, including the detached entity's own
+    -- sub-constituents when a chain of merges was split.
+    restored_entity_ids   TEXT         NOT NULL,
+    -- What the unmerge did about dependent findings, kept with the action itself.
+    flagged_finding_count INTEGER      NOT NULL DEFAULT 0,
+    unlinked_finding_count INTEGER     NOT NULL DEFAULT 0,
+    reason                TEXT,
+    actor_id              VARCHAR(128) NOT NULL,
+    created_at            TIMESTAMPTZ  NOT NULL,
+    released_by           VARCHAR(128),
+    released_at           TIMESTAMPTZ,
+    release_reason        TEXT,
+    PRIMARY KEY (org_id, pair_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_unmerges_org_status
+    ON entity_unmerges (org_id, status, pair_key);
+
+CREATE INDEX IF NOT EXISTS idx_entity_unmerges_org_created
+    ON entity_unmerges (org_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_entity_unmerges_org_unmerge
+    ON entity_unmerges (org_id, unmerge_id);
+
+CREATE TABLE IF NOT EXISTS finding_reevaluation_flags (
+    org_id                VARCHAR(64)  NOT NULL,
+    -- The STABLE cross-run identity of the finding, not a run-scoped opp id: the
+    -- flag has to outlive the run that was current when it was raised.
+    opportunity_identity  VARCHAR(64)  NOT NULL,
+    status                VARCHAR(16)  NOT NULL,
+    -- Why re-evaluation is needed, and what triggered it. 'entity_unmerge' is the
+    -- only producer today; the column exists because it will not be the last.
+    reason                VARCHAR(64)  NOT NULL,
+    trigger_kind          VARCHAR(32)  NOT NULL,
+    trigger_ref           VARCHAR(64),
+    -- The entity ids whose identity changed under this finding, so a reviewer can
+    -- see WHAT changed rather than only that something did.
+    entity_ids            TEXT         NOT NULL,
+    -- The run the finding was last observed in when it was flagged: the "before"
+    -- side of any comparison a re-evaluation makes.
+    flagged_run_id        VARCHAR(64),
+    flagged_by            VARCHAR(128) NOT NULL,
+    flagged_at            TIMESTAMPTZ  NOT NULL,
+    updated_at            TIMESTAMPTZ  NOT NULL,
+    -- Set by the run that re-observed the finding. Recording the run id is what
+    -- turns "will be re-evaluated" into "was re-evaluated, by this run".
+    cleared_run_id        VARCHAR(64),
+    cleared_at            TIMESTAMPTZ,
+    PRIMARY KEY (org_id, opportunity_identity)
+);
+
+CREATE INDEX IF NOT EXISTS idx_finding_reeval_flags_org_status
+    ON finding_reevaluation_flags (org_id, status, flagged_at DESC);
+
+
+--
 -- PostgreSQL database dump complete
 --
 
@@ -1719,7 +1876,7 @@ CREATE INDEX "idx_ranking_adjustment_history_group" ON "public"."ranking_adjustm
 --
 REVOKE UPDATE, DELETE, TRUNCATE ON "public"."audit_log" FROM PUBLIC;
 
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0038') ON CONFLICT DO NOTHING;
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0041') ON CONFLICT DO NOTHING;
 
 
 --

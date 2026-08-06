@@ -81,6 +81,9 @@ from .routes_license import register_license_routes
 from .routes_usage_report import register_usage_report_routes
 from .routes_usage_summary import register_usage_summary_routes
 from .routes_ingestion import register_ingestion_routes
+from .routes_entity_match_proposals import register_entity_match_proposal_routes
+from .routes_entity_merges import register_entity_merge_routes
+from .routes_entity_unmerges import register_entity_unmerge_routes
 from .routes_runbook_matches import register_runbook_match_routes
 from .routes_secops_evidence import register_secops_evidence_routes
 from .routes_opportunity_lifecycle import register_opportunity_lifecycle_routes
@@ -394,6 +397,15 @@ register_secops_evidence_routes(app)
 # 2.0-A2 T1: analyst-driven opportunity lifecycle (open -> actioned -> monitoring
 # -> measured, plus dismissed/stalled), keyed on the stable opportunity_identity.
 register_opportunity_lifecycle_routes(app)
+# 2.0-B2 T3: Owner/Analyst review surface for PROPOSED cross-source entity
+# matches — the tier the resolution engine refuses to merge on its own.
+register_entity_match_proposal_routes(app)
+# 2.0-B2 T2: merged-entity provenance — every constituent source identity and
+# the rule that merged it, plus the seam that applies what T1/T3 authorised.
+register_entity_merge_routes(app)
+# 2.0-B2 T5: reversing a resolution — restore the constituents, stop the next run
+# re-merging them, and flag every dependent finding for re-evaluation.
+register_entity_unmerge_routes(app)
 # 2.0-A2 T2: read-only retrieval of the immutable baseline artifact frozen at
 # finding creation. No write verb — the pipeline is the only writer.
 register_opportunity_baseline_routes(app)

@@ -583,6 +583,36 @@ def run_trackb_and_persist(
                 "Opportunity lifecycle tracking failed (non-blocking): %s", e
             )
 
+        # 2.0-B2 T5 (AC4): this is the "re-evaluation on the next run" half. A
+        # finding flagged when an entity was unmerged is cleared HERE — by the run
+        # that actually re-observed and re-scored it — and that run's id is written
+        # onto the flag. Placed after identity stamping because the flag is keyed on
+        # opportunity_identity, and after scoring because the finding this run just
+        # produced IS the re-evaluation; nothing further has to happen for the flag
+        # to be honestly closed. A finding that stops appearing keeps its flag
+        # rather than being quietly considered handled. Non-blocking.
+        try:
+            from .finding_reevaluation import clear_flags_for_run
+
+            cleared = clear_flags_for_run(
+                run_org_id,
+                run_id,
+                [
+                    o.get("opportunity_identity")
+                    for o in opps
+                    if isinstance(o, dict)
+                ],
+            )
+            if cleared:
+                logger.info(
+                    "Run %s re-evaluated %d flagged finding(s)", run_id, len(cleared)
+                )
+        except Exception as e:  # noqa: BLE001
+            errors["finding_reevaluation"] = str(e)
+            logger.warning(
+                "Re-evaluation flag clearing failed (non-blocking): %s", e
+            )
+
         # R16-B1 (T6): persist the queryable evidence-pointer trail so a finding
         # can later be walked back to the source artifacts that produced it
         # (source_system + source_artifact + source_timestamp). Additive and

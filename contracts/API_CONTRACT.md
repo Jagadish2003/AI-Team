@@ -1,7 +1,69 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.19
-Date: 2026-07-31
+Version: v1.22
+Date: 2026-08-03
 
+> v1.22 — 2.0-B2 T5 (Cross-Source Entity Enrichment — unmerge & re-evaluation):
+> added authenticated Analyst+ endpoints that REVERSE a resolution:
+> `POST /api/entities/{entityId}/unmerge` (detach one constituent),
+> `POST /api/entities/{entityId}/unmerge-all` (split completely),
+> `GET /api/entity-unmerges[?status=&limit=]` (the org's unmerge log),
+> `POST /api/entity-unmerges/{unmergeId}/release` (**Owner only** — re-permit
+> automatic merging), and `GET /api/findings/reevaluation-flags[?status=&limit=]`.
+> An unmerge response reports what actually happened: `outcome`
+> (`unmerged` | `not_merged`), `survivorEntityId`, `detachedEntityId`, `unmergeId`,
+> `previousRule`, `restoredEntityIds[]` (includes any sub-merge that travelled with
+> the detached entity), `remainingConstituents`, `flaggedFindings`, and a
+> `dependencySweep` carrying `findingsExamined`, `dependentFindings`,
+> `unlinkedFindings`, `runsScanned` and `runsTruncated` — the bound is reported, never
+> silently applied. An entity that is not merged answers `not_merged` with HTTP 200
+> (a truthful answer, not an error); an unknown entity is a 404. Nothing is deleted by
+> a reversal: the restored row keeps its identity, edges and `resolution_status`, and
+> gains `metadata.unmerged_from`. **`POST /api/entity-merges/apply` gains a `blocked`
+> count and a `blocked` outcome value** — the only change to a previously documented
+> shape, and additive (existing counts and fields are unchanged): a pair that was
+> unmerged is refused rather than re-merged, with the reason naming the unmerge.
+> A `reevaluation-flags` entry carries `opportunityIdentity`, `status`
+> (`pending` | `cleared`), `reason`, `triggerKind`, `triggerRef`, `entityIds[]`,
+> `flaggedRunId`, `flaggedBy`, `flaggedAt`, and — once a later run has re-observed the
+> finding — `clearedRunId` and `clearedAt`. Organization-scoped: an entity or unmerge
+> id from another org returns 404, indistinguishable from an unknown id.
+
+> v1.21 — 2.0-B2 T2 (Cross-Source Entity Enrichment — merged-entity provenance):
+> added authenticated Analyst+ endpoints exposing what a merged entity is made of:
+> `GET /api/entities/{entityId}/provenance` (one entity),
+> `POST /api/entities/provenance` (many, bounded at 200 ids — the finding-view
+> seam), and `POST /api/entity-merges/apply` (apply the merges T1's auto-merge
+> tiers and T3's confirmed proposals authorised). A provenance body carries
+> `constituents[]` — EVERY constituent source identity including the survivor's own
+> (`is_origin: true`) — plus the `rule` that merged each one
+> (`explicit_reference` | `alias_mapping` | `confirmed_proposal`), `rules[]`,
+> `source_systems[]`, `constituent_count`, and `is_merged`. An entity that was
+> never merged answers with its single own identity and `is_merged: false` (not a
+> 404 — "not merged" and "not found" are different). The same block is stored on
+> `entities.metadata.merge_provenance`, so it also travels with
+> `GET /api/runs/{runId}/entities` — no separate call is required for a surface
+> that already reads entities. Merging never deletes a row or changes
+> `resolution_status`; the merged-away entity keeps its identity and edges and
+> gains a `metadata.merged_into` pointer. Apply is idempotent
+> (`merged` / `already_merged` / `skipped` counts). Organization-scoped: an entity
+> in another org returns 404, indistinguishable from an unknown id. Additive — no
+> previously documented shape changed.
+
+> v1.20 — 2.0-B2 T3 (Cross-Source Entity Enrichment — confirmation review):
+> added authenticated Analyst+ endpoints for the PROPOSED cross-source entity
+> matches the resolution engine refuses to merge on its own:
+> `GET /api/entity-match-proposals[?status=&limit=]`,
+> `GET /api/entity-match-proposals/{proposalId}`,
+> `POST /api/entity-match-proposals/{proposalId}/decision`, and
+> `POST /api/entity-match-proposals/scan`. Only propose-only tiers appear — a pair
+> resolved by an explicit cross-reference or the org alias table auto-merges and is
+> never queued. `action` is one of `confirm | reject`; `changed=false` means the
+> same decision was already current and no history row was added. A decision is
+> RECORDED, not applied: nothing in these endpoints merges the graph. Answered
+> pairs are never re-proposed — a re-scan reports them as
+> `skipped_already_decided` rather than reopening them. Organization-scoped: a
+> proposal id from another org returns 404, indistinguishable from an unknown id.
+> Additive; existing consumers are unaffected.
 > v1.19 - 2.0-A3 T3 (Adjustment explainability): a rank-adjusted opportunity's
 > `_ranking` object now carries `reason` — STRUCTURED data (direction,
 > ranksMoved, decisionCount, decisionsByAction, outcomeCount,
@@ -513,6 +575,262 @@ Purpose: return the append-only analyst decision history, newest first.
 Requires: authenticated Analyst or Owner. Each item includes `revision`,
 `action`, `previous_action`, `previous_state`, `resulting_state`, `actor_id`, and
 `decided_at`.
+
+#### GET /api/entity-match-proposals
+Purpose: the organization's review queue of PROPOSED cross-source entity matches
+(2.0-B2 T3). Only propose-only tiers appear here: a pair resolved by an explicit
+cross-reference or by the org alias table auto-merges and is never queued.
+Requires: authenticated Analyst or Owner. The organization comes only from the
+authenticated request.
+
+Query: `status` (optional — `pending | confirmed | rejected`; an unrecognised
+value is a 400), `limit` (optional, 1–1000, default 200).
+
+Response:
+```json
+{
+  "proposals": [
+    {
+      "org_id": "org_001",
+      "proposal_id": "emp_9f2c…",
+      "entity_type": "system",
+      "left_entity_id": "e1",
+      "right_entity_id": "e2",
+      "tier": "name_similarity",
+      "confidence": 0.7,
+      "status": "pending",
+      "evidence": {
+        "subject": {
+          "entity_id": "e1", "display_name": "Billing",
+          "canonical_name": "billing", "entity_type": "system",
+          "source_system": "servicenow", "source_record_id": "sn-2"
+        },
+        "target": {
+          "entity_id": "e2", "display_name": "billing",
+          "canonical_name": "billing", "entity_type": "system",
+          "source_system": "git", "source_record_id": "repo-1"
+        },
+        "tier": "name_similarity",
+        "confidence": 0.7,
+        "reason": "exact normalised name match across sources with a corroborating observed relationship",
+        "corroborating_relationships": [
+          { "relationship_type": "depends_on", "entity_id": "e9" }
+        ]
+      },
+      "revision": 0,
+      "decided_by": null,
+      "decided_at": null,
+      "note": null,
+      "first_proposed_at": "2026-08-03T10:00:00+00:00",
+      "last_proposed_at": "2026-08-03T10:00:00+00:00"
+    }
+  ],
+  "counts": { "pending": 1, "confirmed": 0, "rejected": 0 },
+  "status": "pending"
+}
+```
+
+`counts` always carries all three statuses (zero-filled).
+
+#### GET /api/entity-match-proposals/{proposalId}
+Purpose: one proposal plus its append-only decision history, newest first.
+Requires: authenticated Analyst or Owner. A proposal id belonging to another
+organization returns 404 — indistinguishable from an unknown id.
+
+Response: `{ "proposal": <as above>, "history": [ { "revision", "action",
+"previous_status", "resulting_status", "actor_id", "note", "decided_at" } ] }`
+
+#### POST /api/entity-match-proposals/{proposalId}/decision
+Purpose: confirm or reject one proposed match.
+Requires: authenticated Analyst or Owner.
+
+Request:
+```json
+{ "action": "confirm", "note": "same service, different system of record" }
+```
+
+`action` is one of `confirm | reject` (there is no `defer` — a proposal nobody
+has answered is already `pending`). `changed=false` means the same decision was
+already current and no history row was added. Reversing a decision is allowed and
+APPENDS a new forward row; history is never rewritten.
+
+**A decision is recorded, not applied.** Confirming records a durable,
+attributable statement that two entities are the same thing and stops the pair
+being re-proposed; it does not merge the graph. Applying a confirmed identity
+with its provenance is a separate step.
+
+Response: `{ "proposal", "action", "previous_status", "resulting_status",
+"revision", "changed", "actor_id", "decided_at" }`
+
+#### POST /api/entity-match-proposals/scan
+Purpose: recompute the organization's proposals from the ranked resolution
+engine. Writes nothing to the graph.
+Requires: authenticated Analyst or Owner.
+
+Response:
+```json
+{ "created": 1, "refreshed": 0, "skipped_already_decided": 2,
+  "entity_types": ["system", "team", "project", "object"] }
+```
+
+`skipped_already_decided` counts pairs the engine proposed again that a human has
+already answered — reported rather than hidden, since those never reopen.
+
+#### GET /api/entities/{entityId}/provenance
+Purpose: what a merged entity is made of — every constituent source identity and
+the rule that merged each (2.0-B2 T2 / AC2).
+Requires: authenticated Analyst or Owner. An entity in another organization
+returns 404, indistinguishable from an unknown id.
+
+Response:
+```json
+{
+  "version": 1,
+  "entity_id": "e1",
+  "constituents": [
+    { "entity_id": "e1", "source_system": "servicenow", "source_record_id": "sn-1",
+      "display_name": "Payments Platform", "canonical_name": "payments platform",
+      "rule": null, "confidence": null, "merged_at": null, "merged_by": null,
+      "evidence": {}, "is_origin": true },
+    { "entity_id": "e2", "source_system": "jira", "source_record_id": "PAY",
+      "display_name": "Payments", "canonical_name": "payments",
+      "rule": "explicit_reference", "confidence": 1.0,
+      "merged_at": "2026-08-03T10:00:00+00:00", "merged_by": "system",
+      "evidence": { "tier": "explicit_reference" }, "is_origin": false }
+  ],
+  "rules": ["explicit_reference"],
+  "source_systems": ["jira", "servicenow"],
+  "constituent_count": 2,
+  "is_merged": true,
+  "last_merged_at": "2026-08-03T10:00:00+00:00"
+}
+```
+
+The survivor's OWN identity is always present as `is_origin: true`, so
+`source_systems` is the complete set of systems the entity speaks for. `rule` is
+`null` on the origin (it was not merged in) and names the rule on every other
+constituent. An entity that was never merged returns its single own identity with
+`is_merged: false` — "not merged" and "not found" are different answers.
+
+The same block is stored on `entities.metadata.merge_provenance`, so it also
+travels with `GET /api/runs/{runId}/entities`.
+
+#### POST /api/entities/provenance
+Purpose: the same, for many entities in one round trip — a finding view resolving
+provenance for every entity it traverses must not issue one request per node.
+Requires: authenticated Analyst or Owner.
+
+Request: `{ "entity_ids": ["e1", "e2"] }` — at most 200 ids (400 beyond that).
+Response: `{ "provenance": { "<entityId>": <as above> }, "requested": 2,
+"resolved": 2 }`. An unknown id is simply absent from the map.
+
+#### POST /api/entity-merges/apply
+Purpose: apply the merges already authorised — T1's auto-merge tiers (explicit
+cross-reference, org alias table) and, unless `include_confirmed` is false, the
+pairs a human confirmed in the Entity Matches review surface.
+Requires: authenticated Analyst or Owner.
+
+Request: `{ "entity_types": ["system"], "include_confirmed": true }` (both
+optional).
+Response: `{ "merged": 1, "already_merged": 0, "skipped": 0, "blocked": 0,
+"outcomes": [...] }`
+
+`blocked` (v1.18) counts pairs refused because they were UNMERGED — distinct from
+`skipped` ("this applier had no authority here") on purpose, so a reversal being
+honoured never looks like a merge that merely did not apply.
+
+Idempotent: a pair already merged is reported as `already_merged` and is not
+written again. A name-similarity proposal is never merged by this route — only a
+confirmed one is, and it is credited to the `confirmed_proposal` rule rather than
+to the tier that proposed it. Every applied merge emits an audit event.
+
+#### POST /api/entities/{entityId}/unmerge
+Purpose: reverse a resolution — detach this entity from the one it was merged into,
+restore it as an independent entity, and flag every dependent finding for
+re-evaluation on the next run.
+Requires: authenticated Analyst or Owner.
+
+Request (both optional): `{ "reason": "different services", "max_runs": 25 }`
+Response:
+```json
+{
+  "outcome": "unmerged",
+  "survivorEntityId": "e1",
+  "detachedEntityId": "e2",
+  "unmergeId": "unm_...",
+  "previousRule": "explicit_reference",
+  "restoredEntityIds": ["e2"],
+  "remainingConstituents": 0,
+  "flaggedFindings": 1,
+  "reason": "detached from e1",
+  "dependencySweep": {
+    "identities": ["<opportunityIdentity>"],
+    "findingsExamined": 12,
+    "dependentFindings": 1,
+    "unlinkedFindings": 3,
+    "runsScanned": 25,
+    "runsTruncated": 0
+  }
+}
+```
+
+Nothing is deleted: the restored row keeps its identity, its edges and its
+`resolution_status`, and gains `metadata.unmerged_from` (history — resolution follows
+`metadata.merged_into` only). A chain of merges comes apart at the reversed joint
+only, so a sub-merge the detached entity itself contains travels with it and appears
+in `restoredEntityIds`.
+
+`unlinkedFindings` counts findings that carry no entity references and therefore
+cannot be shown to depend on the merge — they are neither flagged nor hidden.
+`runsTruncated` reports findings the bounded sweep did not read.
+
+An entity that is not merged returns HTTP 200 with `outcome: "not_merged"`. An
+unknown entity returns 404. Every unmerge emits an audit event.
+
+#### POST /api/entities/{entityId}/unmerge-all
+Purpose: split a merged entity completely — one reversal per constituent, each with
+its own block and audit event.
+Requires: authenticated Analyst or Owner.
+
+Response: `{ "survivorEntityId": "e1", "detached": 2, "outcomes": [ <as above> ] }`
+
+#### GET /api/entity-unmerges
+Purpose: the org's unmerges, newest first — one entry per action, and the answer to
+"why did this pair stop merging?".
+Requires: authenticated Analyst or Owner.
+
+Query: `status` (`blocked` | `released`, omit for both), `limit` (default 100).
+Response: `{ "unmerges": [ { "unmergeId", "pairKey", "pairKeyKind", "status",
+"survivorEntityId", "detachedEntityId", "entityType", "previousRule",
+"restoredEntityIds", "flaggedFindingCount", "unlinkedFindingCount", "reason",
+"actorId", "createdAt", "releasedBy", "releasedAt", "releaseReason" } ], "count": 1 }`
+
+#### POST /api/entity-unmerges/{unmergeId}/release
+Purpose: allow a previously-unmerged pair to be merged again.
+Requires: authenticated **Owner** — this is the one action that re-permits AUTOMATIC
+merging of a pair a person deliberately separated.
+
+Request (optional): `{ "reason": "confirmed with the team" }`
+Response: `{ "unmergeId": "unm_...", "releasedKeys": 2, "status": "released" }`
+
+Does not itself merge anything — it removes the refusal. Nothing is deleted: the row
+keeps its unmerge record and gains who released it and why. An unknown or
+already-released id returns 404 (never 403, which would confirm the id exists).
+
+#### GET /api/findings/reevaluation-flags
+Purpose: findings awaiting re-evaluation because an entity they were built on
+changed identity.
+Requires: authenticated Analyst or Owner.
+
+Query: `status` (`pending` (default) | `cleared` | `all`), `limit` (default 200).
+Response: `{ "flags": [ { "opportunityIdentity", "status", "reason", "triggerKind",
+"triggerRef", "entityIds", "flaggedRunId", "flaggedBy", "flaggedAt", "updatedAt",
+"clearedRunId", "clearedAt" } ], "count": 1, "pending": 1 }`
+
+Keyed on the stable `opportunityIdentity`, so a flag survives to the run that
+re-evaluates it. A flag is cleared by the run that re-observed the finding and names
+it in `clearedRunId` — a finding that stops appearing keeps its flag rather than being
+treated as handled.
 
 ---
 

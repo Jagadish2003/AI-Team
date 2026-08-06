@@ -62,6 +62,12 @@ Event type payload schemas (locked — do not change field names):
     schema_discovered:     org_id, connector_id, schema_count, table_count, timestamp
     runbook_match_decided: org_id, user_id, recurrence_id, action,
                            previous_state, resulting_state, revision
+    entity_merged:         org_id, user_id, survivor_entity_id, merged_entity_id,
+                           rule, constituent_count, source_systems, timestamp
+    entity_match_proposal_decided: org_id, user_id, proposal_id, entity_type,
+                           left_entity_id, right_entity_id, action,
+                           previous_status, resulting_status, revision, tier,
+                           timestamp
     evidence_export_generated: org_id, user_id, export_kind, scope, timestamp,
                            run_id, opportunity_id, finding_count, record_count,
                            content_root, signature_prefix, generated_at
@@ -148,6 +154,36 @@ USAGE_REPORT_EXPORTED = "usage_report_exported"
 # timestamp. Emitted for SYSTEM transitions too, so a state change never appears
 # in the portfolio without a corresponding audit row.
 OPPORTUNITY_LIFECYCLE_TRANSITIONED = "opportunity_lifecycle_transitioned"
+# 2.0-B2 T3: an Owner/Analyst confirmed or rejected a PROPOSED cross-source entity
+# match. Only propose-only tiers reach the review surface, so this event records a
+# human answering an identity question the platform refused to answer itself. The
+# dedicated append-only entity_match_proposal_history table is the domain record;
+# this places the decision in the organisation-wide audit stream with actor, org,
+# the pair, and the transition. The recompute ("scan") is deliberately NOT audited —
+# it can only add or refresh pending questions, never change an answer.
+ENTITY_MATCH_PROPOSAL_DECIDED = "entity_match_proposal_decided"
+# 2.0-B2 T2: two entities were merged into one graph node. The most
+# destructive-by-accident operation in the platform — a wrongly merged entity
+# corrupts every finding built on it, invisibly — so WHO merged WHAT, under
+# WHICH RULE, is audit-relevant even when the merger was a rule rather than a
+# person (`user_id` is then the `system` actor). The survivor's own metadata
+# carries the full constituent provenance; this event places the act in the
+# organisation-wide stream with the pair, the rule, and the resulting
+# constituent/source-system counts.
+ENTITY_MERGED = "entity_merged"
+
+# 2.0-B2 T5 (AC4): a merge was REVERSED. Audit-relevant for the mirror of the
+# reason above — an unmerge changes what every finding built on that entity is
+# about — and because it is the act that narrows a customer's graph back down.
+# The event carries the pair, the rule whose merge was undone, how many entities
+# were handed back, and how many findings were flagged for re-evaluation.
+ENTITY_UNMERGED = "entity_unmerged"
+
+# 2.0-B2 T5: someone RE-PERMITTED automatic merging of a pair that had been
+# unmerged. Separate from the unmerge itself because it is the more consequential
+# half: it is one person undoing another's correction, after which the ordinary
+# merge appliers may join the pair again on any later run.
+ENTITY_MERGE_BLOCK_RELEASED = "entity_merge_block_released"
 
 # 2.0-A3 T1 — an analyst decision recorded as a LEARNING signal (accept /
 # dismiss / defer-with-reason), keyed on the stable opportunity_identity. Note
@@ -251,6 +287,10 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     EVIDENCE_EXPORT_GENERATED,
     USAGE_REPORT_EXPORTED,
     OPPORTUNITY_LIFECYCLE_TRANSITIONED,
+    ENTITY_MATCH_PROPOSAL_DECIDED,
+    ENTITY_MERGED,
+    ENTITY_UNMERGED,
+    ENTITY_MERGE_BLOCK_RELEASED,
     OPPORTUNITY_FEEDBACK_RECORDED,
     RANKING_ADJUSTMENT_CHANGED,
     # 2.0-D4 T1 additions.
