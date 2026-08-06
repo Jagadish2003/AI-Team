@@ -187,9 +187,127 @@ report is therefore built as a first-class serialisable artifact shaped for that
 to render, and the wiring is left to whichever merges second rather than half-built
 here against a module that is absent.
 
+## T3 — contradiction handling (AC3)
+
+> "Seeded contradictory sources produce a finding that names the disagreement rather
+> than silently resolving it."
+
+### The problem
+
+The CMDB says the payments service is owned by `Platform Engineering`. The runbook says
+`L2 Support`. Before T3 the assembler ranked one above the other, the loser never
+reached the prompt, and the narrative asserted **one** owner with total confidence. The
+disagreement — often the actual root of the friction being reported — disappeared
+without trace, and it disappeared *most* reliably in exactly the estates where it
+mattered most.
+
+`app/context_contradictions.py` detects these disagreements. It does not settle them.
+
+### Surfaced, never resolved
+
+Detection **appends a record**. It never drops, reorders, re-ranks or re-weights a
+candidate, and there is no return path meaning "prefer this side". Both positions travel
+into the finding with their sources named. This is the 2.0-A2 T4 confounder discipline
+applied here, and it is enforced the same way: a structural test walks the module's AST
+and fails the build if it ever assigns to selection state.
+
+The record carries **no severity, no score and no preferred side**. There is nothing here
+to rank the sources by, and inventing a scale would be winner-picking restated as a
+number. The rendered copy is additionally checked against a `RESOLUTION_LANGUAGE` list
+("the correct owner is", "should be", "supersedes") at build time — the same guard shape
+`discovery/projection/vocabulary.py` uses, and like that one it deliberately does **not**
+flag the evidence it is reporting.
+
+### Material, not merely different
+
+Four rules keep the report worth reading, because a detector that cries wolf gets
+switched off:
+
+* **normalisation** — case, whitespace and `-`/`_` separators are formatting, not
+  disagreement. Declared `equivalences` go further and state that two spellings are one
+  value. They are declared, never inferred: a fuzzy similarity rule would manufacture
+  *agreement*, suppressing a real finding — the mirror image of the failure above.
+* **numeric tolerance** — `4.0` and `4.01` hours agree.
+* **a missing value is not a position** — absence of information is not disagreement,
+  the same rule `outcome_confounders` applies to an absent pack version.
+* **two systems, not two records** — one system holding two conflicting rows is a
+  data-quality problem inside that system. By default every position must also be
+  *observed*: the platform disagreeing with a source is not two sources disagreeing.
+
+**A position is only ever taken from a structured field.** This module never parses
+narrative text looking for claims, because "the runbook says X" derived by reading a
+paragraph is an inference presented as an observation. A document contradicts a record
+only when its producer indexed a structured claim.
+
+### Detected over the eligible set
+
+Detection runs over the candidates that cleared the stale and confidence gates — **not**
+over the ones the budget kept. Were it to see only the selected set, a budget that
+trimmed one side would silently resolve the disagreement: T3's failure mode reintroduced
+one layer down, by T2. Each position therefore carries `in_context`, and a contradiction
+whose sides did not all fit says so in its own summary.
+
+### Configuration
+
+The `contradictions` block in `config/assembly_policy.json` declares the comparable
+attributes (with their real per-connector field spellings as aliases), the numeric
+tolerance, `require_observed`, `min_distinct_sources` and `max_reported`. An **absent**
+block falls back to documented defaults, so a config file written before T3 still detects
+disagreements rather than shipping the feature quietly switched off; a block that is
+**present and invalid** raises, because an operator who configured this and got it wrong
+must be told. Whatever `max_reported` omits is counted and reported — never silently
+dropped.
+
+## T5 — the conversation MEDIUM ceiling (AC5)
+
+> "Conversation-derived content never lifts a finding above MEDIUM on its own."
+
+The ceiling is not new. COR-05 has held it since R16-A2 (`corroboration_rules.py`), and
+the R16-C1 T3 clamp in `apply_corroboration_confidence` guards it a second time.
+`app/conversation_ceiling.py` neither replaces nor duplicates either — it imports the
+confidence vocabulary from the same registry — because **2.0-B3 opened two routes around
+the ceiling that did not exist when it was written**:
+
+* **the assembly route.** COR-05 governs the *detector signal* path. It knows nothing
+  about the retrieval substrate, which since R18-A4 indexes Slack and Teams threads as
+  `conversation` chunks reaching a finding through `context_assembly`.
+* **the configuration route.** T1 made precedence editable, so a deployment can reorder
+  `source_type_ranks` to rank conversation first. That is a legitimate composition
+  choice; it must not be able to disable a safety rule.
+
+So the ceiling is computed where the evidence is actually composed, and **derived from
+the evidence itself rather than from any policy a deployment can edit** — which is what
+makes "a config edit cannot defeat the ceiling" true by construction rather than by
+convention. `test_reordered_precedence_cannot_defeat_the_ceiling` is the case that pins
+it.
+
+**"On its own" is defined precisely.** The ceiling looks at *evidence* and applies when
+there is at least one conversation-derived chunk and no evidence of any other source
+type. Graph entities and relationships are deliberately not counted as the other source:
+they are the finding's subject, not an independent source agreeing with it, and treating
+the mere presence of the entity a thread mentions as corroboration would let any
+conversation-only finding clear the ceiling by naming something — COR-08's
+no-self-corroboration rule, at the assembly layer.
+
+Two asymmetries are deliberate. **Untyped evidence counts as "other", not as
+conversation**: the ceiling fires on positive knowledge that the support is chat, never
+on a producer's silence, because capping a finding for a missing metadata field would be
+the platform being arbitrary. And the ceiling **caps but never lowers or promotes**: a
+LOW finding stays LOW; applying it at or below MEDIUM is a no-op. It only ever removes an
+elevation the evidence does not support.
+
+`enforcement_points()` names all three places the rule is enforced, so the regression
+suite asserts the list is complete rather than trusting a comment.
+
 ## Backwards compatibility
 
 Additive. `AssemblyPolicy()` with no declaration behaves exactly as it did before
 T1 — confidence, then freshness, then id, with observed as a hard tier — so any
 caller that has not opted in is unaffected. `AssemblyPolicy.declared()` is the
 opt-in, and `graph_context` (the production assembly path) uses it.
+
+T3 and T5 are additive in the same sense: `select_candidates` keeps its R16-B2 signature
+(`run_selection` is the new call for anyone needing the eligible set), the new
+`ContextPackage` fields default to empty, and a finding whose sources agree and whose
+evidence is not conversation-only produces a byte-identical prompt to the one it produced
+before this change.

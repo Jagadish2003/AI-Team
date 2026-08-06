@@ -66,6 +66,8 @@ try:  # Repo-root import style (tests add both roots to sys.path).
     )
     from backend.app.provenance import INFERRED, OBSERVED
     from backend.app.assembly_policy_config import SOURCE_TYPE_STRUCTURED
+    from backend.app import context_contradictions as _contradictions
+    from backend.app import conversation_ceiling as _ceiling
 except ModuleNotFoundError:  # Runtime inside backend/ where app is top-level.
     from app.graph_constants import (
         GRAPH_CONTEXT_MAX_ENTITIES,
@@ -73,6 +75,8 @@ except ModuleNotFoundError:  # Runtime inside backend/ where app is top-level.
     )
     from app.provenance import INFERRED, OBSERVED
     from app.assembly_policy_config import SOURCE_TYPE_STRUCTURED
+    from app import context_contradictions as _contradictions
+    from app import conversation_ceiling as _ceiling
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +137,8 @@ __all__ = [
     "SOURCE_TYPE_STRUCTURED",
     "KindBudget",
     "AssemblyBudgetReport",
+    "SelectionOutcome",
+    "run_selection",
 ]
 
 
@@ -260,6 +266,17 @@ class ContextPackage:
     # but answering "did I lose context, and to which budget?" meant parsing every
     # entry — so in practice nobody asked. Shaped for 2.0-B1's trace to render.
     budget_report: Optional[dict] = None
+    # 2.0-B3 T3 (AC3): material disagreements between the sources this package is
+    # composed from. Assembly names them and carries BOTH sides; it never chooses
+    # between them. Empty when no source disagrees. See app/context_contradictions.py.
+    contradictions: List[dict] = field(default_factory=list)
+    contradiction_report: Optional[dict] = None
+    # 2.0-B3 T5 (AC5): the standing conversation ceiling, computed where the evidence
+    # is actually composed. Non-null means the supporting evidence is conversation
+    # content only and this finding may not be presented above MEDIUM, whatever a
+    # scorer or a reordered precedence declaration would otherwise allow.
+    confidence_ceiling: Optional[str] = None
+    ceiling_assessment: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -661,6 +678,23 @@ def _log_entry(
     }
 
 
+@dataclass(frozen=True)
+class SelectionOutcome:
+    """One kind's full selection result (2.0-B3 T3).
+
+    ``selected`` and ``log`` are what :func:`select_candidates` has always returned.
+    ``eligible`` is the set that cleared the stale and confidence gates — everything
+    that was a legitimate candidate for this finding, whether or not the budget had
+    room for it. T3's contradiction detection reads it: were it to see only the
+    selected items, a budget that trimmed one side of a disagreement would silently
+    settle it, which is the failure that story exists to prevent.
+    """
+
+    selected: List[Candidate]
+    log: List[dict]
+    eligible: List[Candidate]
+
+
 def select_candidates(
     candidates: List[Candidate],
     cap: int,
@@ -675,7 +709,21 @@ def select_candidates(
 
     The reference timestamp may be supplied so several kinds share one freshness
     frame; when omitted it is derived from ``candidates`` alone.
+
+    Signature unchanged since R16-B2. Callers needing the eligible set as well (T3)
+    use :func:`run_selection`, which this delegates to.
     """
+    outcome = run_selection(candidates, cap, policy, reference)
+    return outcome.selected, outcome.log
+
+
+def run_selection(
+    candidates: List[Candidate],
+    cap: int,
+    policy: Optional[AssemblyPolicy] = None,
+    reference: Optional[datetime] = None,
+) -> SelectionOutcome:
+    """:func:`select_candidates`, additionally returning the eligible set."""
     policy = policy or AssemblyPolicy()
     if reference is None:
         reference = _reference_timestamp(candidates)
@@ -776,7 +824,7 @@ def select_candidates(
             reason = REASON_RANKED_OUT
         log.append(_log_entry(candidate, DECISION_EXCLUDED, reason, reference))
 
-    return selected, log
+    return SelectionOutcome(selected=selected, log=log, eligible=list(ordered))
 
 
 # ---------------------------------------------------------------------------
@@ -976,6 +1024,51 @@ def _unwrap(candidate: Candidate) -> Any:
     return candidate.payload if candidate.payload is not None else candidate
 
 
+def _detect_contradictions(
+    policy: AssemblyPolicy, eligible: List[Candidate], selected_ids: set
+):
+    """Run T3's detection over the eligible candidates (AC3).
+
+    Degrades rather than raises. Assembly's job is to compose a finding; a fault in
+    the disagreement detector must cost the finding its disagreement REPORT, loudly,
+    never its context — the same non-blocking posture ``graph_context`` takes toward
+    a broken policy declaration. It is logged at error level naming the consequence,
+    because a silently absent report reads exactly like "the sources agree".
+    """
+    declaration = getattr(policy, "declaration", None)
+    contradiction_policy = getattr(declaration, "contradictions", None)
+    try:
+        return _contradictions.detect_contradictions(
+            eligible, contradiction_policy, selected_ids
+        )
+    except Exception as exc:  # noqa: BLE001 — a detector fault must not fail assembly.
+        logger.error(
+            "context_assembly: contradiction detection failed (%s) — this package "
+            "reports NO source disagreements, which is not the same as there being "
+            "none", exc,
+        )
+        return _contradictions.ContradictionReport()
+
+
+def _assess_conversation_ceiling(selected_evidence: List[Candidate]):
+    """Assess T5's conversation ceiling over the selected evidence (AC5).
+
+    Degrades to "no ceiling assessed" on failure — and says so at error level. Note
+    the honest asymmetry with the corroboration-layer clamp: that one still stands
+    independently (COR-05 plus the R16-C1 T3 guard), so a fault here removes a second
+    line of defence rather than the rule itself.
+    """
+    try:
+        return _ceiling.assess_candidates(selected_evidence)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "context_assembly: conversation-ceiling assessment failed (%s) — the "
+            "assembly-layer ceiling is NOT applied to this package; the "
+            "corroboration-layer ceiling (COR-05) still stands", exc,
+        )
+        return _ceiling.CeilingAssessment(applies=False)
+
+
 # ---------------------------------------------------------------------------
 # assemble_context — the public entry point (Section 1)
 # ---------------------------------------------------------------------------
@@ -1008,15 +1101,21 @@ def assemble_context(
         entity_candidates + relationship_candidates + evidence_candidates
     )
 
-    selected_entities, log_entities = select_candidates(
+    entity_outcome = run_selection(
         entity_candidates, policy.max_entities, policy, reference
     )
-    selected_relationships, log_relationships = select_candidates(
+    relationship_outcome = run_selection(
         relationship_candidates, policy.max_relationships, policy, reference
     )
-    selected_evidence, log_evidence = select_candidates(
+    evidence_outcome = run_selection(
         evidence_candidates, policy.max_evidence_chunks, policy, reference
     )
+    selected_entities, log_entities = entity_outcome.selected, entity_outcome.log
+    selected_relationships, log_relationships = (
+        relationship_outcome.selected,
+        relationship_outcome.log,
+    )
+    selected_evidence, log_evidence = evidence_outcome.selected, evidence_outcome.log
 
     # 2.0-B3 T2 (AC2) — the per-finding TOTAL budget, applied after each kind has
     # won its own competition. The per-kind caps sum to more than a prompt should
@@ -1091,6 +1190,29 @@ def assemble_context(
             "context_assembly: budget shaped this package — %s", budget_report.reason
         )
 
+    # 2.0-B3 T3 (AC3) — name the disagreements. Run over the ELIGIBLE candidates of
+    # every kind, not the selected ones, so a budget trim can never quietly settle an
+    # argument: a position whose candidate did not make the cut is still reported,
+    # flagged ``in_context=False``.
+    #
+    # Ordered after selection and deliberately non-destructive: this reads the
+    # candidate sets and returns a record. It does not re-rank, re-weight, drop or
+    # promote anything, which is what makes "surfaced, never resolved" structural
+    # rather than a promise in a docstring.
+    eligible = (
+        entity_outcome.eligible + relationship_outcome.eligible + evidence_outcome.eligible
+    )
+    selected_ids = {
+        c.candidate_id
+        for c in (selected_entities + selected_relationships + selected_evidence)
+    }
+    contradiction_report = _detect_contradictions(policy, eligible, selected_ids)
+
+    # 2.0-B3 T5 (AC5) — the conversation ceiling, derived from the composed EVIDENCE
+    # itself rather than from any editable policy, so neither a reordered
+    # ``source_type_ranks`` nor a scorer can route around it.
+    ceiling = _assess_conversation_ceiling(selected_evidence)
+
     return ContextPackage(
         entities=[_unwrap(c) for c in selected_entities],
         relationships=[_unwrap(c) for c in selected_relationships],
@@ -1101,4 +1223,8 @@ def assemble_context(
             policy.declaration.to_dict() if policy.declaration is not None else None
         ),
         budget_report=budget_report.to_dict(),
+        contradictions=[c.to_dict() for c in contradiction_report.contradictions],
+        contradiction_report=contradiction_report.to_dict(),
+        confidence_ceiling=ceiling.ceiling,
+        ceiling_assessment=ceiling.to_dict(),
     )
