@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, ChevronDown } from 'lucide-react';
 import { OpportunityTier } from '../../types/analystReview';
-import { showRelease2ArcAUi } from '../../config/releaseFlags';
  
 export type TierFilter = 'All' | OpportunityTier;
 export type ConfidenceFilter = 'All' | 'LOW' | 'MEDIUM' | 'HIGH';
@@ -112,13 +111,7 @@ export default function OpportunityToolbar({
 }) {
   return (
     <div className="mb-4 rounded-xl border border-border bg-panel p-3">
-      <div
-        className={`grid grid-cols-1 gap-2 ${
-          showRelease2ArcAUi
-            ? 'lg:grid-cols-[minmax(220px,1fr)_minmax(160px,200px)_minmax(160px,200px)_minmax(160px,200px)]'
-            : 'lg:grid-cols-[minmax(220px,1fr)_minmax(160px,200px)_minmax(160px,200px)]'
-        }`}
-      >
+      <div className="grid grid-cols-1 gap-2 lg:grid-cols-[minmax(220px,1fr)_minmax(160px,200px)_minmax(160px,200px)_minmax(160px,200px)]">
  
         {/* Search */}
         <div className="relative">
@@ -147,14 +140,12 @@ export default function OpportunityToolbar({
           label="Confidence"
         />
  
-        {showRelease2ArcAUi && (
-          <CustomDropdown<DecisionFilter>
-            options={decisionOptions}
-            value={decision}
-            onChange={onDecision}
-            label="Decision"
-          />
-        )}
+        <CustomDropdown<DecisionFilter>
+          options={decisionOptions}
+          value={decision}
+          onChange={onDecision}
+          label="Decision"
+        />
  
       </div>
  

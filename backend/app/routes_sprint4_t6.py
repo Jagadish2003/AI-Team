@@ -392,13 +392,21 @@ def _corroboration_fields(opp: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def _projection_field(opp: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _projection_field(
+    opp: Optional[Dict[str, Any]],
+    run_id: Optional[str] = None,
+    org_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """Extract the 2.0-A1 stored projection from a stored opportunity record.
 
     Returns None when the opportunity is missing, predates projections, or was
     not projectable — absence is meaningful and the UI branches on it. Never
     recomputes: a served projection must be the stored one.
     """
+    if run_id:
+        from .projection_store import projection_for_opportunity
+
+        return projection_for_opportunity(opp, run_id, org_id=org_id)
     projection = (opp or {}).get("projection")
     return dict(projection) if isinstance(projection, dict) else None
 
@@ -694,7 +702,13 @@ def register_sprint4_t6_routes(app) -> None:
         corroboration = _corroboration_fields(stored_opp)
         # 2.0-A1 T1: the intervention projection also lives on the stored
         # opportunity (written by the run pipeline). Served as stored.
-        projection = _projection_field(stored_opp)
+        try:
+            from app.middleware.tenancy import get_current_org_id_optional
+
+            projection_org_id = get_current_org_id_optional()
+        except Exception:
+            projection_org_id = None
+        projection = _projection_field(stored_opp, run_id, projection_org_id)
 
         relationship_summaries = _load_relationship_summaries(run_id, stored_opp)
 

@@ -112,13 +112,27 @@ def _run_data(
     return rd
 
 
-def _evaluate(detector_id=COVENANT, **run_data_kwargs) -> CorroborationResult:
+# 2.0-B2 T6 (AC5): a cross-source elevation now requires a RESOLVED entity
+# identity, so a test whose subject is the cross-source rule mechanics (COR-03
+# derivation, the triple label) has to supply one — otherwise it would also be
+# asserting the identity gate's behaviour, which has its own suites
+# (tests/unit/test_corroboration_identity_gate.py and its contract twin).
+# Single-source tests need nothing: the gate only engages when BOTH fired.
+def _resolved_identity(_org, _left, _right):
+    """An identity the graph has genuinely resolved (explicit cross-reference)."""
+    return "explicit_reference"
+
+
+def _evaluate(
+    detector_id=COVENANT, identity_resolver=None, **run_data_kwargs
+) -> CorroborationResult:
     return evaluate_corroboration(
         detector_id=detector_id,
         pack_id="ncino",
         run_data=_run_data(**run_data_kwargs),
         run_timestamp=RUN_TS,
         org_id="demo-org",
+        identity_resolver=identity_resolver,
     )
 
 
@@ -168,16 +182,30 @@ class TestAC2Jira:
 
 class TestAC3Triple:
     def test_both_sources_sets_triple(self):
+        # T6/AC5: the triple headline is itself a cross-source identity claim, so
+        # it stands only on a resolved identity (see _resolved_identity above).
+        result = _evaluate(
+            servicenow_incidents=[_sn_incident()],
+            jira_issues=[_jira_issue()],
+            identity_resolver=_resolved_identity,
+        )
+        assert result.triple_corroboration is True
+
+    def test_both_sources_without_a_resolved_identity_is_not_a_triple(self):
+        # The T6 counterpart: two systems agreeing about entities nobody resolved
+        # is not "all three agree".
         result = _evaluate(
             servicenow_incidents=[_sn_incident()],
             jira_issues=[_jira_issue()],
         )
-        assert result.triple_corroboration is True
+        assert result.triple_corroboration is False
+        assert result.elevated_confidence == "MEDIUM"
 
     def test_triple_label_exact(self):
         result = _evaluate(
             servicenow_incidents=[_sn_incident()],
             jira_issues=[_jira_issue()],
+            identity_resolver=_resolved_identity,
         )
         assert result.corroboration_label == TRIPLE_CORROBORATION_LABEL
         assert result.corroboration_label == (
@@ -204,6 +232,7 @@ class TestAC3Triple:
         result = _evaluate(
             servicenow_incidents=[_sn_incident()],
             jira_issues=[_jira_issue()],
+            identity_resolver=_resolved_identity,
         )
         assert result.elevated_confidence == "HIGH"
 
@@ -698,8 +727,15 @@ class TestRunnerCorroborationWiring:
     def test_runner_data_builder_supports_triple_corroboration(self):
         run_data = build_corroboration_run_data(
             systems={"salesforce", "servicenow", "jira"},
-            sn_by_detector={COVENANT: [{"sys_created_on": _within_window_ts()}]},
-            jira_by_detector={COVENANT: [{"created": _within_window_ts()}]},
+            # T6/AC5: the records carry the entity each side is about (as real
+            # corroboration records do), because an elevation now needs an identity
+            # to resolve — a record naming nothing cannot establish one.
+            sn_by_detector={
+                COVENANT: [{"sys_created_on": _within_window_ts(), "team": "lending-ops"}]
+            },
+            jira_by_detector={
+                COVENANT: [{"created": _within_window_ts(), "process": "lending-ops"}]
+            },
             run_timestamp_iso=RUN_TS.isoformat(),
         )
 
@@ -709,6 +745,9 @@ class TestRunnerCorroborationWiring:
             run_data=run_data,
             run_timestamp=RUN_TS,
             org_id="demo-org",
+            # T6/AC5: the builder's job is the run_data shape; the triple it
+            # supports needs a resolved identity to elevate.
+            identity_resolver=_resolved_identity,
         )
 
         assert result.triple_corroboration is True

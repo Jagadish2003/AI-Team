@@ -86,7 +86,8 @@ def _incident(
             }
         ]
     if event_signatures is not None:
-        incident["event_signatures"] = event_signatures
+        # ServiceNow column name (servicenow.INCIDENT_EVENT_SIGNATURE_FIELDS).
+        incident["x_1212781_github_0_event_signatures"] = event_signatures
     return incident
 
 

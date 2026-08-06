@@ -4,8 +4,8 @@ import { ConnectorStatus } from '../../types/connector';
 const map: Record<ConnectorStatus, { label: string; cls: string }> = {
   connected: { label: 'Connected', cls: 'integration-connected-status-pill' },
   not_connected: { label: 'Not connected', cls: 'bg-slate-500/10 text-muted border-border' },
-  disconnected: { label: 'Disconnected', cls: 'bg-slate-500/10 text-muted border-border' },
-  not_configured: { label: 'Not configured', cls: 'bg-slate-500/10 text-muted border-border' },
+  disconnected: { label: 'Not configured', cls: 'integration-not-configured-status-pill' },
+  not_configured: { label: 'Not configured', cls: 'integration-not-configured-status-pill' },
   coming_soon: { label: 'Coming soon', cls: 'integration-coming-soon-status-pill' }
 };
 

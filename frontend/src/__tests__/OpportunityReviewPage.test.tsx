@@ -35,6 +35,7 @@ import { DataCacheProvider } from '../lib/dataCache';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import type { Decision } from '../types/common';
 import type { OpportunityCandidate } from '../types/analystReview';
+import { showRelease2ArcAUi } from '../config/releaseFlags';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -86,6 +87,7 @@ const mockSaveOverride = vi.fn().mockResolvedValue({ ok: true });
 const mockSelect = vi.fn().mockImplementation((id: string) => { mockSelectedId = id; });
 const mockRefetch = vi.fn();
 const mockNavigate = vi.fn();
+const mockPush = vi.hoisted(() => vi.fn());
 const mockFetchLearningSignals = vi.hoisted(() => vi.fn());
 
 function learningSignals(active = true) {
@@ -161,7 +163,7 @@ vi.mock('../context/RunContext', () => ({
 }));
 
 vi.mock('../components/common/Toast', () => ({
-  useToast: () => ({ push: vi.fn() }),
+  useToast: () => ({ push: mockPush }),
 }));
 
 vi.mock('../api/learningApi', () => ({
@@ -251,6 +253,10 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
   it('A3 AC4: shows cold-start learning state when learning is inactive', async () => {
     mockFetchLearningSignals.mockResolvedValueOnce(learningSignals(false));
     renderPage('/opportunity-review');
+    if (!showRelease2ArcAUi) {
+      expect(screen.queryByTestId('learning-inactive-state')).toBeNull();
+      return;
+    }
     expect(await screen.findByTestId('learning-inactive-state')).toHaveTextContent(
       /Learning is not yet active/i,
     );
@@ -291,28 +297,147 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
 
   // ── Decision / optimistic update tests ─────────────────────────────────────
 
+  it('AC6: renders the approve/reject panel with Arc A UI visible', () => {
+    renderPage();
+    expect(screen.getByText('Reasoning Override')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /reject/i })).toBeEnabled();
+  });
+
+  it('A3 AC2: renders ranking adjustment reason and contributing links', () => {
+    mockSelectedId = OPP_2.id;
+    mockOpportunities = [
+      OPP_1,
+      {
+        ...OPP_2,
+        _ranking: {
+          schemaVersion: '1.0.0',
+          baseRank: 4,
+          baseImpact: 5,
+          adjustedRank: 2,
+          moved: -2,
+          adjusted: true,
+          caps: {
+            maxScoreFraction: 0.15,
+            maxRankMove: 2,
+          },
+          effectiveImpact: 5.6,
+          appliedDelta: 0.6,
+          requestedDelta: 0.9,
+          wasCapped: true,
+          cappedBy: 'rank_move',
+          hasOutcomeEvidence: true,
+          signalCount: 3,
+          reason: {
+            schemaVersion: '1.0.0',
+            direction: 'up',
+            ranksMoved: 2,
+            baseRank: 4,
+            adjustedRank: 2,
+            decisionCount: 1,
+            decisionsByAction: { accept: 1 },
+            outcomeCount: 1,
+            outcomesByVerdict: { within_band: 1 },
+            hasOutcomeEvidence: true,
+            wasCapped: true,
+            cappedBy: 'rank_move',
+            evidenceStrength: 'moderate',
+            totalSignals: 2,
+            contributingDecisions: [
+              {
+                kind: 'decision',
+                feedbackId: 'fb_001',
+                action: 'accept',
+                opportunityIdentity: 'opp_identity_002',
+                reasonCode: 'valuable',
+                actorId: 'user_001',
+                recordedAt: '2026-08-06T00:00:00Z',
+                href: '/api/learning/feedback/entry/fb_001',
+              },
+            ],
+            contributingOutcomes: [
+              {
+                kind: 'outcome',
+                opportunityIdentity: 'opp_identity_002',
+                verdict: 'within_band',
+                currentRunId: 'run_current',
+                baselineRunId: 'run_baseline',
+                measuredDirection: 'improves',
+                comparabilityVerdict: 'comparable',
+                measuredAt: '2026-08-06T00:00:00Z',
+                href: '/api/opportunity-movement/opp_identity_002',
+              },
+            ],
+            summary: 'Ranked higher: your team accepted similar findings and one recorded movement within band.',
+          },
+        },
+      },
+    ];
+
+    renderPage();
+
+    expect(screen.getByTestId('ranking-adjustment-panel')).toHaveTextContent(
+      /Ranked higher/i,
+    );
+    expect(screen.getByTestId('ranking-adjustment-panel')).toHaveTextContent(
+      /Ordering only/i,
+    );
+    expect(screen.getByRole('link', { name: /Decision: accept/i })).toHaveAttribute(
+      'href',
+      '/api/learning/feedback/entry/fb_001',
+    );
+    expect(screen.getByRole('link', { name: /Outcome: within_band/i })).toHaveAttribute(
+      'href',
+      '/api/opportunity-movement/opp_identity_002',
+    );
+  });
+
   it('AC6: Approve button calls setDecision with APPROVED', async () => {
     renderPage();
-    const approveBtn = screen.queryByRole('button', { name: /approve/i });
-    if (approveBtn) {
-      await act(async () => { fireEvent.click(approveBtn); });
-      await waitFor(() => {
-        expect(mockSetDecision).toHaveBeenCalledWith('opp_001', 'APPROVED');
-      });
-    }
+    const approveBtn = screen.getByRole('button', { name: /approve/i });
+    await act(async () => { fireEvent.click(approveBtn); });
+    await waitFor(() => {
+      expect(mockSetDecision).toHaveBeenCalledWith('opp_001', 'APPROVED');
+      expect(mockPush).toHaveBeenCalledWith('Opportunity approved.', 'success');
+    });
+  });
+
+  it('AC6: shows the approval toast immediately without waiting for save', async () => {
+    let resolveDecision!: (value: { ok: boolean }) => void;
+    mockSetDecision.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveDecision = resolve; }),
+    );
+
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    expect(mockPush).toHaveBeenCalledWith('Opportunity approved.', 'success');
+    expect(mockSetDecision).toHaveBeenCalledWith('opp_001', 'APPROVED');
+
+    await act(async () => {
+      resolveDecision({ ok: true });
+    });
+  });
+
+  it('AC6: Reject button calls setDecision with REJECTED and shows toast', async () => {
+    renderPage();
+    const rejectBtn = screen.getByRole('button', { name: /reject/i });
+    await act(async () => { fireEvent.click(rejectBtn); });
+    await waitFor(() => {
+      expect(mockSetDecision).toHaveBeenCalledWith('opp_001', 'REJECTED');
+      expect(mockPush).toHaveBeenCalledWith('Opportunity rejected.', 'error');
+    });
   });
 
   it('AC7: after setDecision resolves, opportunities array contains updated decision', async () => {
     renderPage();
-    const approveBtn = screen.queryByRole('button', { name: /approve/i });
-    if (approveBtn) {
-      await act(async () => { fireEvent.click(approveBtn); });
-      await waitFor(() => {
-        // The mock setDecision mutates mockOpportunities (optimistic update simulation)
-        const updated = mockOpportunities.find((o) => o.id === 'opp_001');
-        expect(updated?.decision).toBe('APPROVED');
-      });
-    }
+    const approveBtn = screen.getByRole('button', { name: /approve/i });
+    await act(async () => { fireEvent.click(approveBtn); });
+    await waitFor(() => {
+      // The mock setDecision mutates mockOpportunities (optimistic update simulation)
+      const updated = mockOpportunities.find((o) => o.id === 'opp_001');
+      expect(updated?.decision).toBe('APPROVED');
+    });
   });
 
   // ── Blueprint button gating ─────────────────────────────────────────────────
