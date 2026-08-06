@@ -655,6 +655,23 @@ def _sn_scalar(value: Any) -> Any:
     return value
 
 
+def _sn_multi_value(value: Any) -> Any:
+    """Return the RAW value from a ``display_value=all`` field, list included.
+
+    ``_sn_scalar`` above deliberately prefers the human display value, which is
+    right for a name or a state but wrong for a MULTI-VALUE column: there the
+    display form is a rendered string while the real list lives under ``value``.
+    Carrying the envelope through instead loses the list entirely, because the
+    shared reader matches ``list``/``tuple`` and a Mapping is neither.
+
+    Anything that is not such an envelope is returned unchanged, so an offline
+    fixture — which stores a plain list — is untouched.
+    """
+    if isinstance(value, dict) and "value" in value:
+        return value.get("value")
+    return value
+
+
 def normalize_cmdb_class_scope(value: Any) -> Tuple[str, ...]:
     """Validate and deterministically canonicalize a configured CI class list.
 
@@ -3461,11 +3478,15 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
         # Carry the event-signature link column(s) through under their ServiceNow
         # names. The incident payload is built as an explicit literal with no
         # passthrough, so a requested-but-uncopied column is still dropped here —
-        # this is the second half of the mapping. Copied verbatim (no parsing or
-        # renaming); the shared reader validates the value's shape.
+        # this is the second half of the mapping. The value is carried through
+        # unrenamed and unvalidated (the shared reader validates its shape); the
+        # only transformation is unwrapping the `display_value=all` envelope, so a
+        # MULTI-VALUE column arrives as the list it is rather than as a Mapping
+        # the reader would skip.
         for signature_field in INCIDENT_EVENT_SIGNATURE_FIELDS:
-            if record.get(signature_field) is not None:
-                incident[signature_field] = record.get(signature_field)
+            signature_value = _sn_multi_value(record.get(signature_field))
+            if signature_value is not None:
+                incident[signature_field] = signature_value
         incidents.append(incident)
 
     assignment_groups: Dict[str, Dict[str, Any]] = {}

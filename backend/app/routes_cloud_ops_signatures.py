@@ -27,6 +27,8 @@ Posture
   here is provably the value the detectors saw.
 * **Analyst+**, matching the other run-scoped diagnostic surfaces.
 * **Org-scoped** against the run record, so one tenant cannot read another's rows.
+  A run whose org cannot be established is treated as not found — ownership that
+  cannot be proven is not ownership.
 * A run that predates this write, or one where no cloud_ops pack was selected,
   returns ``count: 0`` with ``available: false`` — an honest "not recorded",
   never a fabricated or zero-filled row set.
@@ -91,18 +93,26 @@ def register_cloud_ops_signature_routes(app: FastAPI) -> None:
     def get_run_cloud_ops_event_signatures(run_id: str) -> EventSignaturesResponse:
         """Return the cloud-event signature rows this run assembled.
 
-        404 when the run does not exist or belongs to another org. A run with no
-        recorded rows answers ``available: false`` rather than inventing any.
+        404 when the run does not exist, belongs to another org, or records no
+        org at all. A run with no recorded rows answers ``available: false``
+        rather than inventing any.
         """
         run = db.run_get(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
 
         run_org = _run_org_id(run)
-        # Same posture as the graph/retrieval routes: the org comes from the
-        # tenancy context, never from the request, and a cross-org run is simply
-        # not found rather than confirming its existence.
-        if run_org and run_org != get_current_org_id():
+        # The org comes from the tenancy context, never from the request, and a
+        # run this org does not own is simply not found rather than confirming its
+        # existence.
+        #
+        # A run with NO recorded org is also not found. Ownership that cannot be
+        # established is not ownership: treating a missing `orgId`/`org_id` as
+        # "belongs to whoever is asking" would let any tenant read the signature
+        # rows of any run written before the field existed, or by a path that
+        # failed to stamp it. Refusing costs a legacy run its diagnostics; the
+        # alternative costs a tenant its isolation.
+        if not run_org or run_org != get_current_org_id():
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
 
         stored = db.run_kv_get(KV_CLOUD_OPS_EVENT_SIGNATURES, run_id, None)
