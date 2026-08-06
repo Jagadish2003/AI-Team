@@ -157,6 +157,13 @@ export interface PackHealthItem {
 export interface ExcludedPackItem {
   packId: string;
   state?: string;
+  /**
+   * `pack_disabled` — the organisation turned it off, and can turn it back on.
+   * `deprecation_grace_expired` (2.0-C4 T4 / AT-845) — its announced grace period
+   * ended, so the platform retired it. That one cannot be re-enabled away; the
+   * remedy is the replacement pack. Treat an unrecognised value as a plain
+   * exclusion rather than guessing at it.
+   */
   reason?: string;
 }
 

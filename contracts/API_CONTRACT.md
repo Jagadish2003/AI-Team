@@ -1,6 +1,41 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.22
+Version: v1.23
 Date: 2026-08-06
+
+> v1.23 — 2.0-C4 T4 (Deprecation Grace Behaviour): a pack whose announced grace
+> period has ended is moved to safe-disabled and dropped from future runs. Additive
+> only — one new `reason` value on an existing field; no new routes and no shape
+> change.
+>
+> **A pack still INSIDE its grace is unaffected.** It activates, executes, and is
+> reported exactly as it was before the notice appeared. Nothing in this version
+> changes for it.
+>
+> **Extended shapes:**
+> - `excludedPacks[]` (on `LaunchResponse` and the run record) and `excluded_packs[]`
+>   (on `GET /api/run-health/packs`) — `reason` gains the value
+>   **`deprecation_grace_expired`** alongside the existing `pack_disabled`. `state`
+>   is `disabled` for both.
+> - `pack.execution_skipped` telemetry — the top-level `reason` is now derived from
+>   the exclusions present, so a mixed selection reports
+>   `"deprecation_grace_expired,pack_disabled"`. A homogeneous exclusion still
+>   reports exactly the single value it always did.
+>
+> **The two reasons are not interchangeable and a consumer must not collapse them.**
+> `pack_disabled` means the organisation turned the pack off and can turn it back on.
+> `deprecation_grace_expired` means the vendor retired it on the announced date —
+> re-enabling it does NOT bring it back (the next activation retires it again), and
+> the remedy is the replacement pack. A UI that labels both "disabled" sends the
+> operator to a control that cannot help them.
+>
+> The **409** from `POST /api/stack-builder/launch` and `POST /api/runs/{runId}/compute`
+> when every selected pack is excluded now names any retired packs separately and
+> points at migration rather than at re-enabling.
+>
+> The transition is an audit event (`pack_deprecation_disabled`) attributed to
+> `system:pack_deprecation`, and emits `pack.deprecation_disabled` telemetry. Nothing
+> historical is affected: runs, findings, and evidence produced while the pack was
+> supported are untouched and remain retrievable.
 
 > v1.22 — 2.0-C4 T3 (Pack Migration Assist): where a deprecated pack declares a
 > replacement, an org can migrate its saved run configuration onto it — previewed

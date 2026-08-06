@@ -87,6 +87,13 @@ PACK_CERTIFICATION_POLICY_CHANGED = "pack_certification_policy_changed"
 # Telemetry counterparts: "pack.migration_applied" / "pack.migration_reverted".
 PACK_MIGRATION_APPLIED = "pack_migration_applied"
 PACK_MIGRATION_REVERTED = "pack_migration_reverted"
+# 2.0-C4 T4 (AT-845): a pack's announced deprecation grace period ended, so the
+# platform moved it to safe-disabled through 2.0-C1's path. Deliberately NOT
+# `pack_state_changed`: "the vendor retired this pack on the announced date" and "an
+# owner turned this pack off" have different remedies (migrate vs. re-enable), and a
+# reviewer must be able to tell them apart without inferring it from the actor.
+# Telemetry counterpart: "pack.deprecation_disabled" (app/telemetry.py).
+PACK_DEPRECATION_DISABLED = "pack_deprecation_disabled"
 
 # ---------------------------------------------------------------------------
 # Registry — every accepted event type listed here.
@@ -114,6 +121,7 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     PACK_CERTIFICATION_POLICY_CHANGED,
     PACK_MIGRATION_APPLIED,
     PACK_MIGRATION_REVERTED,
+    PACK_DEPRECATION_DISABLED,
 })
 
 # ---------------------------------------------------------------------------

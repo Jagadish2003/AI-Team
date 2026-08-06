@@ -36,6 +36,13 @@ from discovery.packs.platform_capabilities import get_platform_version
 
 logger = logging.getLogger(__name__)
 
+#: 2.0-C4 T4 (AT-845). Imported eagerly (``pack_grace`` pulls in nothing heavy at
+#: module load) so the exception below can name a retired pack without a deferred
+#: import inside a constructor.
+from .pack_grace import (  # noqa: E402
+    EXCLUSION_REASON_GRACE_EXPIRED as _GRACE_EXPIRED_REASON,
+)
+
 
 def record_activation_refused(
     *,
@@ -230,10 +237,26 @@ class AllPacksDisabledError(Exception):
     def __init__(self, excluded: Sequence[ExcludedPack]) -> None:
         self.excluded: List[ExcludedPack] = list(excluded)
         names = ", ".join(item.pack_id for item in self.excluded)
-        super().__init__(
+        message = (
             f"Every selected pack is disabled for this organisation ({names}). "
             f"Re-enable a pack or select a different one before starting a run."
         )
+        # 2.0-C4 T4 (AT-845): a pack retired by an expired grace period is NOT
+        # something the customer can re-enable their way out of, so the generic
+        # "re-enable a pack" advice would send them down a dead end. Name those packs
+        # separately and point at the migration instead. The base sentence is left
+        # intact for the ordinary disabled case.
+        retired = [
+            item.pack_id
+            for item in self.excluded
+            if item.reason == _GRACE_EXPIRED_REASON
+        ]
+        if retired:
+            message += (
+                f" {', '.join(retired)} reached the end of its deprecation grace "
+                f"period and cannot be re-enabled — migrate to the replacement pack."
+            )
+        super().__init__(message)
 
     @property
     def pack_ids(self) -> List[str]:
@@ -255,6 +278,11 @@ def record_packs_excluded(
         return
     from .telemetry import record_event
 
+    # One selection can now be excluded for two different reasons (customer disable
+    # vs. an expired deprecation grace, AT-845), so the top-level reason is derived
+    # from what is actually in the list rather than assumed. A homogeneous exclusion
+    # still reports exactly the single reason it always did.
+    reasons = sorted({item.reason for item in excluded})
     try:
         record_event(
             "pack.execution_skipped",
@@ -262,7 +290,7 @@ def record_packs_excluded(
                 "org_id": org_id,
                 "run_id": run_id,
                 "pack_ids": [item.pack_id for item in excluded],
-                "reason": "pack_disabled",
+                "reason": ",".join(reasons),
                 "excluded": [item.to_dict() for item in excluded],
             },
         )
@@ -280,8 +308,13 @@ def resolve_activatable_packs(
 ) -> ActivationDecision:
     """The single activation resolution both API edges and the runner use.
 
-    Four stages, in this order:
+    Five stages, in this order:
 
+    0. **Retire packs whose deprecation grace has ended** (AT-845). The expiry is
+       DERIVED from the declared dates on every activation, and the pack is moved to
+       safe-disabled through 2.0-C1's own path so its history stays intact. A pack
+       still INSIDE its grace is untouched here and runs exactly as before — that
+       negative is the promise a grace period makes.
     1. **Drop disabled packs** (AT-827). A disabled pack is intentionally turned
        off, so it is excluded rather than refused — and the exclusion is recorded
        loudly (run record, run health, telemetry), never silent.
@@ -334,14 +367,47 @@ def resolve_activatable_packs(
 
         selection = [DEFAULT_PACK]
 
+    # ── Stage 0: deprecation grace expiry (AT-845) ────────────────────────────
+    # Runs BEFORE the disabled check because it FEEDS it: an expired pack is moved to
+    # safe-disabled here, and stage 1's existing exclusion machinery then does the
+    # work. That way retirement reuses the disable path end to end (run record, run
+    # health, telemetry, the all-excluded guard) instead of growing a parallel one.
+    #
+    # The state read below happens AFTER this call so it sees the rows just written —
+    # but the exclusion does not depend on that. `grace_expired` is derived, so a pack
+    # whose disable could not be persisted is still excluded from this run.
+    from .pack_grace import enforce_grace_expiry
+
+    grace_expired = {
+        item.pack_id
+        for item in enforce_grace_expiry(
+            org_id=org_id, pack_ids=selection, run_id=run_id
+        )
+    }
+
     disabled = disabled_pack_ids_safe(org_id)
 
+    # A pack that is BOTH customer-disabled and grace-expired reports the expiry:
+    # it is the reason the pack can never come back, so it is the one the operator
+    # has to act on.
     excluded = [
-        ExcludedPack(pack_id=pack_id, state=_DISABLED, reason="pack_disabled")
+        ExcludedPack(
+            pack_id=pack_id,
+            state=_DISABLED,
+            reason=(
+                _GRACE_EXPIRED_REASON
+                if pack_id in grace_expired
+                else "pack_disabled"
+            ),
+        )
         for pack_id in selection
-        if pack_id in disabled
+        if pack_id in disabled or pack_id in grace_expired
     ]
-    remaining = [pack_id for pack_id in selection if pack_id not in disabled]
+    remaining = [
+        pack_id
+        for pack_id in selection
+        if pack_id not in disabled and pack_id not in grace_expired
+    ]
 
     # An explicit selection that is now entirely disabled cannot fall back to the
     # default pack — that would silently run something the caller never asked for.

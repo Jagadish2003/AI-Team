@@ -4,9 +4,9 @@ Read this before deprecating a pack, changing a deprecation declaration, or writ
 any code that reads a pack's deprecation state.
 
 This document currently covers **T1 (AT-842) — deprecation metadata**,
-**T2 (AT-843) — notice surfacing**, and **T3 (AT-844) — migration assist**. Grace
-behaviour (AT-845) and the audit events (AT-846) are separate sub-tasks that layer on
-these; each adds its own section here as it lands.
+**T2 (AT-843) — notice surfacing**, **T3 (AT-844) — migration assist**, and
+**T4 (AT-845) — grace behaviour**. The consolidated audit view (AT-846) is a separate
+sub-task that layers on these and adds its own section here as it lands.
 
 ---
 
@@ -414,3 +414,135 @@ Contract **v1.22**. Four new routes; no existing response shape changes.
   property that the migrated configuration is what the setup-state endpoint serves.
 * `frontend/src/__tests__/PackMigrationAssist.test.tsx` — the preview → confirm →
   undo flow, the fingerprint round-trip, and the render-nothing paths.
+
+---
+
+# 11. Grace behaviour (T4 / AT-845)
+
+## 11.1 Half of this task is a negative
+
+A grace period is a promise: *nothing changes yet*. If the pack quietly started
+behaving differently the moment the notice appeared, the notice would **be** the
+change rather than a warning about one, and T1–T3 would all be worthless.
+
+So the first half of AT-845 is something the code does **not** do. A pack inside its
+grace is activated, runs its detectors, and has no state row written for it. There is
+no path in `app/pack_grace.py` that can exclude, degrade, or re-version a pack whose
+grace has not ended — and that is asserted directly, not left implied
+(`test_a_pack_in_grace_has_its_state_untouched`).
+
+Three positions are all "still running": in grace, open-ended grace, and not
+deprecated at all. `is_grace_expired` is False for every one of them, so
+"during grace the pack runs normally" is true by construction rather than by a rule
+written somewhere else that could drift.
+
+## 11.2 The transition reuses C1, it does not reinvent it
+
+"Safe-disabled" already means something exact here (2.0-C1 / `pack_state`): the pack
+stops executing in **future** runs, and every historical finding, its evidence, and
+its run records stay intact, retrievable, and labelled. That is precisely what an
+expired grace should do — so `pack_grace` **calls** `pack_state.disable_pack` rather
+than writing its own state.
+
+The never-delete guarantee (2.0-C1 T4 / AT-829) comes along for free: there is no
+delete path here because there is none there. A structural test pins that this module
+never grows one.
+
+## 11.3 Derived first, persisted second
+
+The exclusion is **derived** from the declared dates on every activation, exactly as
+T1's phase is. The persistent `disabled` row is written **as well**, and the ordering
+of authority matters:
+
+| | What it buys |
+|---|---|
+| **Derived** exclusion | The guarantee is unconditional — no job to schedule, nothing that can fail to run, no window in which an expired pack still executes. |
+| **Persisted** row | It becomes visible and auditable — the pack picker, the transition history, and the audit log all show it. This is what the sub-task means by "moves to disabled via C1's safe-disable path". |
+
+So the write is **best-effort**: if it fails, the pack is still excluded and the
+failure is logged (`test_a_failed_state_write_still_excludes_the_pack`). The reverse —
+persist-only — would be a real hazard, because a missed write would silently let a
+superseded pack keep running.
+
+### No background job, deliberately
+
+Nothing sweeps the estate on a timer. A job would add a window between expiry and
+enforcement, a second code path that can disagree with the derived one, and an
+operational dependency for a guarantee that costs nothing to evaluate inline. The
+AT-843 notice already tells a customer the pack no longer runs from the day it
+expires; the first activation after that makes it so.
+
+## 11.4 Where it runs
+
+`pack_activation.resolve_activatable_packs` — the ONE resolution both API edges and
+`discovery/runner.py` call, so a CLI caller cannot walk around it. It is **stage 0**,
+ahead of the 2.0-C1 disabled check, because it *feeds* that check: an expired pack is
+moved to safe-disabled and then stage 1's existing machinery does the work. The run
+record, run health, the telemetry, and the all-excluded guard are all reused rather
+than duplicated.
+
+## 11.5 `deprecation_grace_expired`, not `pack_disabled`
+
+The exclusion carries its own reason, and this is not cosmetic. The two outcomes have
+**opposite remedies**:
+
+| Reason | What happened | What the operator should do |
+|---|---|---|
+| `pack_disabled` | The organisation turned it off | Re-enable it |
+| `deprecation_grace_expired` | The vendor retired it on the announced date | Migrate to the replacement |
+
+Labelling both "disabled" would send someone to a button that cannot help them. The
+`AllPacksDisabledError` message, the run-health pill, and the panel text all branch on
+it, and an unrecognised reason falls back to the neutral wording rather than rendering
+a raw code.
+
+A pack that is **both** customer-disabled and grace-expired reports the expiry: it is
+the reason the pack can never come back, so it is the one that has to be acted on.
+
+## 11.6 A customer cannot un-expire a pack
+
+Re-enabling a retired pack is not refused — nothing here reaches into `pack_state`'s
+API surface — it simply does not change what runs. The next activation derives the
+same expiry and disables it again.
+
+That is the AT-842 boundary holding: deprecation is the registry shipper's dimension,
+pack state is the customer's, and merging them would let a customer "undeprecate" a
+superseded pack.
+
+## 11.7 Failure posture
+
+Fail-soft in **one** direction: if the deprecation position cannot be read, NOTHING is
+treated as expired. A read error must never take a working pack offline — the same
+direction T1 chose for a malformed declaration, and for the same reason.
+
+## 11.8 The audit entry
+
+A real transition emits `pack_deprecation_disabled` (audit) and
+`pack.deprecation_disabled` (telemetry), attributed to `system:pack_deprecation`.
+
+It is a **dedicated event, not `pack_state_changed`**: "the platform retired this pack
+on the announced date" and "an owner turned this pack off" are different facts with
+different remedies, and a reviewer must be able to tell them apart without inferring
+it from the actor string.
+
+An expired pack is re-evaluated on *every* activation, so only the real transition is
+audited — auditing the no-op would bury the one entry that matters under one row per
+run forever.
+
+## 11.9 Contract
+
+Contract **v1.23**. Additive only: a new `reason` value on the existing
+`excludedPacks` / `excluded_packs` field.
+
+## 11.10 Tests
+
+* `backend/tests/unit/test_pack_grace_behaviour.py` — DB-free: the in-grace
+  negatives, the boundary day, the transition onto C1's history, idempotence,
+  re-enable not resurrecting, the derived-exclusion-survives-a-write-failure path,
+  and the structural no-delete check.
+* `backend/tests/contract/test_pack_grace_lifecycle.py` — over HTTP: a launch during
+  grace includes the pack, a launch after it excludes with the right reason, the run
+  record and run health report it, the audit entry is written, and **a run made
+  during grace is byte-identical after the retirement**.
+* `frontend/src/__tests__/PackGraceBehaviour.test.tsx` — that the two remedies stay
+  distinguishable, and that a retirement never reads as an error.

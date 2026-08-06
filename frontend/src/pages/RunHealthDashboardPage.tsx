@@ -39,6 +39,7 @@ import type {
   ConnectorHealthItem,
   ConnectorHealthResponse,
   ContentHealthResponse,
+  ExcludedPackItem,
   HealthPanelId,
   PackHealthItem,
   PackHealthResponse,
@@ -846,6 +847,48 @@ export function packLifecycleLabel(pack: PackHealthItem): {
   };
 }
 
+/**
+ * 2.0-C4 T4 (AT-845): why a selected pack did not run, in two words.
+ *
+ * A pack the organisation disabled and a pack whose deprecation grace period ended
+ * both end up excluded, but the remedies are opposites — re-enable it, versus
+ * migrate off it because it can never come back. Labelling both "disabled" would
+ * send an operator to a button that cannot help them.
+ *
+ * An unrecognised reason falls back to the neutral wording rather than being
+ * rendered raw, so a future backend reason never leaks a snake_case code into the UI.
+ */
+export function excludedPackLabel(reason?: string | null): string {
+  if (reason === "deprecation_grace_expired") return "grace period ended";
+  return "disabled";
+}
+
+/**
+ * The sentence explaining an excluded set, which may mix both reasons at once.
+ * Each group states its own remedy; neither is described in the other's terms.
+ */
+export function excludedPacksDetail(excluded: ExcludedPackItem[]): string {
+  const retired = excluded
+    .filter((item) => item.reason === "deprecation_grace_expired")
+    .map((item) => item.packId);
+  const disabled = excluded
+    .filter((item) => item.reason !== "deprecation_grace_expired")
+    .map((item) => item.packId);
+
+  const parts: string[] = [];
+  if (disabled.length > 0) {
+    parts.push(
+      `${disabled.join(", ")} ${disabled.length === 1 ? "is" : "are"} disabled for this organisation, so ${disabled.length === 1 ? "it" : "they"} did not execute. Re-enable ${disabled.length === 1 ? "it" : "a pack"} to include ${disabled.length === 1 ? "it" : "them"} in future runs.`,
+    );
+  }
+  if (retired.length > 0) {
+    parts.push(
+      `${retired.join(", ")} reached the end of ${retired.length === 1 ? "its" : "their"} deprecation grace period and ${retired.length === 1 ? "was" : "were"} retired, so ${retired.length === 1 ? "it" : "they"} did not execute. Migrate to the replacement pack — re-enabling will not bring ${retired.length === 1 ? "it" : "them"} back.`,
+    );
+  }
+  return parts.join(" ");
+}
+
 function PacksPanel({
   resource,
   retry,
@@ -886,9 +929,7 @@ function PacksPanel({
           // of the generic "no runs yet" message, which would be misleading.
           <EmptyState
             title="No pack executed for this run"
-            detail={`Every selected pack is disabled for this organisation: ${excluded
-              .map((item) => item.packId)
-              .join(", ")}. Re-enable a pack to include it in future runs.`}
+            detail={excludedPacksDetail(excluded)}
           />
         ) : (
           <EmptyState title="No pack executions yet" detail="Pack versions and detector execution will appear after a discovery run uses them." />
@@ -976,14 +1017,16 @@ function PacksPanel({
         <section data-testid="packs-excluded" className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
           <h3 className="text-sm font-semibold text-amber-300">Selected but not run</h3>
           <p className="mt-1 text-xs text-amber-300/90">
-            These packs were selected for this run but are disabled for this
-            organisation, so they did not execute. Findings they produced in earlier
-            runs are unaffected.
+            {excludedPacksDetail(excluded)} Findings they produced in earlier runs are
+            unaffected.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             {excluded.map((item) => (
               <span key={item.packId} data-testid={`pack-excluded-${item.packId}`}>
-                <StatusPill label={`${item.packId} · disabled`} tone="warn" />
+                <StatusPill
+                  label={`${item.packId} · ${excludedPackLabel(item.reason)}`}
+                  tone="warn"
+                />
               </span>
             ))}
           </div>

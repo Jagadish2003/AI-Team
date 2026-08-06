@@ -253,6 +253,21 @@ class PackMigrationPayload(TypedDict, total=False):
     at: NotRequired[str]
 
 
+class PackDeprecationDisabledPayload(TypedDict, total=False):
+    """2.0-C4 T4 (AT-845) — a pack was retired because its grace period ended.
+
+    Emitted once per real transition (an already-disabled pack writes nothing), so
+    support can correlate "this org's runs stopped including cloud_ops at T" with the
+    announced end date rather than inferring it. Pack ids and dates only.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    grace_ends_on: NotRequired[str]
+    replacement_pack_id: NotRequired[str]
+    actor_id: NotRequired[str]
+
+
 class PackVersionPinnedPayload(TypedDict, total=False):
     """2.0-C1 T3 (AT-828) — a run executed a ROLLED-BACK pack version.
 
@@ -1081,6 +1096,9 @@ register_event_type(
 # "customers are backing out of cloud_ops" are separable without parsing a payload.
 register_event_type("pack.migration_applied", PackMigrationPayload)
 register_event_type("pack.migration_reverted", PackMigrationPayload)
+# 2.0-C4 T4 (AT-845): the end of a grace period, enforced. Distinct from
+# "pack.state_changed" because the actor is the platform, not an owner.
+register_event_type("pack.deprecation_disabled", PackDeprecationDisabledPayload)
 # T3-S11-A Sprint 11
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
 # T3-S12-A T7 Sprint 12
