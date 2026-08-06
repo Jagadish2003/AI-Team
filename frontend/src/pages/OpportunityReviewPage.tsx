@@ -90,8 +90,19 @@ export default function OpportunityReviewPage() {
       filtered
         .slice()
         .sort(
-          (a, b) =>
-            b.impact - b.effort - (a.impact - a.effort) || b.impact - a.impact,
+          (a, b) => {
+            const aAdjustedRank = a._ranking?.adjustedRank;
+            const bAdjustedRank = b._ranking?.adjustedRank;
+            if (
+              typeof aAdjustedRank === "number" &&
+              Number.isFinite(aAdjustedRank) &&
+              typeof bAdjustedRank === "number" &&
+              Number.isFinite(bAdjustedRank)
+            ) {
+              return aAdjustedRank - bAdjustedRank;
+            }
+            return b.impact - b.effort - (a.impact - a.effort) || b.impact - a.impact;
+          },
         ),
     [filtered],
   );

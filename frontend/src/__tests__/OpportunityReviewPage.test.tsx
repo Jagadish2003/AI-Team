@@ -297,11 +297,99 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
 
   // ── Decision / optimistic update tests ─────────────────────────────────────
 
-  it('AC6: renders the approve/reject panel without the Release 2 demo flag', () => {
+  it('AC6: renders the approve/reject panel with Arc A UI visible', () => {
     renderPage();
     expect(screen.getByText('Reasoning Override')).toBeTruthy();
     expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
     expect(screen.getByRole('button', { name: /reject/i })).toBeEnabled();
+  });
+
+  it('A3 AC2: renders ranking adjustment reason and contributing links', () => {
+    mockSelectedId = OPP_2.id;
+    mockOpportunities = [
+      OPP_1,
+      {
+        ...OPP_2,
+        _ranking: {
+          schemaVersion: '1.0.0',
+          baseRank: 4,
+          baseImpact: 5,
+          adjustedRank: 2,
+          moved: -2,
+          adjusted: true,
+          caps: {
+            maxScoreFraction: 0.15,
+            maxRankMove: 2,
+          },
+          effectiveImpact: 5.6,
+          appliedDelta: 0.6,
+          requestedDelta: 0.9,
+          wasCapped: true,
+          cappedBy: 'rank_move',
+          hasOutcomeEvidence: true,
+          signalCount: 3,
+          reason: {
+            schemaVersion: '1.0.0',
+            direction: 'up',
+            ranksMoved: 2,
+            baseRank: 4,
+            adjustedRank: 2,
+            decisionCount: 1,
+            decisionsByAction: { accept: 1 },
+            outcomeCount: 1,
+            outcomesByVerdict: { within_band: 1 },
+            hasOutcomeEvidence: true,
+            wasCapped: true,
+            cappedBy: 'rank_move',
+            evidenceStrength: 'moderate',
+            totalSignals: 2,
+            contributingDecisions: [
+              {
+                kind: 'decision',
+                feedbackId: 'fb_001',
+                action: 'accept',
+                opportunityIdentity: 'opp_identity_002',
+                reasonCode: 'valuable',
+                actorId: 'user_001',
+                recordedAt: '2026-08-06T00:00:00Z',
+                href: '/api/learning/feedback/entry/fb_001',
+              },
+            ],
+            contributingOutcomes: [
+              {
+                kind: 'outcome',
+                opportunityIdentity: 'opp_identity_002',
+                verdict: 'within_band',
+                currentRunId: 'run_current',
+                baselineRunId: 'run_baseline',
+                measuredDirection: 'improves',
+                comparabilityVerdict: 'comparable',
+                measuredAt: '2026-08-06T00:00:00Z',
+                href: '/api/opportunity-movement/opp_identity_002',
+              },
+            ],
+            summary: 'Ranked higher: your team accepted similar findings and one recorded movement within band.',
+          },
+        },
+      },
+    ];
+
+    renderPage();
+
+    expect(screen.getByTestId('ranking-adjustment-panel')).toHaveTextContent(
+      /Ranked higher/i,
+    );
+    expect(screen.getByTestId('ranking-adjustment-panel')).toHaveTextContent(
+      /Ordering only/i,
+    );
+    expect(screen.getByRole('link', { name: /Decision: accept/i })).toHaveAttribute(
+      'href',
+      '/api/learning/feedback/entry/fb_001',
+    );
+    expect(screen.getByRole('link', { name: /Outcome: within_band/i })).toHaveAttribute(
+      'href',
+      '/api/opportunity-movement/opp_identity_002',
+    );
   });
 
   it('AC6: Approve button calls setDecision with APPROVED', async () => {

@@ -18,6 +18,7 @@ import ProjectionBandPanel from "../projection/ProjectionBand";
 import ProjectionBasisPanel from "../projection/ProjectionBasis";
 import ProjectionRecommendationPanel from "../projection/ProjectionRecommendation";
 import { showRelease2ArcAUi } from "../../config/releaseFlags";
+import { RankingAdjustmentPanel } from "../learning/RankingAdjustment";
 
 function BulletList({
   items,
@@ -813,6 +814,8 @@ export default function OpportunityDetail({
             <ProjectionAssumptionLedger projection={projection} />
           </>
         )}
+
+        <RankingAdjustmentPanel ranking={opp._ranking} />
 
         {/* T10: Temporal baseline context panel */}
         <BaselineContextPanel enrichment={enrichment} />
