@@ -5,6 +5,7 @@ import {
   PackDeprecationBadge,
   PackDeprecationDetail,
 } from '../components/common/PackDeprecationNotice';
+import PackMigrationAssist from '../components/common/PackMigrationAssist';
 import {
   certificationsByPackId,
   deprecationsByPackId,
@@ -534,6 +535,14 @@ export default function DiscoveryPlanPage({
                     replacementLabel={packDeprecations[selectedAnalysisPack.id].replacementLabel}
                     daysRemaining={packDeprecations[selectedAnalysisPack.id].daysRemaining}
                     testId="analysis-pack-deprecation"
+                  />
+                  {/* 2.0-C4 T3 (AT-844 / AC2): the PATH, beside the notice that
+                      announced the problem. Renders nothing unless a replacement is
+                      declared AND this org's saved configuration actually selects
+                      the pack — see PackMigrationAssist. */}
+                  <PackMigrationAssist
+                    packId={selectedAnalysisPack.id}
+                    testId="analysis-pack-migration"
                   />
                 </div>
               )}

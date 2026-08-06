@@ -79,6 +79,7 @@ from .routes_usage_report import register_usage_report_routes
 from .routes_usage_summary import register_usage_summary_routes
 from .routes_ingestion import register_ingestion_routes
 from .routes_pack_certification import register_pack_certification_routes
+from .routes_pack_migration import register_pack_migration_routes
 from .routes_pack_state import register_pack_state_routes
 from .routes_runbook_matches import register_runbook_match_routes
 from .routes_secops_evidence import register_secops_evidence_routes
@@ -367,6 +368,9 @@ register_secops_evidence_routes(app)
 register_pack_state_routes(app)
 # 2.0-C2 T2 (AT-832): certification review checklist + append-only review trail.
 register_pack_certification_routes(app)
+# 2.0-C4 T3 (AT-844): org-config migration off a deprecated pack — preview
+# (analyst+), Owner-confirmed apply, and a reversible append-only ledger.
+register_pack_migration_routes(app)
 
 origins = [
     o.strip()

@@ -230,6 +230,29 @@ class PackCertificationPolicyRefusedPayload(TypedDict, total=False):
     violations: NotRequired[list]
 
 
+class PackMigrationPayload(TypedDict, total=False):
+    """2.0-C4 T3 (AT-844) — an org-config pack migration was applied or reverted.
+
+    The append-only migration ledger is the domain record; this event places the
+    transition in the telemetry stream so support can correlate "this org's runs
+    changed pack at T" with the deprecation that prompted it. Ids, field NAMES, and
+    counts only — never the configuration values themselves, and never the operator's
+    free-text reason.
+    """
+    org_id: NotRequired[str]
+    migration_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    replacement_pack_id: NotRequired[str]
+    fields: NotRequired[list]
+    change_count: NotRequired[int]
+    unmapped_count: NotRequired[int]
+    warnings: NotRequired[list]
+    forced: NotRequired[bool]
+    reverts_migration_id: NotRequired[str]
+    actor_id: NotRequired[str]
+    at: NotRequired[str]
+
+
 class PackVersionPinnedPayload(TypedDict, total=False):
     """2.0-C1 T3 (AT-828) — a run executed a ROLLED-BACK pack version.
 
@@ -1053,6 +1076,11 @@ register_event_type(
 register_event_type(
     "pack.certification_policy_refused", PackCertificationPolicyRefusedPayload
 )
+# 2.0-C4 T3 (AT-844): org-config migration off a deprecated pack. Two event types
+# rather than one with a direction field, so "customers are moving to cloud_ops" and
+# "customers are backing out of cloud_ops" are separable without parsing a payload.
+register_event_type("pack.migration_applied", PackMigrationPayload)
+register_event_type("pack.migration_reverted", PackMigrationPayload)
 # T3-S11-A Sprint 11
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
 # T3-S12-A T7 Sprint 12

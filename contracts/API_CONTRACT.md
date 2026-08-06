@@ -1,6 +1,68 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.21
-Date: 2026-08-03
+Version: v1.22
+Date: 2026-08-06
+
+> v1.22 — 2.0-C4 T3 (Pack Migration Assist): where a deprecated pack declares a
+> replacement, an org can migrate its saved run configuration onto it — previewed
+> first, applied only on confirmation, and reversible. Four entirely NEW routes; no
+> existing response shape changes, so a pre-v1.22 consumer is unaffected.
+>
+> **New routes** (all org-scoped from the authenticated context; a request body never
+> carries an org id):
+> - `GET /api/packs/{packId}/migration/preview` (**analyst+**) → `PackMigrationPlan`.
+>   Writes nothing.
+> - `POST /api/packs/{packId}/migration/apply` (**owner**) →
+>   `{ confirm: true, fingerprint?, reason? }` → `PackMigrationRecord`.
+> - `POST /api/packs/migrations/{migrationId}/revert` (**owner**) →
+>   `{ force?, reason? }` → `PackMigrationRecord`.
+> - `GET /api/packs/migrations` (**analyst+**) →
+>   `{ orgId, migrations: PackMigrationRecord[] }`, newest first.
+>
+> **New shape — `PackMigrationPlan`:**
+> `{ orgId, packId, packName, replacementPackId, replacementPackName, available,
+> applicable, reason, reasonCode, changes[], unmapped[], warnings[], deprecation
+> (`PackDeprecationNotice | null`), evaluatedOn, fingerprint }`.
+>
+> `reason` is the sentence to display; `reasonCode`
+> (`"not_deprecated" | "no_replacement_declared"`, empty when a migration IS
+> available) is the same thing machine-readable, so a consumer branches on the code
+> rather than matching on prose.
+>
+> Two words carry the meaning, and they are not the same word. `available` is "a
+> migration exists" (the pack is deprecated AND names a registered replacement);
+> `applicable` is "and this org's configuration actually references the pack".
+> **`available: false` is a 200 with a `reason`, not an error** — a surface has to
+> explain "this pack names no replacement" to the customer.
+>
+> - `changes[]`: `{ surface: "stack_builder_setup_state", field, previousValue,
+>   newValue, description }`. `previousValue` is carried so the migration can be
+>   reverted to exactly what was there. Migrated fields are the SELECTION fields
+>   only: `packId`, `packIds`, `templateId`, `templateIds`.
+> - `unmapped[]`: `{ surface, field, value, reason:
+>   "no_replacement_template" | "ambiguous_replacement_template", detail }` — a
+>   reference deliberately left alone. Reported, never silently skipped.
+> - `warnings[]`: `{ code, detail }` — `replacement_pack_disabled`,
+>   `replacement_pack_incompatible`, `template_contributions_need_review`,
+>   `grace_period_expired`, `deprecation_declaration_issues`. Advisory; none blocks.
+>
+> **New shape — `PackMigrationRecord`:**
+> `{ id, kind: "apply" | "revert", orgId, packId, replacementPackId, changes[],
+> unmapped[], warnings[], reason, actorId, at, fingerprint, revertsMigrationId,
+> reverted, revertedAt, revertedBy, changed }`. The ledger is APPEND-ONLY: a revert
+> adds a row and `reverted` on the original is derived from it, so both halves of the
+> decision stay readable.
+>
+> **`fingerprint` ties the preview to the apply.** Post back the fingerprint of the
+> plan that was displayed; if the configuration or the declaration moved in between,
+> the apply is refused with 409 rather than applying a change set nobody saw.
+>
+> **Status codes:** 400 `confirm` not true · 404 unknown pack or migration id ·
+> 409 nothing to migrate / stale fingerprint / already reverted / the target fields
+> were edited after the migration (use `force` to restore anyway) · 200 including an
+> apply with nothing to change, which reports `changed: false` (idempotent).
+>
+> A migration only affects FUTURE runs. Historical runs, findings, and evidence keep
+> the pack they were produced with; nothing is rewritten and nothing is deleted.
 
 > v1.21 — 2.0-C4 T2 (Pack Deprecation Notice Surfacing): a pack that is being
 > superseded now carries a notice at run configuration, in run health, and on its

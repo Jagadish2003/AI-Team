@@ -3,10 +3,10 @@
 Read this before deprecating a pack, changing a deprecation declaration, or writing
 any code that reads a pack's deprecation state.
 
-This document currently covers **T1 (AT-842) — deprecation metadata** and
-**T2 (AT-843) — notice surfacing**. Migration assist (AT-844), grace behaviour
-(AT-845), and the audit events (AT-846) are separate sub-tasks that layer on these;
-each adds its own section here as it lands.
+This document currently covers **T1 (AT-842) — deprecation metadata**,
+**T2 (AT-843) — notice surfacing**, and **T3 (AT-844) — migration assist**. Grace
+behaviour (AT-845) and the audit events (AT-846) are separate sub-tasks that layer on
+these; each adds its own section here as it lands.
 
 ---
 
@@ -277,3 +277,140 @@ field is absent or null on current responses.
 * `frontend/src/__tests__/PackDeprecationSurfacing.test.tsx` — the badge and detail
   components, the findings provenance row, the run-health lifecycle pills, and the
   API mapping.
+
+---
+
+# 10. Migration assist (T3 / AT-844)
+
+## 10.1 Why notice is not enough
+
+T1 lets a pack say it is superseded and name what replaces it. T2 shows that
+everywhere the customer looks. Both are *information*, and the parent story is
+explicit that a superseded pack must leave the customer with **a path** — "not a
+broken configuration". Telling someone their configuration will stop working and
+leaving them to rebuild it by hand is a slower version of the failure this whole
+story exists to prevent.
+
+So where a replacement is declared, the platform offers to make the change: rewrite
+this org's saved run configuration so its pack and template selections point at the
+replacement.
+
+## 10.2 Three properties, in this order
+
+| Step | What it guarantees |
+|---|---|
+| **Preview** (`preview_migration`) | The exact field-level change set, computed with **no writes**. |
+| **Apply on confirmation** (`apply_migration`) | Explicit `confirm`, plus the plan's `fingerprint` — so what is applied is provably what was displayed. |
+| **Revert** (`revert_migration`) | Every change records its **previous value**, so the configuration is restored verbatim. |
+
+The fingerprint is what turns "previewed before applying" from a convention into a
+property. It is a digest of the change set; if the configuration or the declaration
+moved between preview and confirmation, the apply is **refused (409)** instead of
+quietly applying a different change set. A caller that omits it is trusted, which is
+deliberate — a CLI operator scripting a bulk migration has no screen to have seen.
+
+**Revert restores, it does not invert.** Mapping the replacement back to the
+deprecated pack would also drag back a selection that pointed at the replacement all
+along. Restoring the recorded previous value is the only version of "reversible" that
+is correct for a customer who was already partly migrated.
+
+## 10.3 What is migrated
+
+One surface: the org's saved Stack Builder setup state (`kv` row
+`stack_builder_state:{org_id}`), and within it only the **selection** fields —
+`packId`, `packIds`, `templateId`, `templateIds`.
+
+`templateContributions` is deliberately **not** rewritten. It records which systems a
+template contributed to *this* configuration; re-keying it onto the replacement
+template would attribute one template's choices to another. That is inventing
+provenance, not migrating a selection — so a remapped template that had contributions
+raises a `template_contributions_need_review` warning and the customer decides.
+
+Nothing else moves either. Run records, findings, and evidence keep the pack they
+were produced with (2.0-C1 T4), and per-org lifecycle rows (disable, version pin) are
+the *customer's* dimension: a stale pin on a pack that is no longer selected is inert,
+and clearing it would erase a decision they made.
+
+## 10.4 Template remapping never guesses
+
+A template is registry-owned and declares its pack, so a template selection can only
+move to another **registered** template that declares the replacement. The resolution
+is the same discipline as `runtime_structure_resolution.py`:
+
+| Candidates | Outcome |
+|---|---|
+| exactly one | remap |
+| zero | left selected, reported as `no_replacement_template` |
+| two or more | left selected, reported as `ambiguous_replacement_template`, naming them |
+
+Force-picking one of several is how a migration quietly changes what a customer's runs
+look for. The pack selection still migrates in every case, so the run uses the
+replacement either way — what is withheld is only the guess.
+
+Everything left alone is **named** in `unmapped[]`. A customer told "2 changes
+applied" who is not told a template still points at the old pack has been given a
+false picture of their own configuration.
+
+## 10.5 Warnings, which never block
+
+`warnings[]` states what is true about the destination before the customer commits:
+the replacement is disabled for this org, or fails the 2.0-C1 compatibility gate, or
+the grace period has already ended, or the declaration itself has defects. All are
+advisory and all are fail-soft — a lifecycle or compatibility read that fails omits
+its warning rather than refusing the migration. A missing advisory is a smaller harm
+than denying a customer the path out of a deprecated pack.
+
+## 10.6 Failure posture
+
+Split the same way as `pack_state`: **reads answer, writes raise.**
+
+"This pack is not deprecated" and "no replacement is declared" are answers a UI has
+to explain, so `preview_migration` returns `available: false` with a reason (HTTP
+200) rather than raising. An `apply` in that state *is* an error (409) — the caller
+asked for something that cannot be done. An apply with nothing to change is a
+**no-op**: no write, no ledger row, no audit event, `changed: false`, exactly like a
+no-op pack-state transition, which is what makes re-applying safe.
+
+An unknown pack id is a 404 rather than resolving to the default pack — the same
+strictness as `pack_state`, and for the same reason: migrating `service_cloud`
+because someone typo'd a pack id would be a serious foot-gun.
+
+## 10.7 The ledger
+
+Applies and reverts both **append** to `pack_migrations:{org_id}`. A revert never
+edits or removes the row it undoes; "has this been reverted?" is derived from whether
+a later revert references it. That is what lets AT-846 read "what did this org do,
+and when" off one trail.
+
+It lives in `kv` rather than a new table on purpose. `kv` already holds the setup
+state being migrated, and it is in `history_retention.PROTECTED_TABLES` — so the
+ledger inherits the never-delete guarantee (2.0-C1 T4) without a schema migration.
+
+## 10.8 Roles, and where the gate sits
+
+| Operation | Role | Why |
+|---|---|---|
+| Preview | analyst+ | It quotes the org's saved configuration back. The *notice* stays viewer+ — anyone who can select a pack must be able to see it is going away. |
+| Apply / revert | **owner** | It rewrites what every future run for the whole organisation is built from — the same bar as disabling a pack or connecting a connector. |
+| History | analyst+ | Same reasoning as the preview. |
+
+Both writes emit an audit event (`pack_migration_applied` /
+`pack_migration_reverted`) and telemetry (`pack.migration_applied` /
+`pack.migration_reverted`), carrying field NAMES and counts only — the values live on
+the ledger, which is the domain record. This discharges this transition's share of
+AC4; AT-846 owns the consolidated audit view.
+
+## 10.9 Contract
+
+Contract **v1.22**. Four new routes; no existing response shape changes.
+
+## 10.10 Tests
+
+* `backend/tests/unit/test_pack_migration.py` — DB-free: preview/apply/revert,
+  idempotence, the fingerprint guard, conservative template resolution, org
+  isolation, and the structural no-delete-path check.
+* `backend/tests/contract/test_pack_migration_api.py` — over HTTP: the role
+  boundary, the status codes a UI branches on, the audit entries, and the end-to-end
+  property that the migrated configuration is what the setup-state endpoint serves.
+* `frontend/src/__tests__/PackMigrationAssist.test.tsx` — the preview → confirm →
+  undo flow, the fingerprint round-trip, and the render-nothing paths.
