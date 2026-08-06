@@ -182,6 +182,38 @@ class TestAC1SignalsIngestViaExistingRails:
         _ingestor([SUB_A], alerts=client).ingest_alerts(token="T")
         assert [c["sub"] for c in client.calls] == [SUB_A]
 
+    def test_each_stream_hints_its_own_surface(self, fx):
+        """Each stream's ``scope_of`` must hint ITS surface, not the other one.
+
+        ``app_insights_scope`` branches on ``surface`` to choose the classifier —
+        ``classify_alert_signal`` for Azure Monitor, ``classify_health_signal`` for
+        Service Health. So a stream hinting the wrong surface would run the wrong
+        classifier and stamp the wrong ``signal_kind``/``event_class`` on records
+        ``detect_surface`` cannot resolve from shape alone. Both streams are correct;
+        this pins them, because the mistake is silent — the record still ingests and
+        still carries a plausible kind.
+        """
+        alerts = _in_scope_cases(fx["positive_alerts"])
+        alert_result = _ingestor([SUB_A], alerts=FakeAlertsClient({SUB_A: alerts})).ingest_alerts(
+            token="T"
+        )
+        alert_scopes = [r["app_insights"] for r in alert_result.records if "app_insights" in r]
+        assert alert_scopes, "the alerts stream produced no scoped record"
+        for scope in alert_scopes:
+            assert scope["surface"] == ai.SURFACE_AZURE_MONITOR
+            assert scope["signal_kind"] != ai.SIGNAL_HEALTH_TRANSITION
+
+        events = _in_scope_cases(fx["positive_health_events"])
+        health_result = _ingestor(
+            [SUB_A], health=FakeStreamClient({SUB_A: events})
+        ).ingest_service_health(token="T")
+        health_scopes = [r["app_insights"] for r in health_result.records if "app_insights" in r]
+        assert health_scopes, "the health stream produced no scoped record"
+        for scope in health_scopes:
+            assert scope["surface"] == ai.SURFACE_AZURE_SERVICE_HEALTH
+            # The health classifier's only kind — proof the alert classifier did not run.
+            assert scope["signal_kind"] == ai.SIGNAL_HEALTH_TRANSITION
+
 
 # ── D3-AC2 — raw telemetry and analytics are NOT ingested ───────────────────────
 
@@ -221,6 +253,24 @@ class TestAC2TelemetryAndAnalyticsAreNeverIngested:
             _ingestor([SUB_A], alerts=client).ingest_alerts(token="T")
         assert any("out-of-scope" in r.message or "out-of-scope" in r.getMessage()
                    for r in caplog.records)
+
+    def test_the_exclusion_warning_is_one_per_poll_carrying_the_count(self, fx, caplog):
+        """Loud, but not proportional to the telemetry in the feed.
+
+        An excluded record never advances the checkpoint, so a telemetry-heavy
+        subscription re-reads the same records every run. A per-RECORD warning made
+        that repeat unbounded in the log while adding nothing: the count is the
+        actionable fact, and it is on the run status too.
+        """
+        page = list(fx["negative_excluded_telemetry"])
+        assert len(page) > 1, "fixture must hold several excluded records to be meaningful"
+        client = FakeAlertsClient({SUB_A: page})
+        with caplog.at_level("WARNING"):
+            result = _ingestor([SUB_A], alerts=client).ingest_alerts(token="T")
+        dropped = [r for r in caplog.records if "out-of-scope" in r.getMessage()]
+        assert len(dropped) == 1, f"expected one summary warning, got {len(dropped)}"
+        assert str(len(page)) in dropped[0].getMessage()
+        assert result.subscription_status[SUB_A]["telemetry_excluded"] == len(page)
 
     def test_excluded_records_do_not_advance_a_checkpoint(self, fx):
         """An excluded record is not data this connector processed, so it must not
@@ -322,6 +372,61 @@ class TestAC2TelemetryAndAnalyticsAreNeverIngested:
         assert not ai.is_allowed_arm_path(telemetry_path)
         with pytest.raises(ai.AppInsightsScopeViolation):
             ai.assert_read_allowed(f"https://management.azure.com/subscriptions/s/{telemetry_path}")
+
+
+class TestArmAllowListIsEnforcedAtRuntime:
+    """``ALLOWED_ARM_PATHS`` binds the live request path, not only the AST test.
+
+    Before this, ``assert_read_allowed`` consulted ``EXCLUDED_ENDPOINT_MARKERS``
+    only, so the allow-list was enforced purely at build time over string literals
+    in ``discovery/ingest/azure_*.py``. An ARM read that no marker happened to match
+    was permitted at runtime, and the two constants could drift into describing
+    different boundaries. Both are now one predicate over one set.
+    """
+
+    @pytest.mark.parametrize("path", [
+        "providers/microsoft.security/alerts",              # a plausible next ARM read
+        "providers/microsoft.insights/components/app/events",
+        "providers/microsoft.web/sites/app/config",
+        "providers/microsoft.insights/scheduledqueryrules",
+    ])
+    def test_an_arm_path_outside_the_permitted_set_is_refused(self, path):
+        """The gap this closes: not on the deny-list, so previously allowed."""
+        for marker in ai.EXCLUDED_ENDPOINT_MARKERS:
+            assert marker not in path, f"{path} is caught by the deny-list, not this rule"
+        with pytest.raises(ai.AppInsightsScopeViolation):
+            ai.assert_read_allowed(f"https://management.azure.com/subscriptions/s/{path}")
+
+    def test_the_refusal_names_the_permitted_set(self):
+        with pytest.raises(ai.AppInsightsScopeViolation) as exc:
+            ai.assert_read_allowed(
+                "https://management.azure.com/subscriptions/s/providers/microsoft.security/alerts"
+            )
+        assert "ALLOWED_ARM_PATHS" in str(exc.value)
+
+    def test_every_url_the_live_clients_build_is_still_allowed(self):
+        """No legitimate read regresses: the three real client URLs must pass.
+
+        Reads the path constants out of the shipped clients rather than restating
+        them, so a client re-pointed at a new surface fails here instead of passing
+        against a copy that no longer matches what the code calls.
+        """
+        from discovery.ingest import azure_admin_events as aae
+        from discovery.ingest import azure_alerts as aal
+
+        for path in (aal._ALERTS_PATH, aae._ACTIVITY_LOG_PATH, aae._SERVICE_HEALTH_PATH):
+            url = f"https://management.azure.com/subscriptions/sub-a/{path}"
+            ai.assert_read_allowed(url)  # must not raise
+            assert ai.is_allowed_arm_path(url)
+
+    def test_a_non_arm_url_is_untouched_by_the_allow_list(self):
+        """The allow-list governs ARM surfaces, not which hosts may be reached.
+
+        The token exchange carries no ``/providers/`` path and must stay unaffected,
+        or enforcing the allow-list would break authentication.
+        """
+        ai.assert_read_allowed("https://login.microsoftonline.com/tenant/oauth2/v2.0/token")
+        ai.assert_read_allowed("https://management.azure.com/subscriptions/sub-a")
 
 
 # ── explicit reference only (the foundation D3 T3's AC3 builds on) ───────────────
