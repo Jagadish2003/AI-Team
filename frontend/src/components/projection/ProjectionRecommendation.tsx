@@ -1,5 +1,9 @@
 import React from 'react';
-import type { InterventionProjection, ProjectionRecommendation } from '../../types/enrichment';
+import type {
+  InterventionProjection,
+  ProjectionRecommendation,
+  ProjectionRecommendationPart,
+} from '../../types/enrichment';
 
 /**
  * 2.0-A1 T5 — recommendation text in intervention language.
@@ -9,16 +13,97 @@ import type { InterventionProjection, ProjectionRecommendation } from '../../typ
  * which measured signal should move, and the band and horizon — no guarantees,
  * no point estimates.
  *
- * The text is composed on the BACKEND and travels on the projection, so this
- * module only renders it. Nothing here writes recommendation copy: a screen that
- * composed its own sentence would be one more place a savings claim could
- * appear, and the vocabulary guard only covers what the backend emits.
+ * New projections carry backend-composed copy. Older stored projections may
+ * predate that field, so this module has a conservative fallback built only
+ * from projection facts and still avoids guaranteed-savings language.
  */
 
 export function projectionRecommendation(
   projection: InterventionProjection | null | undefined,
 ): ProjectionRecommendation | null {
-  return projection?.recommendation ?? null;
+  return projection?.recommendation ?? fallbackRecommendation(projection);
+}
+
+function formatCount(value: number | null | undefined): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value);
+}
+
+function observedScope(projection: InterventionProjection): string {
+  const instances = formatCount(
+    projection.basis?.observedInstances ?? projection.bandWidthInputs?.sampleSize,
+  );
+  if (instances) return `${instances} recurring instances`;
+  const population = formatCount(projection.basis?.observedPopulation);
+  if (population) return `${population} observed records`;
+  return 'the identified recurring cases';
+}
+
+function signalLabel(projection: InterventionProjection): string {
+  return (
+    projection.movementSignal?.conceptLabel?.trim() ||
+    projection.basis?.signalUsed?.conceptLabel?.trim() ||
+    projection.movementSignal?.signalName?.trim() ||
+    projection.basis?.signalUsed?.signalName?.trim() ||
+    'the measured signal'
+  );
+}
+
+function fallbackRecommendation(
+  projection: InterventionProjection | null | undefined,
+): ProjectionRecommendation | null {
+  if (!projection) return null;
+
+  const scope = observedScope(projection);
+  const manualStep = projection.manualStepReplaced?.trim() || 'the repeated manual step';
+  const band = projection.magnitudeBand?.label?.trim();
+  const horizon = Number.isFinite(projection.observationHorizonDays)
+    ? `${projection.observationHorizonDays}-day horizon`
+    : 'the shown observation horizon';
+  const signal = signalLabel(projection);
+
+  const parts: ProjectionRecommendationPart[] = [
+    {
+      id: 'agent_handles',
+      label: 'What the agent handles',
+      text: `The agent handles ${manualStep}.`,
+    },
+    {
+      id: 'cases_in_scope',
+      label: 'Cases in scope',
+      text: `In scope: ${scope}.`,
+    },
+    {
+      id: 'remains_manual',
+      label: 'What remains manual',
+      text: 'Remaining manual: records whose handling does not match a known pattern.',
+    },
+    {
+      id: 'signal_expected_to_move',
+      label: 'Signal expected to move',
+      text: `The signal expected to move is ${signal}.`,
+    },
+    {
+      id: 'band_and_horizon',
+      label: 'Projection band and horizon',
+      text: band
+        ? `Projected movement is ${band}, observable over about ${horizon}.`
+        : `No material movement band is projected over ${horizon}.`,
+    },
+  ];
+
+  const headline = `Agent handles ${scope}; the residual requires judgement (records whose handling does not match a known pattern).`;
+  return {
+    schemaVersion: 'ui-fallback',
+    headline,
+    parts,
+    nextSteps: [
+      `Confirm with the owning team that ${scope} match the pattern described here.`,
+      'Agree the boundary for records whose handling does not match a known pattern before build.',
+      `Record the current value of ${signal} as the baseline to re-measure after the agent is live.`,
+    ],
+    summary: [headline, ...parts.map((part) => part.text)].join(' '),
+  };
 }
 
 export function recommendationHeadline(

@@ -42,7 +42,8 @@ from pydantic import BaseModel
 from .db import org_connector_get, org_connector_set
 from .middleware.tenancy import get_current_org_id
 from .security import require_auth
-from .rbac import require_role
+from .connector_scope_audit import audit_scope_selection
+from .rbac import _get_user_id_from_token, require_role
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +142,7 @@ def register_confluence_spaces_routes(app: FastAPI) -> None:
         summary="Select which Confluence spaces AgentIQ reads for this workspace",
         tags=["Integration Hub"],
     )
-    def set_confluence_spaces(body: ConfluenceSpacesBody) -> ConfluenceSpacesResponse:
+    def set_confluence_spaces(body: ConfluenceSpacesBody, token: str = Depends(require_auth)) -> ConfluenceSpacesResponse:
         org_id = get_current_org_id()
         connector = org_connector_get(org_id, "confluence")
         if not connector:
@@ -165,8 +166,18 @@ def register_confluence_spaces_routes(app: FastAPI) -> None:
             if key in available_keys and key not in validated:
                 validated.append(key)
 
+        previous_scope = connector.get("spaces")
         connector["spaces"] = validated
         org_connector_set(org_id, "confluence", connector)
+        # 2.0-D4 T1 (AC1): scope pin/unpin is a data-access grant.
+        audit_scope_selection(
+            connector_id="confluence",
+            scope_key="spaces",
+            previous=previous_scope,
+            selected=validated,
+            actor_id=_get_user_id_from_token(token),
+            first_selection=not isinstance(previous_scope, list),
+        )
 
         return ConfluenceSpacesResponse(
             available=[ConfluenceSpace(**s) for s in available],

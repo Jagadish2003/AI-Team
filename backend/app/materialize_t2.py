@@ -436,6 +436,25 @@ def run_trackb_and_persist(
                 if isinstance(payload_packs, list):
                     run["packs"] = payload_packs
 
+        # 2.0-D4 T3 (AC4): the per-run version record — what a support engineer needs
+        # six months later to answer "today's run of apparently the same data
+        # produces different findings; what changed?". Reads the pack stamp above
+        # rather than recomputing it, so there is one source of truth. Never fatal:
+        # a version record exists to explain a run and must not be the reason one
+        # fails.
+        try:
+            from .run_reproducibility import build_reproducibility_record
+
+            run["reproducibility"] = build_reproducibility_record(
+                run,
+                org_id=run.get("orgId") or run.get("org_id"),
+                connector_ids=[str(s) for s in (systems or [])],
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "run %s: reproducibility record unavailable", run_id, exc_info=True
+            )
+
         per_system, succeeded, ingest_errors = _ingest_summary_from_payload(
             payload, systems
         )

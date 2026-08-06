@@ -76,6 +76,7 @@ from .routes_retrieval import register_retrieval_routes
 from .routes_cloud_ops_signatures import register_cloud_ops_signature_routes
 from .routes_run_health import register_run_health_routes
 from .routes_auth import register_auth_routes
+from .routes_audit_export import register_audit_export_routes
 from .routes_license import register_license_routes
 from .routes_usage_report import register_usage_report_routes
 from .routes_usage_summary import register_usage_summary_routes
@@ -91,10 +92,19 @@ from .routes_outcomes import register_outcome_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
+from .middleware.audit import (
+    CONNECTOR_CONFIGURED,
+    CONNECTOR_CONNECTED,
+    CONNECTOR_DISCONNECTED,
+    EVIDENCE_DECISION_RECORDED,
+    OPPORTUNITY_DECISION_RECORDED,
+    OUTCOME_SUCCESS,
+    log_event as audit_log_event,
+)
 from .middleware.tenancy import get_current_org_id, register_tenancy
 from .middleware.license_gate import register_license_gate
 from .retrieval.default_resolvers import register_default_content_resolvers
-from .rbac import require_role, seed_owner
+from .rbac import _get_user_id_from_token, require_role, seed_owner
 
 _DEV_USER = os.getenv("DEV_JWT", "dev-token-change-me")
 _DEV_ORG = "default"
@@ -369,6 +379,8 @@ register_run_health_routes(app)
 register_auth_routes(app)
 # LIC-1 / T6 (AT-347): Owner-only license status + update-key admin routes.
 register_license_routes(app)
+# 2.0-D4 T2 — Owner-only signed audit export (period-scoped, org-scoped in SQL).
+register_audit_export_routes(app)
 # R-1.9.1-L2 / T3 (AT-695): Owner-only signed usage-report generator route.
 register_usage_report_routes(app)
 # R-1.9.1-L2 / T5 (AT-697): Owner-only pre-invoice usage-summary route (AC6).
@@ -512,7 +524,11 @@ def list_connectors() -> List[Dict[str, Any]]:
     "/api/connectors/{connector_id}/connect",
     dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
-def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+def connect_connector(
+    connector_id: str,
+    body: Dict[str, Any],
+    token: str = Depends(require_auth),
+) -> Dict[str, Any]:
     org_id = get_current_org_id()
     status = body.get("status", "connected")
     # R191-R1 T5 (AT-726 / AC2): a roadmap connector (SAP/D365 and any tile whose
@@ -553,6 +569,35 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
         was_connected=was_connected,
         now_connected=status == license_limits.CONNECTED_STATUS,
     )
+    # 2.0-D4 T1 (AC1): D4 names connector create/edit/delete. Delete was audited
+    # and the OAuth CALLBACK emitted connector_connected, but this direct status
+    # toggle — the path a non-OAuth connector actually takes — recorded nothing.
+    # The event follows the resulting state rather than the route name, so a
+    # toggle to a non-connected status reads as a disconnect and matches what the
+    # OAuth revoke path emits for the same outcome.
+    # Two explicit calls rather than one with a conditional event type: the
+    # conformance sweep resolves each log_event call site's type statically, and
+    # a type chosen by an expression is exactly the case it cannot verify.
+    if status == license_limits.CONNECTED_STATUS:
+        audit_log_event(
+            CONNECTOR_CONNECTED,
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+            target=connector_id,
+            status=status,
+            was_connected=was_connected,
+            outcome=OUTCOME_SUCCESS,
+        )
+    else:
+        audit_log_event(
+            CONNECTOR_DISCONNECTED,
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+            target=connector_id,
+            status=status,
+            was_connected=was_connected,
+            outcome=OUTCOME_SUCCESS,
+        )
     return c
 
 
@@ -563,6 +608,7 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
 def configure_connector(
     connector_id: str,
     body: Optional[Dict[str, Any]] = None,
+    token: str = Depends(require_auth),
 ) -> Dict[str, Any]:
     org_id = get_current_org_id()
     c = org_connector_get(org_id, connector_id)
@@ -584,6 +630,19 @@ def configure_connector(
     c["configured"] = True
     c["lastSynced"] = "Just now"
     org_connector_set(org_id, connector_id, c)
+    # 2.0-D4 T1 (AC1): the "edit" half of D4's connector create/edit/delete. The
+    # payload names WHICH settings the request changed, never their values — the
+    # body can carry customer configuration, and an audit row is not the place to
+    # copy it. cmdb_class_scope is recorded by name because narrowing or widening
+    # it changes what ServiceNow data a run may read.
+    audit_log_event(
+        CONNECTOR_CONFIGURED,
+        connector_id=connector_id,
+        user_id=_get_user_id_from_token(token),
+        target=connector_id,
+        settings_changed=sorted(body.keys()) if isinstance(body, dict) else [],
+        outcome=OUTCOME_SUCCESS,
+    )
     return c
 
 
@@ -759,6 +818,15 @@ def set_evidence_decision(
     }
     audit = run_kv_get("audit", run_id, default_audit())
     run_kv_set("audit", run_id, [audit_event, *audit])
+    # 2.0-D4 T1: same reasoning as the opportunity override — the run-scoped entry
+    # is a view, the audit_log row is the durable record of the human decision.
+    audit_log_event(
+        EVIDENCE_DECISION_RECORDED,
+        run_id=run_id,
+        target=evidence_id,
+        outcome=OUTCOME_SUCCESS,
+        decision=decision,
+    )
     return e
 
 
@@ -828,6 +896,19 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
     # that offset impact, making the cap vary by opportunity id for a purely
     # cosmetic reason. The cap must be a fraction of the REAL base score.
     adjusted = _apply_learned_ranking(opps)
+    try:
+        from .projection_store import projection_for_opportunity
+
+        org_id = get_current_org_id()
+        projected = []
+        for opp in adjusted:
+            projection = projection_for_opportunity(opp, run_id, org_id=org_id)
+            if projection and not isinstance(opp.get("projection"), dict):
+                opp = {**opp, "projection": projection}
+            projected.append(opp)
+        adjusted = projected
+    except Exception as exc:  # noqa: BLE001 - projection fallback is advisory
+        logger.warning("Stored projection fallback not applied: %s", exc)
     return scrub_opportunity_narratives(
         apply_run_terminology([with_display(opp) for opp in adjusted], run_id)
     )
@@ -1028,6 +1109,21 @@ def set_opp_override(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
     }
     audit = run_kv_get("audit", run_id, default_audit())
     run_kv_set("audit", run_id, [event, *audit])
+    # 2.0-D4 T1: the run-scoped entry above feeds the run's audit VIEW, but it lives
+    # in the `audit` run-KV blob, which materialization rewrites and replay resets —
+    # so it is not a durable record that a human made this call. D4 names "analyst
+    # decisions" as a state-changing action, so the organisation-wide immutable
+    # audit_log gets its own row.
+    audit_log_event(
+        OPPORTUNITY_DECISION_RECORDED,
+        run_id=run_id,
+        target=opp_id,
+        outcome=OUTCOME_SUCCESS,
+        action="override_saved",
+        is_locked=override["isLocked"],
+        has_rationale_override=bool(override.get("rationaleOverride")),
+        override_reason=override.get("overrideReason") or None,
+    )
     # with_display so the override response carries the same stable matrix offset
     # as the list endpoint (keeps the bubble coordinate-stable on override save).
     # R18-C1 T4: same template terminology as the list endpoint.
@@ -1068,6 +1164,56 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
     )
 
 
+def _with_run_completeness(report: Dict[str, Any], run: Dict[str, Any]) -> Dict[str, Any]:
+    """2.0-D4 T5 — stamp the run's completeness onto an executive report.
+
+    Applied on the SERVE path, and to the stored report as well as a freshly
+    composed one, so a report materialised before this shipped still tells the
+    truth about its run. Same retrofit shape the outcome section uses.
+
+    This is the surface the subtask singles out: the executive report is the
+    artifact most likely to reach someone who will never open a health panel. If
+    a partial run's report reads identically to a complete one, none of the rest
+    of this work matters.
+
+    ``sourcesAnalyzed`` is corrected here too. It counted the sources the run was
+    CONFIGURED with, so a run whose ServiceNow died reported the same "2
+    connected" as a clean one — the precise failure this subtask exists to stop.
+    """
+    if not isinstance(report, dict):
+        return report
+    try:
+        from .run_completeness import build_run_completeness
+
+        # No live model/storage probing on a read of a historical run: the
+        # question here is what THIS run delivered, not what the environment
+        # looks like right now.
+        completeness = build_run_completeness(run, include_environment=False)
+        stamped = {**report, "runCompleteness": completeness.to_dict()}
+
+        sources = stamped.get("sourcesAnalyzed")
+        if isinstance(sources, dict):
+            succeeded = run.get("succeeded")
+            if isinstance(succeeded, (list, tuple)):
+                stamped["sourcesAnalyzed"] = {
+                    **sources,
+                    # What actually contributed, not what was configured.
+                    "totalConnected": len(succeeded),
+                    "sourcesRequested": len(_requested_system_ids(run)),
+                    "sourcesFailed": len(completeness.degraded_components),
+                }
+        return stamped
+    except Exception as exc:  # noqa: BLE001 - a report must still render
+        logger.warning("Could not stamp run completeness: %s", exc)
+        return report
+
+
+def _requested_system_ids(run: Dict[str, Any]) -> List[str]:
+    inputs = run.get("inputs") or {}
+    systems = inputs.get("systems")
+    return [str(s) for s in systems] if isinstance(systems, (list, tuple)) else []
+
+
 @app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def get_exec_report(run_id: str) -> Dict[str, Any]:
     try:
@@ -1090,7 +1236,9 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
                     run_id,
                 ),
             }
-        return apply_run_terminology(with_exec_report_display_titles(er), run_id)
+        return apply_run_terminology(
+            with_exec_report_display_titles(_with_run_completeness(er, run)), run_id
+        )
 
     inputs = run.get("inputs") or {}
     connected_sources = inputs.get("connectedSources") or []
@@ -1130,7 +1278,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
     from .outcome_surfaces import build_executive_outcome_section
 
     return apply_run_terminology(
-        {
+        _with_run_completeness({
             "confidence": "Moderate",
             "sourcesAnalyzed": sources_analyzed,
             "topQuickWins": quick_wins,
@@ -1145,7 +1293,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
                 get_current_org_id(),
                 run_id,
             ),
-        },
+        }, run),
         run_id,
     )
 
