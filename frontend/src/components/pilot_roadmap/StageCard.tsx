@@ -8,6 +8,7 @@ import {
 } from '../projection/ProjectionBand';
 import ReadinessPill from './ReadinessPill';
 import { showRelease2ArcAUi } from '../../config/releaseFlags';
+import { RankingAdjustmentCompact } from '../learning/RankingAdjustment';
 
 interface Props {
   stage: RoadmapStage;
@@ -79,6 +80,7 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
                       <ProjectionStrengthBadge projection={o.projection} />
                     </div>
                   )}
+                  <RankingAdjustmentCompact ranking={o._ranking} />
                   {renderBlueprintLink?.(o.id)}
                 </button>
               );
