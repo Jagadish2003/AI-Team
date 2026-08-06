@@ -186,6 +186,8 @@ export default function ConnectorDetailPanel({
 
   const isConnected = connector.status === 'connected';
   const isConfigured = connector.configured;
+  const isUnavailable = connector.roadmap === true || connector.status === 'coming_soon';
+  const displayStatus = isUnavailable ? 'not_configured' : connector.status;
   const viewerOnlyScope = isViewerOnlyScopeUser();
 
   // MSP-B13 (AT-744): AWS/Azure Event connectors onboard through the shared
@@ -203,7 +205,7 @@ export default function ConnectorDetailPanel({
             </div>
             <div className="mt-1 break-words text-sm text-muted">{connector.category}</div>
           </div>
-          <Badge status={connector.status} />
+          <Badge status={displayStatus} />
         </div>
         <div className="mt-4 border-t border-border" />
         <div className="mt-4">
@@ -223,7 +225,7 @@ export default function ConnectorDetailPanel({
           <div className="mt-1 break-words text-sm text-muted">{connector.category}</div>
         </div>
 
-        <Badge status={connector.status} />
+        <Badge status={displayStatus} />
       </div>
 
       <div className="mt-3 flex items-center justify-between text-xs text-muted">
@@ -374,7 +376,7 @@ export default function ConnectorDetailPanel({
           variant="tertiary"
           className="w-full whitespace-nowrap"
           onClick={onConfigure}
-          disabled={!isConnected || connector.status === 'coming_soon' || isViewer}
+          disabled={!isConnected || isUnavailable || isViewer}
           title={
             isViewer
               ? 'Configuring a source requires an analyst or owner role.'

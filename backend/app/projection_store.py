@@ -211,6 +211,74 @@ def get_stored_projection(run_id: str, opp_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def get_instance_projection(
+    run_id: str,
+    opportunity_identity: str,
+    org_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """The projection stored on the opportunity-instance tracking row.
+
+    This is a read fallback for serve paths. The run KV copy remains the primary
+    analyst-facing copy, but older/interrupted materializations can have the
+    tracking copy while the served opportunity no longer carries ``projection``.
+    Reading it preserves the "stored projection only, never recompute" rule.
+    """
+    if not run_id or not opportunity_identity:
+        return None
+
+    sql = (
+        "SELECT metadata FROM opportunity_instances "
+        "WHERE opportunity_identity = %s AND run_id = %s AND is_deleted = FALSE"
+    )
+    params: List[Any] = [opportunity_identity, run_id]
+    if org_id:
+        sql += " AND org_id = %s"
+        params.append(org_id)
+
+    try:
+        from contextlib import closing
+
+        with closing(db.connect()) as con:
+            with con.cursor() as cur:
+                cur.execute(sql, tuple(params))
+                row = cur.fetchone()
+    except Exception as exc:  # noqa: BLE001 - projection fallback is advisory
+        logger.warning(
+            "Could not read instance projection for identity %s in run %s: %s",
+            opportunity_identity,
+            run_id,
+            exc,
+        )
+        return None
+
+    if row is None:
+        return None
+    try:
+        metadata = json.loads(row[0]) if row[0] else {}
+    except (TypeError, ValueError):
+        return None
+    projection = (metadata or {}).get(METADATA_PROJECTION_KEY)
+    return dict(projection) if isinstance(projection, dict) else None
+
+
+def projection_for_opportunity(
+    opp: Optional[Dict[str, Any]],
+    run_id: str,
+    org_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Return the stored projection for an opportunity, with instance fallback."""
+    if not isinstance(opp, dict):
+        return None
+    projection = opp.get("projection")
+    if isinstance(projection, dict):
+        return dict(projection)
+
+    identity = opp.get("opportunity_identity") or opp.get("opportunityIdentity")
+    if not identity:
+        return None
+    return get_instance_projection(run_id, str(identity), org_id=org_id)
+
+
 def get_projections_for_run(run_id: str) -> Dict[str, Dict[str, Any]]:
     """Every stored projection in one run, keyed by opportunity id."""
     opps = db.run_kv_get("opps", run_id, []) or []
@@ -298,9 +366,11 @@ def projection_matches_stored(
 
 __all__ = [
     "METADATA_PROJECTION_KEY",
+    "get_instance_projection",
     "get_projection_history",
     "get_projections_for_run",
     "get_stored_projection",
+    "projection_for_opportunity",
     "projection_matches_stored",
     "record_projections_on_instances",
     "stamp_projections",

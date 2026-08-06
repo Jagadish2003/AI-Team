@@ -30,6 +30,7 @@ import {
   isSalesforceConnected,
 } from "../utils/blueprintNaming";
 import { showRelease2ArcAUi } from "../config/releaseFlags";
+import type { Decision } from "../types/common";
 
 export default function OpportunityReviewPage() {
   const {
@@ -127,6 +128,53 @@ export default function OpportunityReviewPage() {
   );
   const selectedOutcomeIdentity =
     selected?.opportunity_identity ?? selected?.identifier ?? selected?.id ?? null;
+
+  const handleSaveOverride = useCallback(
+    async (
+      rationaleOverride: string,
+      overrideReason: string,
+      isLocked: boolean,
+    ) => {
+      if (!selectedId) return;
+      const result = await saveOverride(
+        selectedId,
+        rationaleOverride,
+        overrideReason,
+        isLocked,
+      );
+      if (!result.ok) push(result.error || "Unable to save override.");
+      else push("Override saved.");
+    },
+    [push, saveOverride, selectedId],
+  );
+
+  const handleViewEvidence = useCallback(() => {
+    if (!selected) return;
+    select(selected.id);
+    nav("/partial-results");
+  }, [nav, select, selected]);
+
+  const handleDecision = useCallback(
+    async (decision: Decision) => {
+      if (!selectedId) {
+        push("Select an opportunity before setting a decision.", "error");
+        return;
+      }
+
+      const isApproved = decision === "APPROVED";
+      push(
+        isApproved ? "Opportunity approved." : "Opportunity rejected.",
+        isApproved ? "success" : "error",
+      );
+
+      const result = await setDecision(selectedId, decision);
+      if (!result.ok) {
+        push(result.error || "Unable to save decision. Your change was reverted.", "error");
+        return;
+      }
+    },
+    [push, selectedId, setDecision],
+  );
 
   const blueprintAction = selected ? (
     <div
@@ -318,9 +366,7 @@ export default function OpportunityReviewPage() {
         )}
 
         <div
-          className={`mt-4 grid grid-cols-1 gap-4 lg:h-[460px] lg:items-stretch ${
-            showRelease2ArcAUi ? "lg:grid-cols-3" : "lg:grid-cols-2"
-          }`}
+          className="mt-4 grid grid-cols-1 gap-4 lg:h-[460px] lg:grid-cols-3 lg:items-stretch"
         >
           <TopQuickWins
             quickWins={quickWins}
@@ -334,36 +380,13 @@ export default function OpportunityReviewPage() {
             onSelect={handleSelect}
           />
 
-          {showRelease2ArcAUi && (
-            <ReasoningOverride
-              opp={selected}
-              audit={audit}
-              onSave={async (rationaleOverride, overrideReason, isLocked) => {
-                if (!selectedId) return;
-                const r = await saveOverride(
-                  selectedId,
-                  rationaleOverride,
-                  overrideReason,
-                  isLocked,
-                );
-                if (!r.ok) push(r.error || "Unable to save override.");
-                else push("Override saved.");
-              }}
-              onViewEvidence={() => {
-                if (selected) {
-                  select(selected.id);
-                  nav("/partial-results");
-                }
-              }}
-              onDecision={async (d) => {
-                if (!selectedId) return;
-                const result = await setDecision(selectedId, d);
-                if (!result.ok)
-                  push(result.error || "Unable to update decision.");
-                else push(`Decision set to ${d}.`);
-              }}
-            />
-          )}
+          <ReasoningOverride
+            opp={selected}
+            audit={audit}
+            onSave={handleSaveOverride}
+            onViewEvidence={handleViewEvidence}
+            onDecision={handleDecision}
+          />
         </div>
 
     </PageShell>

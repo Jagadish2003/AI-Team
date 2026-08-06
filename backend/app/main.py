@@ -818,6 +818,19 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
     # that offset impact, making the cap vary by opportunity id for a purely
     # cosmetic reason. The cap must be a fraction of the REAL base score.
     adjusted = _apply_learned_ranking(opps)
+    try:
+        from .projection_store import projection_for_opportunity
+
+        org_id = get_current_org_id()
+        projected = []
+        for opp in adjusted:
+            projection = projection_for_opportunity(opp, run_id, org_id=org_id)
+            if projection and not isinstance(opp.get("projection"), dict):
+                opp = {**opp, "projection": projection}
+            projected.append(opp)
+        adjusted = projected
+    except Exception as exc:  # noqa: BLE001 - projection fallback is advisory
+        logger.warning("Stored projection fallback not applied: %s", exc)
     return scrub_opportunity_narratives(
         apply_run_terminology([with_display(opp) for opp in adjusted], run_id)
     )
