@@ -227,9 +227,24 @@ def record_export_generated(
 
     audit_event = _AUDIT_EVENT_BY_KIND[export_kind]
     try:
-        from .middleware.audit import log_event
+        from .middleware.audit import (
+            EVIDENCE_EXPORT_GENERATED,
+            USAGE_REPORT_EXPORTED,
+            log_event,
+        )
 
-        log_event(audit_event, org_id=org_id, **payload)
+        # 2.0-D4 T1's audit-conformance sweep resolves log_event's event-type
+        # argument STATICALLY (an AST walk over every call site, not at runtime)
+        # so it can prove every emitted type is registered before it ever runs.
+        # A single call driven by the ``_AUDIT_EVENT_BY_KIND`` dict lookup above
+        # is invisible to that walk — it sees a local variable, not a literal —
+        # so each kind calls log_event with its OWN imported constant. This is
+        # still the one write point (one function, same behaviour); only the
+        # call site is unrolled so the sweep can see what it proves.
+        if export_kind in (EXPORT_KIND_EVIDENCE_FINDING, EXPORT_KIND_EVIDENCE_REPORT):
+            log_event(EVIDENCE_EXPORT_GENERATED, org_id=org_id, **payload)
+        else:
+            log_event(USAGE_REPORT_EXPORTED, org_id=org_id, **payload)
     except Exception as exc:  # noqa: BLE001 — log_event is itself non-raising.
         logger.warning(
             "export_audit: audit write failed for %s (%s): %s",
