@@ -1422,6 +1422,23 @@ def run_llm_enrichment(
             pack_id,
             graph_entities,
         )
+        # 2.0-B1 T2: capture this opportunity's assembly decision — which
+        # retrieval candidates were proposed vs. actually used — so the trace
+        # graph can surface both sides later. Routed through graph_context.py
+        # (the sanctioned retrieval bridge — see its module docstring); this
+        # module must never import anything retrieval-named directly (a
+        # structural test in test_retrieval_evidence_source.py pins that).
+        # Advisory and non-blocking: never raises, and a failure here must
+        # never affect enrichment itself.
+        try:
+            from .graph_context import record_opportunity_retrieval_candidates
+
+            record_opportunity_retrieval_candidates(org_id, run_id, opp)
+        except Exception as exc:
+            logger.debug(
+                "retrieval candidate capture failed for opp %s (non-blocking): %s",
+                opp_id, exc,
+            )
         try:
             if grounded:
                 result = _enrich_opportunity_grounded(
