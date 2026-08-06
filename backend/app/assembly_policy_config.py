@@ -86,6 +86,14 @@ SOURCE_TYPE_PROSE = "prose"
 SOURCE_TYPE_CODE = "code"
 SOURCE_TYPE_CONVERSATION = "conversation"
 
+#: Candidate kinds, in the vocabulary ``context_assembly`` uses. Declared here so
+#: ``kind_precedence`` can be validated against a closed set — a typo there would
+#: silently change which kind yields first when the total budget binds.
+KIND_ENTITY = "entity"
+KIND_RELATIONSHIP = "relationship"
+KIND_EVIDENCE = "evidence"
+KNOWN_KINDS: Tuple[str, ...] = (KIND_ENTITY, KIND_RELATIONSHIP, KIND_EVIDENCE)
+
 
 class AssemblyPolicyConfigError(ValueError):
     """The declared assembly policy is missing, unreadable, or self-inconsistent."""
@@ -111,6 +119,13 @@ class DeclaredAssemblyPolicy:
     max_entities: int
     max_relationships: int
     max_evidence_chunks: int
+    #: 2.0-B3 T2 — the per-finding budget across ALL kinds. ``None`` disables it and
+    #: leaves the per-kind caps as the only bound (the shipped default, because no
+    #: calibration of prompt size against narrative quality exists yet).
+    max_total_items: Optional[int] = None
+    #: 2.0-B3 T2 — which kind yields first when the total budget binds. Trimmed from
+    #: the LAST entry backwards, so the most substitutable kind is listed last.
+    kind_precedence: Tuple[str, ...] = (KIND_ENTITY, KIND_RELATIONSHIP, KIND_EVIDENCE)
     source_path: str = ""
 
     @property
@@ -155,7 +170,9 @@ class DeclaredAssemblyPolicy:
                 "entities": self.max_entities,
                 "relationships": self.max_relationships,
                 "evidence_chunks": self.max_evidence_chunks,
+                "total_items": self.max_total_items,
             },
+            "kind_precedence": list(self.kind_precedence),
         }
 
 
@@ -203,6 +220,32 @@ def _dimension_list(raw: Any, where: str) -> Tuple[str, ...]:
         )
     if len(set(names)) != len(names):
         raise AssemblyPolicyConfigError(f"{where} repeats a dimension: {names}")
+    return tuple(names)
+
+
+def _kind_list(raw: Any, where: str) -> Tuple[str, ...]:
+    """Validate a declared kind ordering: known kinds, no duplicates, all present.
+
+    Every kind must appear: a partial list would leave the trim order for the
+    omitted kind undefined, and "undefined" here means a silently arbitrary choice
+    about what gets dropped from a prompt.
+    """
+    if not isinstance(raw, (list, tuple)):
+        raise AssemblyPolicyConfigError(f"{where} must be a list, got {type(raw).__name__}")
+    names = [str(x) for x in raw]
+    unknown = [n for n in names if n not in KNOWN_KINDS]
+    if unknown:
+        raise AssemblyPolicyConfigError(
+            f"{where} names unknown kind(s) {unknown}; known kinds are {list(KNOWN_KINDS)}"
+        )
+    if len(set(names)) != len(names):
+        raise AssemblyPolicyConfigError(f"{where} repeats a kind: {names}")
+    missing = [k for k in KNOWN_KINDS if k not in names]
+    if missing:
+        raise AssemblyPolicyConfigError(
+            f"{where} omits {missing} — every kind must be ordered, or the trim order "
+            f"for the omitted kind is undefined"
+        )
     return tuple(names)
 
 
@@ -290,6 +333,25 @@ def parse_declared_policy(
         )
 
     caps = _require_mapping(data.get("caps", {}), "caps")
+
+    # 2.0-B3 T2 — the per-finding total budget. None/absent disables it; an integer
+    # must be positive, because 0 would silently compose an EMPTY context for every
+    # finding, which is a configuration mistake rather than a policy choice.
+    raw_total = caps.get("total_items")
+    if raw_total is None:
+        total_items: Optional[int] = None
+    else:
+        total_items = _non_negative_int(raw_total, "caps.total_items")
+        if total_items == 0:
+            raise AssemblyPolicyConfigError(
+                "caps.total_items must be > 0 or null — 0 would compose an empty "
+                "context for every finding, which is a mistake rather than a policy"
+            )
+
+    kind_precedence = _kind_list(
+        data.get("kind_precedence", list(KNOWN_KINDS)), "kind_precedence"
+    )
+
     version = data.get("version", 1)
     if isinstance(version, bool) or not isinstance(version, int):
         raise AssemblyPolicyConfigError(f"version must be an integer, got {version!r}")
@@ -310,6 +372,8 @@ def parse_declared_policy(
         max_evidence_chunks=_non_negative_int(
             caps.get("evidence_chunks", 10), "caps.evidence_chunks"
         ),
+        max_total_items=total_items,
+        kind_precedence=kind_precedence,
         source_path=source_path,
     )
 
@@ -371,6 +435,7 @@ __all__ = [
     "SOURCE_TYPE_PROSE",
     "SOURCE_TYPE_CODE",
     "SOURCE_TYPE_CONVERSATION",
+    "KNOWN_KINDS",
     "AssemblyPolicyConfigError",
     "DeclaredAssemblyPolicy",
     "parse_declared_policy",

@@ -1,27 +1,29 @@
 {
   "_meta": {
-    "story": "2.0-B3 T1 — assembly policy engine (AC1)",
+    "story": "2.0-B3 T1 \u2014 assembly policy engine (AC1)",
     "purpose": "The context assembler's precedence rules, DECLARED as data rather than expressed in code. Changing this file changes what context a finding is composed from, with no code deploy.",
     "how_to_change_precedence": "Reorder 'ranking'. The list is applied left to right as a lexicographic sort key, so the first entry dominates. Moving 'freshness' ahead of 'confidence' makes recency outrank strength; removing 'source_type' makes a conversation chunk compete with a structured record on confidence alone.",
     "hard_vs_soft": "A dimension in 'budget_partitions' is a HARD tier: everything in a better tier fills the budget before anything in a worse tier is considered, so a worse-tier item can never displace a better-tier item that fit. A dimension in 'ranking' is a SOFT preference applied within a tier. 'observed outranks inferred' is deliberately hard (R16-B2 AC3); source-type precedence is soft by default so a highly-relevant conversation is not shut out entirely by the existence of any structured record.",
-    "unknown_values": "A value absent from a rank table sorts LAST among that dimension, never first. An item earns precedence by declaring what it is — the same fail-safe rule the module applies to provenance and to undated freshness.",
+    "unknown_values": "A value absent from a rank table sorts LAST among that dimension, never first. An item earns precedence by declaring what it is \u2014 the same fail-safe rule the module applies to provenance and to undated freshness.",
     "note_on_versioning": "Bump 'version' when a change would alter composition for unchanged inputs, so a stored selection_log can be read against the rules that produced it."
   },
-
   "version": 1,
-
   "_budget_partitions": "Hard tiers, best first. Each named dimension must have a rank table below.",
-  "budget_partitions": ["origin"],
-
-  "_ranking": "Soft ranking within a tier, most significant first. 'candidate_id' must stay last — it is the stable tiebreaker that makes the package byte-identical run to run.",
-  "ranking": ["source_type", "confidence", "freshness", "candidate_id"],
-
+  "budget_partitions": [
+    "origin"
+  ],
+  "_ranking": "Soft ranking within a tier, most significant first. 'candidate_id' must stay last \u2014 it is the stable tiebreaker that makes the package byte-identical run to run.",
+  "ranking": [
+    "source_type",
+    "confidence",
+    "freshness",
+    "candidate_id"
+  ],
   "_origin_ranks": "R16-B1's provenance spine: observed data outranks inferred. Lower rank wins.",
   "origin_ranks": {
     "observed": 0,
     "inferred": 1
   },
-
   "_source_type_ranks": "Structured records outrank conversational content. 'structured' is the knowledge graph and structured source records (incidents, issues, cases); 'prose' is documents and pages; 'code' is repository content; 'conversation' is chat threads. These four names match the retrieval substrate's content types plus the graph.",
   "source_type_ranks": {
     "structured": 0,
@@ -29,20 +31,25 @@
     "code": 2,
     "conversation": 3
   },
-
-  "_freshness": "R18-B2 freshness weighting. 'halflife_days' is the decay constant: context loses half its freshness weight every N days. 'exclude_stale' drops candidates whose source artifact changed and whose chunks are not yet re-embedded — the strongest exclusion, applied before the confidence floor, because outdated evidence must never be served as current.",
+  "_freshness": "R18-B2 freshness weighting. 'halflife_days' is the decay constant: context loses half its freshness weight every N days. 'exclude_stale' drops candidates whose source artifact changed and whose chunks are not yet re-embedded \u2014 the strongest exclusion, applied before the confidence floor, because outdated evidence must never be served as current.",
   "freshness": {
     "halflife_days": 30.0,
     "exclude_stale": true
   },
-
   "_confidence_floor": "Context below this confidence is excluded even when budget remains, so weak context never displaces strong context. 0.0 admits everything and lets the floor be a deployment choice rather than a hidden default.",
   "confidence_floor": 0.0,
-
-  "_caps": "Hard output bounds. entities/relationships mirror app/graph_constants.py — the enterprise-safety constants — and must not be raised here without changing that single source of truth.",
+  "_caps": "Hard output bounds. entities/relationships mirror app/graph_constants.py \u2014 the enterprise-safety constants \u2014 and must not be raised here without changing that single source of truth.",
   "caps": {
     "entities": 15,
     "relationships": 20,
-    "evidence_chunks": 10
-  }
+    "evidence_chunks": 10,
+    "_total_items": "2.0-B3 T2: the per-finding context budget across ALL kinds \u2014 what actually bounds an LLM prompt, since the per-kind caps sum to 45 and a prompt should rarely carry that much. UNCALIBRATED and therefore null (disabled) by default: no measurement of real prompt sizes against narrative quality exists yet, and a hand-set number here would silently trim every finding on the strength of a guess. The per-kind caps remain in force meanwhile, so over-budget selection and its drop record are exercised in production regardless. Set an integer to enable; the budget report then names what it dropped.",
+    "total_items": null
+  },
+  "_kind_precedence": "2.0-B3 T2: when the per-finding TOTAL budget binds, kinds are trimmed from the LAST entry backwards. Graph structure is listed first because a finding stripped of its entities loses the subject the evidence is about; evidence chunks are the most substitutable, so they yield first.",
+  "kind_precedence": [
+    "entity",
+    "relationship",
+    "evidence"
+  ]
 }
