@@ -54,6 +54,61 @@ def _export(org_id, private, *, frm="2000-01-01", to="2099-12-31"):
     )
 
 
+@pytest.fixture()
+def signing_key(monkeypatch):
+    """Configure a throwaway deployment signing key for the duration of a test.
+
+    Needed by the tests that drive the ROUTE rather than ``build_signed_export``
+    directly — the route resolves its key from the environment, and without one it
+    refuses with 503 (correctly: an unsigned artifact that looks signed is worse
+    than no artifact).
+    """
+    private_pem, _ = export_signing.generate_key_pair()
+    monkeypatch.setenv(export_signing.SIGNING_KEY_ENV, private_pem)
+    return private_pem
+
+
+def _seed_owner(org_id: str, user_id: str) -> None:
+    """The export route is Owner-gated, so the caller needs a membership row.
+
+    No prior test in this file drove the route — they all called
+    ``build_signed_export`` directly — so this is new plumbing rather than
+    something that was missing.
+    """
+    from contextlib import closing
+    from datetime import datetime, timezone
+
+    from app import db
+    from app.rbac import _ensure_members_table
+
+    _ensure_members_table()
+    with closing(db.connect()) as con:
+        with con.cursor() as cur:
+            cur.execute(
+                "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+                "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                (org_id, user_id, "owner", datetime.now(timezone.utc).isoformat()),
+            )
+        con.commit()
+
+
+def _post_export(client, org_id: str, period_from: str, period_to: str):
+    """Drive the real HTTP route, which is where the audit emission lives.
+
+    Calling ``build_signed_export`` directly would exercise none of it — the
+    ordering bug this file now guards against was in the ROUTE, not the builder.
+    """
+    import os
+
+    token = os.getenv("ADMIN_JWT") or os.getenv("DEV_JWT", "dev-token-change-me")
+    _seed_owner(org_id, token)
+    return client.post(
+        "/api/audit/export",
+        json={"period_from": period_from, "period_to": period_to},
+        headers={"Authorization": f"Bearer {token}", "X-Org-Id": org_id},
+    )
+
+
 # ── the export itself ──────────────────────────────────────────────────────────
 
 
@@ -395,31 +450,99 @@ class TestExportIsItselfAudited:
         actors = {r["actor"] for r in doc["records"]}
         assert "first.owner@example.com" in actors
 
-    def test_the_route_emits_the_event_before_building(self):
-        """Ordering matters: the row is written before the payload is assembled, so a
-        disclosure cannot go unrecorded because serialisation failed after the read."""
-        import ast
-        import pathlib
+    def test_exactly_one_row_is_written_per_request(self, client, signing_key):
+        """PR #561 review, HIGH.
 
-        from app import routes_audit_export
+        This test replaces one that asserted the OPPOSITE ordering — that the row
+        was written BEFORE the export was built, so a disclosure could not go
+        unrecorded if assembly failed after the read. That reasoning does not
+        survive contact with a failure: when the build then raised, a SECOND row
+        was appended with ``failure``, and the trail permanently held a success
+        disclosure for a period that was never exported. An auditor could not tell
+        which row was real — the exact ambiguity this feature exists to remove.
 
-        source = pathlib.Path(routes_audit_export.__file__).read_text(encoding="utf-8")
-        fn = next(
-            n for n in ast.walk(ast.parse(source))
-            if isinstance(n, ast.FunctionDef) and n.name == "generate_audit_export"
+        A missing row is a gap you can see. A false success is a lie you cannot
+        detect. So the row is written once, after the outcome is known.
+
+        Note this is a RUNTIME assertion, not a line-number one: the emission now
+        happens through a local helper, so a static ordering check would pass
+        while telling you nothing about how many rows a request produces.
+        """
+        org = "org_d4t2_single_row"
+        _seed(org, 2)
+        before = self._count(org)
+        response = _post_export(client, org, "2000-01-01", "2099-12-31")
+        assert response.status_code == 200, response.text
+        assert self._count(org) == before + 1
+
+    def test_a_refused_export_writes_no_success_row(self, client, signing_key):
+        """The failure the review found, asserted directly."""
+        org = "org_d4t2_refused"
+        _seed(org, 1)
+        before_success = self._count_by_outcome(org, audit.OUTCOME_SUCCESS)
+
+        # `to` earlier than `from` — refused before anything is disclosed.
+        response = _post_export(client, org, "2099-01-01", "2000-01-01")
+        assert response.status_code == 400, response.text
+
+        assert self._count_by_outcome(org, audit.OUTCOME_SUCCESS) == before_success, (
+            "a refused export left a success row behind — an auditor would read "
+            "it as a disclosure of a period that was never exported"
         )
-        order = []
-        for node in ast.walk(fn):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                if node.func.id == "audit_log_event":
-                    order.append(("audit", node.lineno))
-                elif node.func.id == "build_signed_export":
-                    order.append(("build", node.lineno))
-        first_audit = min(l for k, l in order if k == "audit")
-        first_build = min(l for k, l in order if k == "build")
-        assert first_audit < first_build, (
-            "the audit row must be written before the export is built"
+        assert self._count_by_outcome(org, audit.OUTCOME_FAILURE) >= 1, (
+            "a refused export must still be recorded"
         )
+
+    def test_the_row_records_the_same_period_as_the_signed_file(self, client, signing_key):
+        """PR #561 review.
+
+        The row used to carry the caller's raw strings ("2026-07-20") while the
+        signed file carried the normalised end-of-day boundary. Each was correct
+        alone, but an auditor comparing the two saw different periods and had
+        every reason to question the artifact's authenticity.
+        """
+        org = "org_d4t2_period_match"
+        _seed(org, 1)
+        response = _post_export(client, org, "2000-01-01", "2099-12-31")
+        assert response.status_code == 200, response.text
+        doc = response.json()
+        row = self._latest(org)
+        assert row["detail"].get("period_from") == doc["period"]["from"]
+        assert row["detail"].get("period_to") == doc["period"]["to"]
+        assert row["detail"]["period_to"].endswith("23:59:59.999999+00:00"), (
+            "the recorded `to` must be the inclusive end-of-day the export used"
+        )
+
+    def _count_by_outcome(self, org_id: str, outcome: str) -> int:
+        rows = self._all(org_id)
+        return sum(1 for r in rows if (r["detail"] or {}).get("outcome") == outcome)
+
+    def _latest(self, org_id: str):
+        rows = self._all(org_id)
+        assert rows, "no audit row was written"
+        return rows[0]
+
+    def _all(self, org_id: str):
+        import json as _json
+
+        from app import db
+
+        con = db.connect()
+        try:
+            cur = con.cursor()
+            cur.execute(
+                "SELECT payload FROM audit_log WHERE org_id = %s AND event_type = %s "
+                "ORDER BY timestamp DESC",
+                (org_id, audit.AUDIT_EXPORT_GENERATED),
+            )
+            out = []
+            for (payload,) in cur.fetchall():
+                if isinstance(payload, str):
+                    payload = _json.loads(payload)
+                out.append({"detail": payload or {}})
+            return out
+        finally:
+            con.close()
 
     def _count(self, org_id: str) -> int:
         from app import db
