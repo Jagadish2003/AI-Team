@@ -143,6 +143,21 @@ AUDIT_EXEMPT_ROUTES: Dict[str, str] = {
         "auditing it lets an outsider write rows into a customer's audit trail. "
         "The password CHANGE it may lead to is the auditable action."
     ),
+    "POST /api/entities/provenance": (
+        "2.0-B2 T2: read-shaped POST. It returns the merge provenance for a "
+        "batch of entity ids the caller already holds and changes no state — the "
+        "finding-view seam. POST only because the id list goes in the body. The "
+        "single-entity GET on the same prefix is the same read."
+    ),
+    "POST /api/entity-match-proposals/scan": (
+        "2.0-B2 T3/T4: deterministically RE-DERIVES the cross-source match review "
+        "queue from the current graph (it only ever adds or refreshes PENDING "
+        "proposals and never decides one), so it carries no human intent and "
+        "discloses nothing — the runner calls it every run automatically. The "
+        "auditable action is the analyst's confirm/reject on "
+        "POST /api/entity-match-proposals/{proposal_id}/decision, which emits "
+        "entity_match_proposal_decided."
+    ),
 }
 
 
@@ -182,7 +197,12 @@ KNOWN_AUDIT_GAPS: Dict[str, str] = {
 
 ACTIONS_PENDING_ROUTES: Dict[str, str] = {
     "pack activate/disable/rollback": "Pack governance routes land in 2.0-C1; no route exists on this branch.",
-    "entity merge/unmerge": "Entity merge/unmerge lands in 2.0-B2; no route exists on this branch.",
+    # NOTE: "entity merge/unmerge" is deliberately NOT listed here any more. 2.0-B2
+    # shipped POST /api/entity-merges/apply, POST /api/entities/{entity_id}/unmerge,
+    # /unmerge-all, and POST /api/entity-unmerges/{unmerge_id}/release, which emit
+    # entity_merged / entity_unmerged / entity_merge_block_released, so the entry
+    # claiming "no route exists on this branch" became false. It is now covered by
+    # TestD4NamedActions.test_every_named_action_with_a_route_audits.
     # NOTE: "export generation" is deliberately NOT listed here any more. D4 T2
     # shipped POST /api/audit/export, which emits audit_export_generated, so the
     # entry claiming "no route exists on this branch" had become false. It is now
@@ -573,6 +593,15 @@ class TestD4NamedActions:
                 "POST /api/runs/{run_id}/evidence/{evidence_id}/decision",
                 "POST /api/learning/feedback/{opportunity_identity}",
             ],
+            # 2.0-B2: cross-source entity merge (T2) and unmerge (T5). The scan
+            # (T3/T4) and bulk provenance read (T2) are read-shaped/derivation and
+            # are declared in AUDIT_EXEMPT_ROUTES; the DECISIONS below all audit.
+            "entity merge/unmerge": [
+                "POST /api/entity-merges/apply",
+                "POST /api/entities/{entity_id}/unmerge",
+                "POST /api/entities/{entity_id}/unmerge-all",
+                "POST /api/entity-unmerges/{unmerge_id}/release",
+            ],
         }
         audited, _, _, _ = _classified()
         live = {route_key(m, path) for m, path, _ in _state_changing_routes()}
@@ -596,13 +625,17 @@ class TestD4NamedActions:
             + "\n".join(f"  {u}" for u in sorted(unaudited))
         )
 
-    def test_pack_and_entity_actions_have_no_route_yet(self):
+    def test_pack_actions_have_no_route_yet(self):
         """Records the ABSENCE, so the pending list cannot quietly become stale
-        once 2.0-C1 / 2.0-B2 land: when the routes appear, the sweep above starts
-        reporting them and this test's premise fails."""
+        once 2.0-C1 lands: when the pack-governance routes appear, the sweep above
+        starts reporting them and this test's premise fails.
+
+        Entity merge/unmerge was in the same boat until 2.0-B2 shipped its routes;
+        it is now covered by test_every_named_action_with_a_route_audits, so the
+        entity clause is deliberately gone from here (mirroring how export
+        generation graduated out of ACTIONS_PENDING_ROUTES)."""
         live = {path for _, path, _ in _state_changing_routes()}
         assert not [p for p in live if "/packs/" in p and "activate" in p]
-        assert not [p for p in live if "entit" in p and ("merge" in p or "unmerge" in p)]
 
     def test_learning_adjustment_is_actually_audited(self):
         """The one pending-list entry claiming to be already covered — verified,
