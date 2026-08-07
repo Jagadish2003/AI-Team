@@ -441,3 +441,13 @@ def test_invalid_table_override_is_rejected(bad):
     """An override cannot redirect a stream at an arbitrary or crafted table."""
     with pytest.raises(ValueError):
         sn.normalize_secops_table_map(bad)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The event-signature link column is the THIRD instance of this same live-only
+# defect: read under `sysparm_display_value=all`, a multi-value field arrives as
+# {"value": …, "display_value": …} and was skipped by a reader matching only
+# list/tuple. It is fixed in the single shared reader rather than here — the
+# ingestor carries the column verbatim on purpose — so its shape coverage lives
+# in `test_event_signature_display_value_shapes.py`, and the end-to-end path is
+# covered by `test_msp_b4_recurrence_joins.py`.

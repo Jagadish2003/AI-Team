@@ -31,6 +31,7 @@ from .ops_recurrence_joins import (
     build_event_signature_join,
     build_evidence_trace,
     extract_event_signatures,
+    has_event_signature_field,
 )
 
 DETECTOR_ID = "OPS_RESOLUTION_RECURRENCE"
@@ -184,6 +185,10 @@ class _IncidentCandidate:
     ci_reference: Optional[str]
     affected_ci_ids: Tuple[str, ...]
     event_signatures: Tuple[str, ...]
+    # Whether the incident CARRIED a link field at all, so an unlinked recurrence
+    # can report "never linked" separately from "a link was supplied and did not
+    # parse". Defaulted, so any existing constructor call is unaffected.
+    event_signature_field_present: bool = False
     # MSP-B5 T1 — the explicitly-cited runbook identifiers MSP-B4 already mined
     # from the (redacted) resolution note. Carried per candidate so the recurrence
     # can surface WHICH incidents cited a runbook, for deterministic matching.
@@ -454,6 +459,7 @@ def _candidate(
         and (ref_id := _reference_id(ref.get("ci_sys_id") or ref.get("ci_item")))
     )
     event_signatures = extract_event_signatures(incident, resolution)
+    event_signature_field_present = has_event_signature_field(incident, resolution)
 
     # MSP-B5 T1 — the deterministic runbook identifiers B4 mined from the note.
     # Read only; deduplicated + ordered so the recurrence is reproducible. No
@@ -481,6 +487,7 @@ def _candidate(
         ci_reference=ci_id or None,
         affected_ci_ids=affected_ci_ids,
         event_signatures=event_signatures,
+        event_signature_field_present=event_signature_field_present,
         runbook_references=runbook_references,
     )
 

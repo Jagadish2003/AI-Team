@@ -186,6 +186,24 @@ def extract_event_signatures(*sources: Any) -> Tuple[str, ...]:
     return tuple(sorted(found))
 
 
+def has_event_signature_field(*sources: Any) -> bool:
+    """True when a source CARRIES an event-signature link field at all.
+
+    Distinguishes "the upstream loop was never established" (the field is absent)
+    from "a link was supplied but nothing in it parsed" (the field is present and
+    yielded no signature). Both leave the join unlinked — the verdict is
+    deliberately unchanged — but only the second is a data problem worth chasing,
+    and reporting one reason for both makes that undiagnosable.
+    """
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        for field in EVENT_SIGNATURE_LIST_FIELDS + EVENT_SIGNATURE_SCALAR_FIELDS:
+            if source.get(field) is not None:
+                return True
+    return False
+
+
 def _signature_candidates(raw: Any) -> Tuple[Any, ...]:
     """Every individual signature carried by one column value.
 
@@ -394,10 +412,13 @@ class EventSignatureJoin:
     """The B0/B7 event-signature soft join for one recurrence — and its trace.
 
     Records ONLY explicit, well-formed event signatures the upstream bridge has
-    already tied to the recurrence's incidents. ``linked`` is the verdict; when
-    no incident carries an explicit link the status is ``not_available``
-    (``no_event_link``) — the upstream loop was never established, which is not a
-    failure (AC / conservative). Each entry in ``event_links`` names one
+    already tied to the recurrence's incidents. ``linked`` is the verdict; when no
+    incident carries an explicit link the status is ``not_available`` — the
+    upstream loop was never established, which is not a failure (AC /
+    conservative). ``reason`` separates the two ways that happens:
+    ``no_event_link`` (no incident carried a link field) and
+    ``event_link_parse_failed`` (one did, and nothing in it parsed as a
+    deterministic signature). Each entry in ``event_links`` names one
     signature and the incidents it links, completing the
     alert→incident→resolution loop with the recurrence's resolution evidence.
     """
@@ -427,8 +448,10 @@ def build_event_signature_join(members: Sequence[Any]) -> EventSignatureJoin:
     """Link a recurrence to operational event signatures — explicit links only.
 
     Reads each member's explicit ``event_signatures`` (populated upstream by the
-    B0/B7 event bridge). No signature on any incident → ``not_available``
-    (``no_event_link``). Never derives a link from timing or text.
+    B0/B7 event bridge). No signature on any incident → ``not_available``, with
+    the reason naming whether a link field was absent (``no_event_link``) or
+    present-but-unparseable (``event_link_parse_failed``). Never derives a link
+    from timing or text.
     """
     member_count = len(members)
     linked: Dict[str, List[Any]] = {}
@@ -440,10 +463,19 @@ def build_event_signature_join(members: Sequence[Any]) -> EventSignatureJoin:
             linked_members.add(id(member))
 
     if not linked:
+        # Same verdict either way — the join is soft and an unlinked recurrence is
+        # still emitted — but say WHICH of the two happened: no incident carried a
+        # link field at all, or one did and nothing in it parsed as a deterministic
+        # signature. Reporting "no_event_link" for both makes a misconfigured or
+        # malformed upstream link indistinguishable from an absent one.
+        attempted = any(
+            getattr(member, "event_signature_field_present", False)
+            for member in members
+        )
         return EventSignatureJoin(
             status=STATUS_NOT_AVAILABLE,
             linked=False,
-            reason="no_event_link",
+            reason="event_link_parse_failed" if attempted else "no_event_link",
             event_signatures=(),
             linked_incident_count=0,
             member_count=member_count,
