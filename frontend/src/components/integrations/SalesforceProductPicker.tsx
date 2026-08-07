@@ -106,10 +106,17 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
   // and back) renders it from cache with no refetch and no skeleton. It refreshes
   // only when it should — saving invalidates this key, and another user's change
   // arrives via the org event stream — and those refreshes are background.
-  const { data: productsData, loading } = useResource<SalesforceProductsResponse>(
+  const { data: productsData, error: productsError } = useResource<SalesforceProductsResponse>(
     cacheKeys.connectorProducts,
     () => apiGet<SalesforceProductsResponse>('/api/connectors/salesforce/products'),
   );
+  // Skeleton on the FIRST load only — never on a refetch of a declaration we
+  // already hold. The resource's `loading` flag is also true during a FOREGROUND
+  // refetch, which this component triggers itself on save (it invalidates the key
+  // below to drive cross-page reactivity), so gating on it flashed the skeleton
+  // straight after a successful save and again on every connector-scope
+  // invalidate. See usePickerResource for the same rule shared by every picker.
+  const firstLoad = productsData === undefined && productsError === null;
 
   // Mirror the server declaration into the local selection, EXCEPT while the user
   // has an unsaved edit — a background revalidation landing mid-edit must not
@@ -174,7 +181,7 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
     }
   }, [selected, push, onSaved, cache]);
 
-  if (loading) {
+  if (firstLoad) {
     // Shared skeleton mirrors the header + description + product rows below, so
     // the real declaration fills the same space instead of popping in. Four rows
     // ≈ the height of the 15rem list box (the six products now scroll inside it,

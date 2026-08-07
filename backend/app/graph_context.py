@@ -372,3 +372,35 @@ def build_graph_context(
         ceiling_assessment=package.ceiling_assessment or {},
         mode_degradations=mode_degradations,
     )
+
+
+def record_opportunity_retrieval_candidates(
+    org_id: Optional[str], run_id: str, opportunity: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """2.0-B1 T2 (AC3) — capture ONE opportunity's assembly decision: which
+    retrieval candidates context assembly considered, used and unused alike.
+
+    This module is the sanctioned retrieval bridge (see the module docstring
+    and ``build_graph_context`` above — a structural test pins that
+    ``app.llm_enrichment`` never imports anything retrieval-named directly, so
+    every retrieval touchpoint enrichment needs is exposed as a plain function
+    HERE instead). ``build_graph_context`` runs assembly once per RUN, against
+    a synthetic opportunity with no query text, so it never actually proposes
+    evidence; this is the per-OPPORTUNITY counterpart, with a real query
+    (title/rationale) — the resolved chain of "propose, decide, persist" the
+    2.0-B1 trace reads back later.
+
+    Never raises: any failure (no org, no usable query text, an unavailable
+    retrieval store, or an assembly error) degrades to an empty list — never
+    blocks enrichment.
+    """
+    try:
+        from app.retrieval_trace import record_retrieval_candidates_for_opportunity
+
+        return record_retrieval_candidates_for_opportunity(org_id, run_id, opportunity)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug(
+            "graph_context: retrieval-candidate capture unavailable for opp %s: %s",
+            opportunity.get("id"), exc,
+        )
+        return []

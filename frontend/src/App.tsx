@@ -38,6 +38,7 @@ const StackBuilderPage = lazy(() => import("./pages/StackBuilderPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const LicensePage = lazy(() => import("./pages/LicensePage"));
 const RunHealthDashboardPage = lazy(() => import("./pages/RunHealthDashboardPage"));
+const EntityMatchReviewPage = lazy(() => import("./pages/EntityMatchReviewPage"));
 
 function PilotRoadmapRedirect() {
   const location = useLocation();
@@ -217,6 +218,13 @@ export default function App() {
                               <Route
                                 path="/executive-report"
                                 element={<ExecutiveReportPage />}
+                              />
+                              {/* 2.0-B2 T3 — Owner/Analyst review of PROPOSED
+                                  cross-source entity matches (the tier the
+                                  resolution engine refuses to merge on its own). */}
+                              <Route
+                                path="/entity-matches"
+                                element={<EntityMatchReviewPage />}
                               />
                               <Route path="/settings" element={<SettingsPage />} />
                               {/* LIC-1 / T8 — Owner-only admin License page. */}

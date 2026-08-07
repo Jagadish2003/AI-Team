@@ -963,7 +963,12 @@ class AzureEventIngestor(ChangeBasedIngestor):
           Insights raw telemetry or Log Analytics/KQL output seeded into any stream
           is dropped loudly and counted (``telemetry_excluded``) instead of becoming
           an event. The gate short-circuits on the alert / activity / health
-          envelopes, so it cannot touch a record MSP-B2 legitimately ingests.
+          envelopes, so it cannot touch a record MSP-B2 legitimately ingests. An
+          excluded record never advances the subscription watermark — so it is
+          re-read on every run, which is a deliberate trade (an out-of-scope record
+          must not be able to push the position past real alerts). See the
+          ``advanced`` computation for why advancing past them is not the fix it
+          looks like.
         * **App Insights scope (D3-AC1).** ``scope_of`` resolves a record's
           Application Insights component by EXPLICIT reference; when it does, the
           scope rides the record wrapper, the count appears in run health
@@ -1017,21 +1022,33 @@ class AzureEventIngestor(ChangeBasedIngestor):
                     )
                 in_scope = [r for r in fetched if prefilter(r)] if prefilter else list(fetched)
                 # 2.0-D3 T1 / AC2 — the scope-defence gate. Sits ahead of the
-                # incremental filter so an excluded record can never advance a
-                # checkpoint either: it is not data this connector processes at all.
+                # incremental filter so an excluded record is never mapped, never
+                # admitted, never emitted, and never counted towards the watermark:
+                # it is not data this connector processes at all. The `advanced`
+                # computation below records why that last part must stay true.
                 telemetry_excluded = 0
                 kept: List[Dict[str, Any]] = []
                 for candidate in in_scope:
                     if is_excluded_telemetry(candidate):
                         telemetry_excluded += 1
-                        logger.warning(
-                            "azure_events: %s DROPPED an out-of-scope record for "
-                            "subscription %s — Application Insights raw telemetry / "
-                            "analytics output is not ingested (2.0-D3 scope defence)",
-                            stream, sub,
-                        )
                         continue
                     kept.append(candidate)
+                # ONE warning per poll carrying the count, not one per record. The
+                # exclusion must stay loud (a silently narrowed read scope is the
+                # failure this guard exists to prevent), but a per-record line made
+                # the volume proportional to the telemetry in the feed and repeated
+                # in full on every run, because an excluded record never advances the
+                # watermark (see `advanced` below) and is therefore re-fetched every
+                # time. The count is the actionable part and is on the run status too.
+                if telemetry_excluded:
+                    logger.warning(
+                        "azure_events: %s DROPPED %d out-of-scope record(s) for "
+                        "subscription %s — Application Insights raw telemetry / "
+                        "analytics output is not ingested (2.0-D3 scope defence). "
+                        "These are re-read each run: an excluded record never "
+                        "advances the checkpoint.",
+                        stream, telemetry_excluded, sub,
+                    )
                 new_records = _filter_new(kept, since_iso, ts_of)
                 emitted = 0
                 skipped = 0
@@ -1088,6 +1105,28 @@ class AzureEventIngestor(ChangeBasedIngestor):
                         )
                     )
                     emitted += 1
+                # Only records this connector PROCESSED move the watermark: an excluded
+                # record contributes nothing, deliberately, and this must stay that way.
+                #
+                # The tempting change is to advance past excluded records too, on the
+                # grounds that the drop is deterministic so re-reading them is pure
+                # waste. It buys nothing and costs correctness. Nothing, because
+                # `is_excluded_telemetry` fires on telemetry/analytics ENVELOPES, and
+                # those carry no alert/health timestamp — `ts_of` returns '' for every
+                # shape in `azure_app_insights_sample.json`, so `_max_ts` already skips
+                # them and the watermark is unchanged either way. Correctness, because
+                # the only records it WOULD move are excluded ones carrying a readable
+                # alert-shaped timestamp, and then a single out-of-scope record with a
+                # far-future timestamp would push the position past every real alert
+                # that follows and silently suppress them — an out-of-scope record must
+                # never decide what in-scope data we skip.
+                #
+                # The residual cost is real but bounded and visible: a subscription
+                # whose feed is dominated by telemetry keeps re-fetching it, which is
+                # why the drop is counted into `telemetry_excluded` on the per-run
+                # status and summarised in one WARNING per poll above rather than left
+                # to be inferred. Pinned by
+                # `test_azure_app_insights_scope.py::test_excluded_records_do_not_advance_a_checkpoint`.
                 advanced = None if deferred else _max_ts(new_records, ts_of, floor=since_iso)
                 if advanced:
                     next_checkpoints[sub] = advanced

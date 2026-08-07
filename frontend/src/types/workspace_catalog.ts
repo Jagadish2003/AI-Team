@@ -49,6 +49,18 @@ export function getCatalogSystemIds(catalog: WorkspaceCatalogResponse): string[]
     .map(s => s.system_id);
 }
 
+/**
+ * System IDs of CONNECTED systems only — the Stack Builder Screen 2 default
+ * selection. Deliberately narrower than getCatalogSystemIds: a `needs_auth`
+ * system cannot contribute data to a run until it is reconnected, so
+ * pre-selecting it would put a source in the plan that is not actually readable.
+ */
+export function getConnectedCatalogSystemIds(catalog: WorkspaceCatalogResponse): string[] {
+  return flattenCatalog(catalog)
+    .filter(s => s.status === 'connected')
+    .map(s => s.system_id);
+}
+
 /** Salesforce products from the catalog — for seeding selectedSalesforceClouds. */
 export function getCatalogSalesforceProducts(catalog: WorkspaceCatalogResponse): string[] {
   const sf = catalog.primary_platforms.find(s => s.system_id === 'salesforce');

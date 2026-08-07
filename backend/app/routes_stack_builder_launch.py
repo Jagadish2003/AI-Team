@@ -48,7 +48,8 @@ from pydantic import BaseModel, Field, model_validator
 from .db import run_kv_set, next_run_id, upsert_run
 from .middleware.tenancy import get_current_org_id
 from .security import require_auth
-from .rbac import require_role
+from .middleware.audit import OUTCOME_SUCCESS, RUN_STARTED, log_event as audit_log_event
+from .rbac import _get_user_id_from_token, require_role
 
 from discovery.packs.pack_config import get_pack_version, normalize_pack_ids
 from discovery.packs.template_registry import (
@@ -170,7 +171,10 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         summary="Launch a discovery run from Stack Builder setup state",
         tags=["Stack Builder"],
     )
-    def launch_stack_builder_run(body: LaunchRequest) -> LaunchResponse:
+    def launch_stack_builder_run(
+        body: LaunchRequest,
+        token: str = Depends(require_auth),
+    ) -> LaunchResponse:
         """
         Creates a run from the full Stack Builder setup state.
 
@@ -331,6 +335,26 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             "pack_boundaries":      effective["pack_boundaries"],
             "effective_configuration": effective,
         })
+
+        # 2.0-D4 T1 (AC1): D4 names "run start". routes_sprint4_t2 emitted
+        # run_started for its own path only, so a run launched from the Stack
+        # Builder — the path the product actually uses — left no audit row. The
+        # payload records WHAT was launched (packs, systems, focus), because
+        # "which sources did this run read?" is the question a reviewer follows
+        # a run start with.
+        audit_log_event(
+            RUN_STARTED,
+            run_id=run_id,
+            user_id=_get_user_id_from_token(token),
+            target=run_id,
+            pack_ids=eff_pack_ids,
+            template_ids=eff_template_ids,
+            focus_id=eff_focus,
+            system_count=len(eff_systems),
+            systems=eff_systems,
+            source="stack_builder",
+            outcome=OUTCOME_SUCCESS,
+        )
 
         return LaunchResponse(
             runId=run_id,

@@ -212,6 +212,12 @@ class TestTheCapIsRealNotDecorative:
         frozen = AdjustmentPolicy(max_rank_move=0)
         result = adjust_ranking(items, group(50.0), policy=frozen)
         assert [o["id"] for o in result.ordered] == [o["id"] for o in items]
+        assert result.adjustments
+        served = result.ordered[0][RANKING_FIELD]
+        assert served["adjusted"] is True
+        assert served["moved"] == 0
+        assert served["wasCapped"] is True
+        assert served["reason"]["summary"]
 
     def test_the_caps_are_reported_on_every_served_finding(self):
         """A cap nobody can see is a cap nobody can hold you to."""

@@ -41,6 +41,8 @@ import {
 import { ProjectionBandCompact } from '../components/projection/ProjectionBand';
 import { ProjectionRecommendationCompact } from '../components/projection/ProjectionRecommendation';
 import { ProjectionBasisCompact } from '../components/projection/ProjectionBasis';
+import { showRelease2ArcAUi } from '../config/releaseFlags';
+import { RankingAdjustmentCompact } from '../components/learning/RankingAdjustment';
 
 function TierBadge({ tier }: { tier?: string }) {
   const t = tier ?? 'Unknown';
@@ -210,6 +212,7 @@ function OpportunitySelectorPanel({
                   <span>{opp.category ?? 'Uncategorized'}</span>
                   <ChevronRight size={14} className={active ? 'text-accent' : 'text-muted'} />
                 </div>
+                <RankingAdjustmentCompact ranking={opp._ranking} />
               </button>
             );
           })
@@ -376,21 +379,23 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
           {/* 2.0-A1 T5: the intervention statement — what the agent handles and
               what still needs a person — sits with the purpose, so the purpose
               is never read as a promised outcome. */}
-          <div className="mt-3">
-            <ProjectionRecommendationCompact projection={projection} />
-          </div>
+          {showRelease2ArcAUi && (
+            <div className="mt-3">
+              <ProjectionRecommendationCompact projection={projection} />
+            </div>
+          )}
         </SectionBlock>
 
         {/* 2.0-A1 T4 — the projection band, its evidence label, and its
             strength (with the capped caveat where one applies). Placed above
             the assumptions so the band is never read without them nearby. */}
-        {projection?.magnitudeBand && (
+        {showRelease2ArcAUi && projection?.magnitudeBand && (
           <SectionBlock icon={<BarChart2 size={16} />} title="Projection Band">
             <ProjectionBandCompact projection={projection} />
           </SectionBlock>
         )}
 
-        {assumptions.length > 0 && (
+        {showRelease2ArcAUi && assumptions.length > 0 && (
           <SectionBlock icon={<ListChecks size={16} />} title="Projection Assumptions">
             <ProjectionAssumptionList projection={projection} />
           </SectionBlock>
@@ -457,7 +462,7 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
           )}
         </SectionBlock>
 
-        {projection?.basis && (
+        {showRelease2ArcAUi && projection?.basis && (
           <SectionBlock icon={<BarChart2 size={16} />} title="Projection Basis">
             <ProjectionBasisCompact projection={projection} showTitle={false} />
           </SectionBlock>

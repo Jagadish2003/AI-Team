@@ -120,6 +120,52 @@ def build_confidence(
     }
 
 
+# 2.0-B1 T1 (trace graph engine): cap how many correlation-window traces a
+# single finding carries — mirrors cloud_ops_runtime.py's own _MAX_WINDOW_TRACES
+# discipline so a finding's contract never grows unbounded.
+_MAX_FINDING_CORRELATION_WINDOWS = 5
+
+
+def _filter_correlation_windows(
+    correlation_windows: Optional[Sequence[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    """Keep only WITHIN-WINDOW join traces, capped, in a stable shape.
+
+    2.0-B1 AC2: "a claim whose join is outside window cannot appear". MSP-B7's
+    runtime (cloud_ops_runtime.py) already excludes out-of-window joins from a
+    finding's actual corroboration (only ``joined.within`` incidents count
+    toward the finding), but its ``correlation_windows``/window_traces list
+    records EVERY attempted join for run-health auditing, within-window or not.
+    This is the defence-in-depth boundary where an out-of-window entry is
+    dropped before it can ever reach a finding's corroboration/trace — so the
+    guarantee holds even if a future caller passes the raw, unfiltered list.
+
+    Fail CLOSED on the flag: only a literal ``True`` keeps an entry. Truthiness
+    would admit the string ``"false"``, which is exactly what a JSON round trip
+    or a hand-written fixture can produce — and this layer exists for the case
+    where the caller is wrong. ``WindowJoin.within`` is always a bool, so no real
+    producer is affected. Mirrors ``app.trace_graph._within_window_joins``
+    (2.0-B1 T7 QA finding).
+    """
+    kept: List[Dict[str, Any]] = []
+    for window in correlation_windows or ():
+        if not isinstance(window, dict):
+            continue
+        if window.get("within_window") is not True:
+            continue
+        kept.append({
+            "join_type": window.get("join_type"),
+            "window_seconds": window.get("window_seconds"),
+            "delta_seconds": window.get("delta_seconds"),
+            "within_window": True,
+            "a_at": window.get("a_at"),
+            "b_at": window.get("b_at"),
+        })
+        if len(kept) >= _MAX_FINDING_CORRELATION_WINDOWS:
+            break
+    return kept
+
+
 def build_corroboration(
     status: str,
     *,
@@ -127,13 +173,19 @@ def build_corroboration(
     label: str,
     window_gated: bool = False,
     rule_ids: Optional[Sequence[str]] = None,
+    correlation_windows: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Build the corroboration part.
 
-    status       — STATUS_CORROBORATED or STATUS_SINGLE_SOURCE.
-    sources      — the independent systems that agree (e.g. ["servicenow", "events"]).
-    label        — the human on-card label ("Corroborated by ..." / single-source).
-    window_gated — True when the corroborating join is time-window gated (B7).
+    status              — STATUS_CORROBORATED or STATUS_SINGLE_SOURCE.
+    sources             — the independent systems that agree (e.g. ["servicenow", "events"]).
+    label               — the human on-card label ("Corroborated by ..." / single-source).
+    window_gated        — True when the corroborating join is time-window gated (B7).
+    correlation_windows — optional MSP-B7 ``WindowJoin.to_trace()["correlation_window"]``
+                          dicts backing this corroboration (e.g. cloud_ops_runtime.py's
+                          per-event-signature ``correlation_windows``). Filtered to
+                          within-window entries only and capped — see
+                          ``_filter_correlation_windows`` (2.0-B1 AC2).
     """
     if status not in (STATUS_CORROBORATED, STATUS_SINGLE_SOURCE):
         raise ValueError(
@@ -146,6 +198,7 @@ def build_corroboration(
         "label": label,
         "window_gated": bool(window_gated),
         "rule_ids": list(rule_ids or []),
+        "correlation_windows": _filter_correlation_windows(correlation_windows),
     }
 
 

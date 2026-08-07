@@ -1,0 +1,60 @@
+{
+  "_meta": {
+    "story": "2.0-B4 T5 (AT-814)",
+    "purpose": "Conformance golden fixture for one shipped connector (AC4). Locks the connector's per-concept conformance declaration (status/reason/mapper/field_gaps) from discovery/concepts/conformance.py. The CI gate (tests/contract/test_r2_0_b4_t5_conformance_fixtures.py) fails if a shipped connector has no fixture here, and pins each fixture to the registry so a conformance change cannot ship without updating its golden.",
+    "note": "Every 'supported' concept's mapper must resolve in T2's mapper registry (discovery.concepts.mappers.resolve_mapper) — the gate checks it. The raw→concept correctness of each mapper is proven by T2's connector-mapping test."
+  },
+  "connector_id": "teams",
+  "source_family": "conversation",
+  "concept_set_version": 1,
+  "concepts": {
+    "actor_group": {
+      "status": "supported",
+      "reason": "a Teams team/channel is a group-shaped container mapped as group_type='team', NOT 'queue' — work is not routed to or drawn from it, and a queue-ageing detector reading it as a queue would report backlog that does not exist",
+      "mapper": "discovery.concepts.mappers.content:map_teams_channel",
+      "field_gaps": []
+    },
+    "approval": {
+      "status": "not_applicable",
+      "reason": "the source has no approval concept — it records content/activity, not gated decisions",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "artifact": {
+      "status": "supported",
+      "reason": "a thread, keyed on the same thread artifact id the R18-A4 conversation model uses, so a concept and a retrieval chunk point at one artifact rather than two ids for one thread",
+      "mapper": "discovery.concepts.mappers.content:map_teams_thread",
+      "field_gaps": [
+        {
+          "field": "revision",
+          "kind": "absent",
+          "reason": "a conversation thread has no version; an edit re-renders the whole thread rather than producing a new revision (R18-A4's refresh model), so a revision number would be invented"
+        }
+      ]
+    },
+    "assignment": {
+      "status": "not_applicable",
+      "reason": "the source has no unit-of-work record; its signal is content or events, not tracked work",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "entity_reference": {
+      "status": "supported",
+      "reason": "",
+      "mapper": "discovery.concepts.mappers.content:map_teams_reference",
+      "field_gaps": []
+    },
+    "state_transition": {
+      "status": "not_applicable",
+      "reason": "the source has no unit-of-work record; its signal is content or events, not tracked work",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "work_item": {
+      "status": "not_applicable",
+      "reason": "the source has no unit-of-work record; its signal is content or events, not tracked work",
+      "mapper": null,
+      "field_gaps": []
+    }
+  }
+}

@@ -10,14 +10,14 @@
           null,
           "Metric",
           "Approval bottleneck \u2014 1 pending loan approval(s)",
-          "1 loan approval(s) currently pending out of 1 total. Approval cycle: avg 112 days, max 112 days. Proactive escalation to credit committee can reduce approval backlog."
+          "1 loan approval(s) currently pending out of 1 total. Approval cycle: avg 127 days, max 127 days. Proactive escalation to credit committee can reduce approval backlog."
         ],
         [
           "ServiceNow",
           "APPROVAL_BOTTLENECK",
           "Metric",
           "ServiceNow corroboration: APPROVAL_BOTTLENECK",
-          "Loan approval: Loan approval stuck \u2014 no approval notifications sent. Priority: 1 - Critical. State: New."
+          "Loan approval: Loan approval stuck \u2014 no approval notifications sent. Priority: 1 - Critical. State: Closed."
         ]
       ],
       "evidence_count": 2,
@@ -40,15 +40,15 @@
           "Salesforce",
           null,
           "Metric",
-          "Spreading bottleneck \u2014 1 unlocked periods (max 112 days)",
-          "1 spread periods remain unlocked (max: 112 days). 0 analyst(s) have 2+ unlocked periods. Financial spreading backlog is delaying credit decisions."
+          "Spreading bottleneck \u2014 1 unlocked periods (max 127 days)",
+          "1 spread periods remain unlocked (max: 127 days). 0 analyst(s) have 2+ unlocked periods. Financial spreading backlog is delaying credit decisions."
         ],
         [
           "ServiceNow",
           "SPREADING_BOTTLENECK",
           "Metric",
           "ServiceNow corroboration: SPREADING_BOTTLENECK",
-          "Financial spreading: nCino spreading module slow \u2014 analysts reporting delays. Priority: 2 - High. State: New."
+          "Financial spreading: nCino spreading module slow \u2014 analysts reporting delays. Priority: 2 - High. State: In Progress."
         ]
       ],
       "evidence_count": 2,
@@ -93,7 +93,7 @@
           "COVENANT_TRACKING_GAP",
           "Metric",
           "ServiceNow corroboration: COVENANT_TRACKING_GAP",
-          "Covenant compliance: Compliance team cannot update covenant status in nCino. Priority: 1 - Critical. State: New."
+          "Covenant compliance: Compliance team cannot update covenant status in nCino. Priority: 1 - Critical. State: Closed."
         ]
       ],
       "evidence_count": 4,
@@ -124,7 +124,7 @@
           "CHECKLIST_BOTTLENECK",
           "Metric",
           "ServiceNow corroboration: CHECKLIST_BOTTLENECK",
-          "Document checklist: Document exception approval workflow not routing for loan closings. Priority: 2 - High. State: In Progress."
+          "Document checklist: Document exception approval workflow not routing for loan closings. Priority: 2 - High. State: Resolved."
         ]
       ],
       "evidence_count": 2,
@@ -176,7 +176,7 @@
           "LOAN_ORIGINATION_ROUTING_FRICTION",
           "Metric",
           "ServiceNow corroboration: LOAN_ORIGINATION_ROUTING_FRICTION",
-          "Loan origination routing: nCino loan routing \u2014 multiple reassignments causing origination delays. Priority: 2 - High. State: New."
+          "Loan origination routing: nCino loan routing \u2014 multiple reassignments causing origination delays. Priority: 2 - High. State: Resolved."
         ]
       ],
       "evidence_count": 5,

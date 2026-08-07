@@ -1,5 +1,6 @@
 import React from 'react';
 import { OpportunityCandidate, OpportunityTier } from '../../types/analystReview';
+import { RankingAdjustmentCompact } from '../learning/RankingAdjustment';
 
 function tierBadge(tier: OpportunityTier) {
   const cls =
@@ -62,6 +63,7 @@ export default function OpportunityRankedList({
                   <span>Impact {o.impact}/10</span>
                   <span>Effort {o.effort}/10</span>
                 </div>
+                <RankingAdjustmentCompact ranking={o._ranking} />
               </div>
             );
           })

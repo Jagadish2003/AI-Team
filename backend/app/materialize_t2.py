@@ -436,6 +436,25 @@ def run_trackb_and_persist(
                 if isinstance(payload_packs, list):
                     run["packs"] = payload_packs
 
+        # 2.0-D4 T3 (AC4): the per-run version record — what a support engineer needs
+        # six months later to answer "today's run of apparently the same data
+        # produces different findings; what changed?". Reads the pack stamp above
+        # rather than recomputing it, so there is one source of truth. Never fatal:
+        # a version record exists to explain a run and must not be the reason one
+        # fails.
+        try:
+            from .run_reproducibility import build_reproducibility_record
+
+            run["reproducibility"] = build_reproducibility_record(
+                run,
+                org_id=run.get("orgId") or run.get("org_id"),
+                connector_ids=[str(s) for s in (systems or [])],
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "run %s: reproducibility record unavailable", run_id, exc_info=True
+            )
+
         per_system, succeeded, ingest_errors = _ingest_summary_from_payload(
             payload, systems
         )
@@ -502,6 +521,21 @@ def run_trackb_and_persist(
         db.run_kv_set("opps", run_id, opps)
         db.run_kv_set("evidence", run_id, ev)
         if payload.get("secopsVolume") is not None:
+            # 2.0-B1 T5 (AC5): sweep the SecOps volume artifact like every other
+            # SecOps materialization output. It is designed to be aggregate-only
+            # (counts keyed on vulnerability_class x ci_class x remediation_path,
+            # never hosts), but before T5 this was the ONE SecOps KV write in this
+            # block with no floor sweep — the guarantee rested on a docstring
+            # rather than an enforced boundary. It is also viewer-readable via
+            # GET /api/runs/{id}/secops/volume, so an enumeration reaching it
+            # would be broadly exposed. Swept unconditionally (not gated on
+            # secops_enabled): if this artifact exists at all the run produced
+            # SecOps volume data, whatever the pack list says.
+            _assert_secops_materialized(
+                payload["secopsVolume"],
+                where="Security Operations volume artifact",
+                enabled=True,
+            )
             db.run_kv_set("secops_volume", run_id, payload["secopsVolume"])
 
         # R16-B1 (T4): persist one per-run opportunity_instance per opportunity.
@@ -547,6 +581,36 @@ def run_trackb_and_persist(
             errors["opportunity_lifecycle"] = str(e)
             logger.warning(
                 "Opportunity lifecycle tracking failed (non-blocking): %s", e
+            )
+
+        # 2.0-B2 T5 (AC4): this is the "re-evaluation on the next run" half. A
+        # finding flagged when an entity was unmerged is cleared HERE — by the run
+        # that actually re-observed and re-scored it — and that run's id is written
+        # onto the flag. Placed after identity stamping because the flag is keyed on
+        # opportunity_identity, and after scoring because the finding this run just
+        # produced IS the re-evaluation; nothing further has to happen for the flag
+        # to be honestly closed. A finding that stops appearing keeps its flag
+        # rather than being quietly considered handled. Non-blocking.
+        try:
+            from .finding_reevaluation import clear_flags_for_run
+
+            cleared = clear_flags_for_run(
+                run_org_id,
+                run_id,
+                [
+                    o.get("opportunity_identity")
+                    for o in opps
+                    if isinstance(o, dict)
+                ],
+            )
+            if cleared:
+                logger.info(
+                    "Run %s re-evaluated %d flagged finding(s)", run_id, len(cleared)
+                )
+        except Exception as e:  # noqa: BLE001
+            errors["finding_reevaluation"] = str(e)
+            logger.warning(
+                "Re-evaluation flag clearing failed (non-blocking): %s", e
             )
 
         # R16-B1 (T6): persist the queryable evidence-pointer trail so a finding

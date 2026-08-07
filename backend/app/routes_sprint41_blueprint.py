@@ -19,6 +19,7 @@ Wire-in (main.py):
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, HTTPException
@@ -30,6 +31,8 @@ from . import db
 from .llm_enrichment import KV_LLM_ENRICHMENT
 from .opportunity_display import with_display_title
 from .terminology import apply_run_terminology
+
+logger = logging.getLogger(__name__)
 
 
 # ── Detector metadata keyed by detector_id ───────────────────────────────────
@@ -519,6 +522,19 @@ def register_blueprint_routes(app) -> None:
                 status_code=404,
                 detail=f"Opportunity '{opp_id}' not found in run '{run_id}'",
             )
+        try:
+            from .middleware.tenancy import get_current_org_id_optional
+            from .projection_store import projection_for_opportunity
+
+            projection = projection_for_opportunity(
+                opp,
+                run_id,
+                org_id=get_current_org_id_optional(),
+            )
+            if projection and not isinstance(opp.get("projection"), dict):
+                opp = {**opp, "projection": projection}
+        except Exception as exc:  # noqa: BLE001 - projection fallback is advisory
+            logger.warning("Blueprint projection fallback not applied: %s", exc)
 
         enrichment = db.run_kv_get(KV_LLM_ENRICHMENT, run_id, None)
         blueprint = _build_blueprint(with_display_title(opp), enrichment)

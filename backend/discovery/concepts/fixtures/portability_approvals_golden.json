@@ -1,0 +1,65 @@
+{
+  "_meta": {
+    "story": "2.0-B4 T3 (AT-812)",
+    "purpose": "Golden fixture for the detector-portability proof (AC2). The RAW Service Cloud approval-process block below is fed to the ORIGINAL APPROVAL_BOTTLENECK (approval_delay.py) and PERMISSION_BOTTLENECK (permission_bottleneck.py) detectors; the SAME block is mapped to normalised concepts (mappers.map_service_cloud_approvals) and fed to the concept-native ports (portable_detectors). The test asserts the two produce identical DetectorResults.",
+    "shape": "The exact keys discovery.detectors.approval_delay / permission_bottleneck read on sf_data: approval_processes[].{process_name, pending_count, avg_delay_days, approver_count, bottleneck_score}. approver_ids is present to prove the mapper normalises the approver COUNT (ActorGroup.member_count) and drops the individual roster — groups, never individuals.",
+    "branch_coverage": {
+      "Underwriting Referral Review": "APPROVAL_BOTTLENECK combined-fire (delay>3 AND bottleneck>10); PERMISSION_BOTTLENECK fires (bottleneck>10, approvers>0)",
+      "Claim Settlement Authority": "both fire (combined delay + concentration)",
+      "Change Freeze Sign-off": "APPROVAL_BOTTLENECK severe-delay-fire only (delay>7); PERMISSION does NOT (bottleneck<=10)",
+      "Access Request Review": "PERMISSION_BOTTLENECK only (bottleneck>10, approvers>0); APPROVAL does NOT (delay not >3 and not >7)",
+      "Automated Risk Gate": "APPROVAL_BOTTLENECK fires (combined) but PERMISSION does NOT (approver_count==0 guard)",
+      "Policy Endorsement Approval": "negative control — neither fires; pending_count 0 exercises the mapper's decision='approved' path"
+    }
+  },
+  "approval_processes": [
+    {
+      "process_name": "Underwriting Referral Review",
+      "pending_count": 74,
+      "avg_delay_days": 6.5,
+      "approver_count": 2,
+      "bottleneck_score": 37.0,
+      "approver_ids": ["005xx000002INS2", "005xx000002INS4"]
+    },
+    {
+      "process_name": "Claim Settlement Authority",
+      "pending_count": 41,
+      "avg_delay_days": 4.2,
+      "approver_count": 3,
+      "bottleneck_score": 13.7,
+      "approver_ids": ["005xx000002INS1", "005xx000002INS5", "005xx000002INS6"]
+    },
+    {
+      "process_name": "Change Freeze Sign-off",
+      "pending_count": 10,
+      "avg_delay_days": 8.0,
+      "approver_count": 1,
+      "bottleneck_score": 5.0,
+      "approver_ids": ["005xx000002INS7"]
+    },
+    {
+      "process_name": "Access Request Review",
+      "pending_count": 18,
+      "avg_delay_days": 2.1,
+      "approver_count": 4,
+      "bottleneck_score": 13.0,
+      "approver_ids": ["005xx000002INS3", "005xx000002INS8", "005xx000002INS9", "005xx000002INSA"]
+    },
+    {
+      "process_name": "Automated Risk Gate",
+      "pending_count": 6,
+      "avg_delay_days": 5.0,
+      "approver_count": 0,
+      "bottleneck_score": 20.0,
+      "approver_ids": []
+    },
+    {
+      "process_name": "Policy Endorsement Approval",
+      "pending_count": 0,
+      "avg_delay_days": 2.1,
+      "approver_count": 5,
+      "bottleneck_score": 3.6,
+      "approver_ids": ["005xx000002INSB", "005xx000002INSC", "005xx000002INSD", "005xx000002INSE", "005xx000002INSF"]
+    }
+  ]
+}

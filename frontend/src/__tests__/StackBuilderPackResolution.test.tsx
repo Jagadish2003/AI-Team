@@ -10,7 +10,7 @@
  * detectors against orgs with no nCino package (every LLC_BI__* query 400s).
  */
 import { describe, expect, it } from 'vitest';
-import { resolvePackId } from '../pages/StackBuilderPage';
+import { resolvePackId, resolvePackIds, resolvePrimaryPackId } from '../pages/StackBuilderPage';
 import type { WorkspaceCatalogResponse } from '../types/workspace_catalog';
 import type { IndustryListItem, TemplateListItem } from '../types/stack_builder';
 
@@ -96,5 +96,65 @@ describe('resolvePackId — declaration authoritative', () => {
   it('defaults to service_cloud when nothing is declared and no industry is set', () => {
     expect(resolvePackId(stateWith(), catalogWith([]), INDUSTRIES, TEMPLATES)).toBe('service_cloud');
     expect(resolvePackId(stateWith(), null, INDUSTRIES, TEMPLATES)).toBe('service_cloud');
+  });
+});
+
+// ── #543: the primary pack must come FROM the resolved list ──────────────────
+//
+// `resolvePackId` ends in an unconditional `service_cloud` fallback, while
+// `resolvePackIds` reaches its fallback only when the selection is EMPTY. Deriving
+// the two independently therefore diverged: a user who chose only `cloud_ops` got
+// pack_ids `['cloud_ops']` alongside pack_id `'service_cloud'`. The backend UNIONS
+// them, so the run activated a Service Cloud pack nobody selected, and the
+// Discovery Plan rendered `service_cloud` as active beside a list omitting it.
+describe('#543 resolvePrimaryPackId — primary is always drawn from pack_ids', () => {
+  function planState(overrides: Record<string, unknown> = {}): any {
+    return {
+      ...stateWith(),
+      packIds: [],
+      analysisPackTouched: true,
+      ...overrides,
+    };
+  }
+
+  it('never names a pack that is absent from the resolved list', () => {
+    const state = planState({ packIds: ['cloud_ops'] });
+    const packIds = resolvePackIds(state, catalogWith([]), [], TEMPLATES);
+    const primary = resolvePrimaryPackId(state, catalogWith([]), [], TEMPLATES);
+
+    expect(packIds).toContain(primary);
+    // The specific regression: the standalone helper still says service_cloud.
+    expect(primary).toBe('cloud_ops');
+    expect(packIds).not.toContain('service_cloud');
+  });
+
+  it('does not smuggle service_cloud in via an industry hint either', () => {
+    const state = planState({ packIds: ['cloud_ops'], industryId: 'financial_services' });
+    const packIds = resolvePackIds(state, catalogWith([]), INDUSTRIES, TEMPLATES);
+    const primary = resolvePrimaryPackId(state, catalogWith([]), INDUSTRIES, TEMPLATES);
+
+    expect(packIds).toContain(primary);
+    expect(packIds).not.toContain('ncino');
+  });
+
+  it('still falls back to service_cloud when nothing at all is selected', () => {
+    // The fallback is correct HERE — an empty selection has to resolve to
+    // something, and resolvePackIds and the primary must agree on what.
+    const state = planState();
+    const packIds = resolvePackIds(state, catalogWith([]), [], TEMPLATES);
+    const primary = resolvePrimaryPackId(state, catalogWith([]), [], TEMPLATES);
+
+    expect(primary).toBe('service_cloud');
+    expect(packIds).toEqual(['service_cloud']);
+  });
+
+  it('keeps a declared Salesforce pack as the primary', () => {
+    const state = planState({ packIds: ['cloud_ops'] });
+    const packIds = resolvePackIds(state, catalogWith(['salesforce_sc']), [], TEMPLATES);
+    const primary = resolvePrimaryPackId(state, catalogWith(['salesforce_sc']), [], TEMPLATES);
+
+    // Salesforce packs lead the union, so the declaration stays primary.
+    expect(primary).toBe('service_cloud');
+    expect(packIds).toEqual(['service_cloud', 'cloud_ops']);
   });
 });

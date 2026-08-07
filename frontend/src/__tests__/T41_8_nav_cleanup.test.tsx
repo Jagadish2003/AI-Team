@@ -150,6 +150,9 @@ describe("AC1 — Source Intake absent from TopNav", () => {
       "Opportunity Review",
       "Agent Blueprint",
       "Executive Report",
+      // 2.0-B2 T3 — Entity Matches is workspace maintenance (org-scoped, not part
+      // of a run), so it sits AFTER the discovery flow, ahead of Run Health.
+      "Entity Matches",
       "Run Health",
     ]);
     expect(labels.at(-1)).toBe("Run Health");

@@ -144,6 +144,7 @@ def adjusted(client):
 
     opps = [_opp(i, "DISFAVOURED") for i in range(5)]
     opps += [_opp(i + 5, "FAVOURED") for i in range(5)]
+    opps.append(_opp(10, "NEUTRAL"))
     run_id = _run_with_opps(opps)
     return {"org": org, "run_id": run_id, "opps": opps, "decisions": decisions}
 
@@ -187,12 +188,23 @@ class TestEveryAdjustedFindingExposesAReason:
         ):
             assert field in reason, f"missing structured field {field!r}"
 
-    def test_an_unmoved_finding_carries_no_reason(self, client, adjusted):
+    def test_an_unadjusted_finding_carries_no_reason(self, client, adjusted):
         """A reason with nothing to explain would bury the ones that have."""
         served, _ = _moved_findings(client, adjusted)
         for item in served:
-            if not item["_ranking"].get("moved"):
+            if item["_ranking"].get("adjusted") is False:
                 assert "reason" not in item["_ranking"]
+
+    def test_a_capped_unmoved_finding_still_carries_a_reason(self, client, adjusted):
+        served, _ = _moved_findings(client, adjusted)
+        capped = next(
+            o for o in served
+            if o["_ranking"].get("adjusted")
+            and not o["_ranking"].get("moved")
+            and o["_ranking"].get("wasCapped")
+        )
+        assert capped["_ranking"]["reason"]["summary"]
+        assert capped["_ranking"]["reason"]["ranksMoved"] == 0
 
     def test_the_direction_matches_the_movement(self, client, adjusted):
         _, moved = _moved_findings(client, adjusted)
@@ -261,12 +273,29 @@ class TestTheLinksResolve:
 
     def test_the_explain_route_404s_for_an_unadjusted_finding(self, client, adjusted):
         served, _ = _moved_findings(client, adjusted)
-        unmoved = next(o for o in served if not o["_ranking"].get("moved"))
+        unmoved = next(o for o in served if o["_ranking"].get("adjusted") is False)
         response = client.get(
             f"{BASE}/explain/{adjusted['run_id']}/{unmoved['id']}",
             headers=_auth(adjusted["org"]),
         )
         assert response.status_code == 404
+
+    def test_the_explain_route_returns_capped_zero_displacement_reason(
+        self, client, adjusted
+    ):
+        served, _ = _moved_findings(client, adjusted)
+        capped = next(
+            o for o in served
+            if o["_ranking"].get("adjusted")
+            and not o["_ranking"].get("moved")
+            and o["_ranking"].get("wasCapped")
+        )
+        response = client.get(
+            f"{BASE}/explain/{adjusted['run_id']}/{capped['id']}",
+            headers=_auth(adjusted["org"]),
+        )
+        assert response.status_code == 200
+        assert response.json()["reason"]["ranksMoved"] == 0
 
     def test_the_explain_route_requires_analyst(self, client, adjusted):
         response = client.get(

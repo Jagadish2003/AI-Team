@@ -85,7 +85,18 @@ export function isCappedProjection(
   if (!projection) return false;
   const strength = projection.projectionStrength;
   if (strength && typeof strength.capped === 'boolean') return strength.capped;
-  return Boolean(projection.confidenceCapped);
+  if (typeof projection.confidenceCapped === 'boolean') return projection.confidenceCapped;
+  if (typeof projection.bandWidth?.confidenceCapped === 'boolean') {
+    return projection.bandWidth.confidenceCapped;
+  }
+  if (typeof projection.bandWidthInputs?.confidenceCapped === 'boolean') {
+    return projection.bandWidthInputs.confidenceCapped;
+  }
+  const bandInputStatus = projection.bandWidthInputs?.corroborationStatus
+    ?.trim()
+    .toLowerCase();
+  const basisStatus = projection.basis?.corroborationStatus?.trim().toLowerCase();
+  return bandInputStatus === 'single_source' || basisStatus === 'single_source';
 }
 
 /** The label a capped projection must carry wherever its strength is shown. */

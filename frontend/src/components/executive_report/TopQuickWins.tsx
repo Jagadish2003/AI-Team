@@ -8,6 +8,7 @@ import {
   projectionBasisSummary,
 } from '../projection/ProjectionBasis';
 import { RecommendationHeadline } from '../projection/ProjectionRecommendation';
+import { showRelease2ArcAUi } from '../../config/releaseFlags';
 
 interface TopQuickWinsProps {
   quickWins: OpportunityCandidate[];
@@ -28,8 +29,8 @@ export default function TopQuickWins({ quickWins }: TopQuickWinsProps) {
       <div className="text-sm font-semibold text-text">Top Quick Wins</div>
       <div className="mt-3 space-y-2">
         {quickWins.map(o => {
-          const basisSummary = projectionBasisSummary(o.projection);
-          const thinEvidence = isThinProjectionEvidence(o.projection);
+          const basisSummary = showRelease2ArcAUi ? projectionBasisSummary(o.projection) : null;
+          const thinEvidence = showRelease2ArcAUi && isThinProjectionEvidence(o.projection);
 
           return (
             <button
@@ -43,7 +44,9 @@ export default function TopQuickWins({ quickWins }: TopQuickWinsProps) {
               </div>
               {/* 2.0-A1 T5: the quick win is stated as an intervention, not as a
                   benefit — this is the line an executive quotes. */}
-              <RecommendationHeadline projection={o.projection} className="mt-2" />
+              {showRelease2ArcAUi && (
+                <RecommendationHeadline projection={o.projection} className="mt-2" />
+              )}
               {basisSummary && (
                 <div
                   data-testid={`executive-report-projection-basis-${o.id}`}

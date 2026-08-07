@@ -14,6 +14,8 @@ tenant can never read another's run-health (AC5/AC6).
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, FastAPI, Query
 
 from .health_aggregation import (
@@ -25,8 +27,12 @@ from .health_aggregation import (
     runs_view,
 )
 from .middleware.tenancy import get_current_org_id
+from .run_volume_report import build_run_volume_report
+from .scale_envelope import envelope_summary
 from .rbac import require_role
 from .security import require_auth
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/run-health",
@@ -68,6 +74,81 @@ def get_pack_health() -> dict:
     R16-B1 stamp), and detector counts — read from run/pack data, not recreated."""
     org_id = get_current_org_id()
     return packs_view(org_id)
+
+
+@router.get("/degradation")
+def get_degradation(
+    run_id: str = Query(default=None, description="Run to report on; latest when omitted."),
+) -> dict:
+    """2.0-D4 T5 (AC6) — what did not work, in one uniform shape.
+
+    Connector outages, model-provider unavailability and storage pressure all
+    report here in the SAME shape — what was attempted, what was delivered, what
+    is missing, a named reason and a remedy — so a consumer renders them without
+    special-casing each subsystem.
+
+    Unlike the run-scoped surfaces, this one DOES probe the live environment,
+    because "can this deployment embed content right now?" is a question about
+    now rather than about a past run.
+    """
+    org_id = get_current_org_id()
+    resolved = None
+    if run_id:
+        try:
+            from .run_store import read_run
+
+            resolved = read_run(run_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not read run %s for degradation: %s", run_id, exc)
+
+    from .run_completeness import build_run_completeness
+
+    completeness = build_run_completeness(resolved or {}, include_environment=True)
+    return {"org_id": org_id, "completeness": completeness.to_dict()}
+
+
+@router.get("/volume")
+def get_volume_envelope(
+    run_id: str = Query(default=None, description="Run to report on; latest when omitted."),
+) -> dict:
+    """2.0-D4 T4 — the stated scale envelope and how a run fared against it.
+
+    Two things in one place, deliberately. The ENVELOPE says what volumes the
+    deployment supports and — just as importantly — how well-founded each of
+    those numbers is, so a reader can tell a measured figure from a first guess
+    without opening any code. The OBSERVATION says what this run actually did
+    against it.
+
+    This is the surface that makes MSP-B7's "loud, never silent" discipline
+    visible. Budgets and deferrals have been recorded on the run record since
+    B7; until now nothing rendered them, which satisfies the letter of loud and
+    none of its intent.
+    """
+    org_id = get_current_org_id()
+    report = None
+    resolved = None
+    try:
+        from .db import tenancy_get_runs
+        from .run_store import read_run
+
+        if run_id:
+            resolved = read_run(run_id)
+        else:
+            runs = tenancy_get_runs(org_id, limit=1) or []
+            if runs:
+                first = runs[0]
+                resolved = first if isinstance(first, dict) else None
+    except Exception as exc:  # noqa: BLE001 - the envelope is useful without a run
+        logger.warning("Could not resolve a run for the volume report: %s", exc)
+
+    if resolved is not None:
+        report = build_run_volume_report(resolved).to_dict()
+
+    return {
+        "org_id": org_id,
+        "envelope": envelope_summary(),
+        "run": report,
+    }
 
 
 @router.get("/attention")

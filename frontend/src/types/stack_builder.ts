@@ -269,6 +269,14 @@ export interface SetupState {
   selectedSalesforceClouds: string[];
   weightings: Record<string, SystemWeighting>;
   currentStep: 1 | 2 | 3 | 4;
+  /**
+   * Whether the workspace's already-connected systems have been pre-selected for
+   * this setup. The pre-selection is a one-time starting point: the catalog is
+   * refreshed in the background, and without this flag a system the user
+   * deliberately DESELECTED would be re-selected on the next refresh. Their
+   * choice has to win, so the seed runs once per setup session.
+   */
+  connectedDefaultsApplied?: boolean;
 }
 
 // ── Progress Bar Step ─────────────────────────────────────────────────────────

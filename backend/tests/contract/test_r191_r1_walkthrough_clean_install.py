@@ -594,10 +594,25 @@ def test_frontend_stack_builder_has_no_cached_registry_arrays():
     )
     assert "/api/stack-builder/industries" in stack_builder_api
     assert "/api/stack-builder/templates" in stack_builder_api
-    focus_page = (REPO_ROOT / "frontend" / "src" / "pages" / "DiscoveryFocusPage.tsx").read_text(
-        encoding="utf-8"
-    )
-    assert "roadmap_systems" in focus_page
+
+    # The roadmap-systems surface used to be asserted against DiscoveryFocusPage,
+    # which rendered a "Coming soon" pill per API-supplied roadmap system. That UI
+    # was deliberately removed on dev (PR #560, "Restore disabled connect posture
+    # for unavailable catalog items") in favour of a disabled posture on the
+    # connector tiles, so the old assertion pinned a component that no longer
+    # exists.
+    #
+    # It is re-pointed rather than deleted, because what R191-R1 needs to hold is
+    # that the roadmap surface stays part of the FRONTEND CONTRACT: the backend
+    # serves `roadmap_systems` on every industry row, and if the type is dropped
+    # the field is orphaned and the anchor-on-shipped labelling has no consumer at
+    # all. This is a weaker guard than the render assertion it replaces, and that
+    # is worth knowing — re-strengthen it against whichever component renders the
+    # roadmap labelling when one exists again.
+    stack_builder_types = (
+        REPO_ROOT / "frontend" / "src" / "types" / "stack_builder.ts"
+    ).read_text(encoding="utf-8")
+    assert "roadmap_systems" in stack_builder_types
 
 
 def test_registry_story_diff_avoids_engine_and_template_model_code():

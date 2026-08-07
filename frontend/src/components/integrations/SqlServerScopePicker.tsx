@@ -25,9 +25,12 @@
  *   onSaved    — called after a successful save so the parent can refetch
  *   viewerOnly — true blocks saves (Analyst+ required per T1-S11)
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '../common/Toast';
 import { ApiError, apiGet, apiPost } from '../../lib/apiClient';
+import { useDataCache } from '../../lib/dataCache';
+import { cacheKeys } from '../../lib/cacheKeys';
+import { usePickerFetch } from './usePickerResource';
 
 // ── API types ─────────────────────────────────────────────────────────────────
 
@@ -44,6 +47,12 @@ interface SchemaDiscoveryResult {
 interface ScopeResponse {
   schemas: string[];
   tables: string[];
+}
+
+/** Schema discovery + the saved scope, cached together under one key. */
+interface ScopePickerData {
+  discovery: SchemaDiscoveryResult | null;
+  scope: ScopeResponse | null;
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -78,52 +87,47 @@ export default function SqlServerScopePicker({
   viewerOnly = false,
 }: Props) {
   const { push } = useToast();
-
-  // ── Fetch state ────────────────────────────────────────────────────────────
-  const [discovery, setDiscovery]   = useState<SchemaDiscoveryResult | null>(null);
-  const [loadError, setLoadError]   = useState<string | null>(null);
-  const [loading, setLoading]       = useState(true);
+  const cache = useDataCache();
 
   // ── Selection state ────────────────────────────────────────────────────────
   const [selectedSchemas, setSelectedSchemas] = useState<Set<string>>(new Set());
   const [selectedTables, setSelectedTables]   = useState<Set<string>>(new Set());
   const [expanded, setExpanded]               = useState<Set<string>>(new Set());
+  // True once the user has changed the scope without saving it — a background
+  // refresh must never overwrite an edit in progress.
+  const dirtyRef = useRef(false);
 
   // ── Save state ─────────────────────────────────────────────────────────────
   const [saving, setSaving] = useState(false);
 
-  // ── Load schema discovery + previously saved scope ─────────────────────────
-  const loadData = useCallback(() => {
-    setLoading(true);
-    setLoadError(null);
-
-    Promise.all([
-      apiGet<SchemaDiscoveryResult>('/api/db-connectors/sqlserver/schema').catch(
-        () => null,
-      ),
-      apiGet<ScopeResponse>('/api/db-connectors/sqlserver/scope').catch(
-        () => null,
-      ),
-    ]).then(([disc, savedScope]) => {
-      if (!disc) {
-        setLoadError(
-          'No schemas discovered. Check your connection and try again.',
-        );
-        setLoading(false);
-        return;
-      }
-      setDiscovery(disc);
-      if (savedScope) {
-        setSelectedSchemas(new Set(savedScope.schemas ?? []));
-        setSelectedTables(new Set(savedScope.tables ?? []));
-      }
-      setLoading(false);
-    });
-  }, []);
+  // ── Schema discovery + previously saved scope, on the SHARED cache ─────────
+  // Both reads live under ONE key so they refresh as a unit, and the "Loading
+  // schema discovery…" state is shown on the FIRST load only: a re-render, a
+  // remount, or a background/connector-scope refresh keeps the current tree on
+  // screen and replaces it only if it actually changed (see usePickerResource).
+  const { data, firstLoad, refetch: reload } = usePickerFetch<ScopePickerData>(
+    cacheKeys.connectorSqlServerScope,
+    async () => {
+      const [disc, savedScope] = await Promise.all([
+        apiGet<SchemaDiscoveryResult>('/api/db-connectors/sqlserver/schema').catch(
+          () => null,
+        ),
+        apiGet<ScopeResponse>('/api/db-connectors/sqlserver/scope').catch(
+          () => null,
+        ),
+      ]);
+      return { discovery: disc, scope: savedScope };
+    },
+  );
+  const discovery = data?.discovery ?? null;
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    if (dirtyRef.current) return;
+    const savedScope = data?.scope;
+    if (!savedScope) return;
+    setSelectedSchemas(new Set(savedScope.schemas ?? []));
+    setSelectedTables(new Set(savedScope.tables ?? []));
+  }, [data]);
 
   // ── Table list helpers ─────────────────────────────────────────────────────
   function tablesForSchema(schema: string): string[] {
@@ -136,6 +140,7 @@ export default function SqlServerScopePicker({
   // ── Toggle schema — selects / deselects all its tables too ────────────────
   function toggleSchema(schema: string) {
     const tables = tablesForSchema(schema);
+    dirtyRef.current = true;
     setSelectedSchemas((prev) => {
       const next = new Set(prev);
       if (next.has(schema)) {
@@ -159,6 +164,7 @@ export default function SqlServerScopePicker({
 
   // ── Toggle individual table ────────────────────────────────────────────────
   function toggleTable(schema: string, qualifiedTable: string) {
+    dirtyRef.current = true;
     setSelectedTables((prev) => {
       const next = new Set(prev);
       if (next.has(qualifiedTable)) {
@@ -192,10 +198,19 @@ export default function SqlServerScopePicker({
     if (viewerOnly) return;
     setSaving(true);
     try {
-      await apiPost<ScopeResponse>('/api/db-connectors/sqlserver/scope', {
+      const scope: ScopeResponse = {
         schemas: [...selectedSchemas],
         tables: [...selectedTables],
-      });
+      };
+      await apiPost<ScopeResponse>('/api/db-connectors/sqlserver/scope', scope);
+      // The saved scope is written into the cache rather than invalidating the
+      // key: an invalidate refetches in the FOREGROUND, which would blank the tree
+      // back to its loading state right after a successful save.
+      dirtyRef.current = false;
+      cache.setData<ScopePickerData>(cacheKeys.connectorSqlServerScope, (prev) => ({
+        discovery: prev?.discovery ?? discovery,
+        scope,
+      }));
       push(
         selectedSchemas.size > 0
           ? `Scope saved — ${selectedSchemas.size} schema(s), ${selectedTables.size} table(s) declared.`
@@ -207,10 +222,10 @@ export default function SqlServerScopePicker({
     } finally {
       setSaving(false);
     }
-  }, [selectedSchemas, selectedTables, viewerOnly, push, onSaved]);
+  }, [selectedSchemas, selectedTables, viewerOnly, push, onSaved, cache, discovery]);
 
-  // ── Loading state ──────────────────────────────────────────────────────────
-  if (loading) {
+  // ── First load only — a later refresh keeps the current tree on screen ─────
+  if (firstLoad) {
     return (
       <div className="mt-4 text-xs text-muted animate-pulse">
         Loading schema discovery…
@@ -219,15 +234,15 @@ export default function SqlServerScopePicker({
   }
 
   // ── Error / empty state — stays local, does not break parent panel ─────────
-  if (loadError || !discovery || discovery.schemas.length === 0) {
+  if (!discovery || discovery.schemas.length === 0) {
     return (
       <div className="mt-4">
         <p className="text-xs text-muted mb-2">
-          {loadError ?? 'No schemas discovered. Check your connection and try again.'}
+          No schemas discovered. Check your connection and try again.
         </p>
         <button
           type="button"
-          onClick={loadData}
+          onClick={() => { void reload(); }}
           className="text-xs text-accent underline underline-offset-2 hover:text-accent/80"
         >
           Retry

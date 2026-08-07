@@ -7,6 +7,8 @@ import {
   projectionBandLabel,
 } from '../projection/ProjectionBand';
 import ReadinessPill from './ReadinessPill';
+import { showRelease2ArcAUi } from '../../config/releaseFlags';
+import { RankingAdjustmentCompact } from '../learning/RankingAdjustment';
 
 interface Props {
   stage: RoadmapStage;
@@ -30,10 +32,12 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
   // (single-source) finding never presents above a corroborated equivalent,
   // whatever order reaches this component. The sort is stable, so the stage's
   // existing order — which encodes analyst decisions — is otherwise preserved.
-  const opportunities = demoteCappedProjections(
-    stage.opportunities,
-    (opp) => opp.projection,
-  );
+  const opportunities = showRelease2ArcAUi
+    ? demoteCappedProjections(
+        stage.opportunities,
+        (opp) => opp.projection,
+      )
+    : stage.opportunities;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-panel p-4">
@@ -50,7 +54,7 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
               <div className="text-sm text-muted">No opportunities assigned to this stage yet.</div>
             )}
             {opportunities.map((o: OpportunityCandidate) => {
-              const bandLabel = projectionBandLabel(o.projection);
+              const bandLabel = showRelease2ArcAUi ? projectionBandLabel(o.projection) : null;
               return (
                 <button
                   key={o.id}
@@ -71,9 +75,12 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
                   </div>
                   {/* Projection strength carries its own cap label, so a reader
                       never sees the ordering signal without its caveat. */}
-                  <div className="mt-1.5">
-                    <ProjectionStrengthBadge projection={o.projection} />
-                  </div>
+                  {showRelease2ArcAUi && (
+                    <div className="mt-1.5">
+                      <ProjectionStrengthBadge projection={o.projection} />
+                    </div>
+                  )}
+                  <RankingAdjustmentCompact ranking={o._ranking} />
                   {renderBlueprintLink?.(o.id)}
                 </button>
               );
