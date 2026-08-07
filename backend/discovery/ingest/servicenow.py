@@ -3461,6 +3461,14 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
         # Carry the event-signature link column(s) through under their ServiceNow
         # names. The incident payload is built as an explicit literal with no
         # passthrough, so a requested-but-uncopied column is still dropped here —
+<<<<<<< HEAD
+=======
+        # this is the second half of the mapping. The value is carried through
+        # unrenamed and unvalidated (the shared reader validates its shape); the
+        # only transformation is unwrapping the `display_value=all` envelope, so a
+        # MULTI-VALUE column arrives as the list it is rather than as a Mapping
+        # the reader would skip.
+>>>>>>> c043980d4b10f9c44e6979352abfaa43b81dff28
         # this is the second half of the mapping. Copied verbatim (no parsing or
         # renaming); the shared reader validates the value's shape.
         #
