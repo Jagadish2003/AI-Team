@@ -692,6 +692,49 @@ DEFAULT_PACK_CERTIFICATION: Dict[str, Any] = {
     "signature": {"keyId": "", "algorithm": "", "value": ""},
 }
 
+# 2.0-C4 T1 (AT-842): the registry key a pack declares its DEPRECATION under.
+# Shape (see pack_deprecation.py for the phases and the evaluation rules):
+#
+#   "deprecation": {
+#       "status":           "deprecated",          # "active" (default) | "deprecated"
+#       "versions":         ["1.1.0"],             # [] / omitted ⇒ EVERY version
+#       "reason":           "Superseded by ...",   # required for a real notice
+#       "deprecatedOn":     "2026-08-01",          # ISO date the notice starts
+#       "gracePeriodDays":  90,                    # derives graceEndsOn from deprecatedOn
+#       "graceEndsOn":      "2026-10-30",          # authoritative end date, if known
+#       "replacement": {                           # optional — the migration path
+#           "packId":     "cloud_ops",
+#           "minVersion": "1.2.0",
+#           "notes":      "free-text migration guidance",
+#       },
+#   }
+#
+# Declare EITHER gracePeriodDays OR graceEndsOn; declaring neither is a legitimate
+# "deprecated, no removal date announced yet" state that surfaces the notice and
+# never auto-disables the pack.
+#
+# As with COMPATIBILITY_KEY and CERTIFICATION_KEY, the rules live elsewhere
+# (pack_deprecation.py) and this module stays the declaration surface. Unlike
+# certification there is no signature: a deprecation is the registry shipper stating
+# that its OWN pack is superseded, so there is no third-party claim to protect.
+DEPRECATION_KEY = "deprecation"
+
+# Fallback for a pack that declares no deprecation block — not deprecated. The
+# overwhelmingly common case, so the absence of a declaration is never an error.
+DEFAULT_PACK_DEPRECATION: Dict[str, Any] = {
+    # Empty means UNDECLARED, which pack_deprecation resolves to "active" — kept
+    # distinct from an explicit "active" so it can tell a pack that says nothing
+    # from one that says "not deprecated", and so a block that carries a reason and
+    # a date but forgot its status is read as the notice it plainly is.
+    "status": "",
+    "versions": [],
+    "reason": "",
+    "deprecatedOn": "",
+    "gracePeriodDays": None,
+    "graceEndsOn": "",
+    "replacement": {"packId": "", "minVersion": "", "notes": ""},
+}
+
 # Fallback for a pack that has not declared a "compatibility" block. Deliberately
 # PERMISSIVE (no bounds, no required concepts) so an undeclared pack behaves
 # exactly as it did before AT-826 — the declaration is enforced by a structural
@@ -897,6 +940,74 @@ def get_pack_certification_declaration(
             "keyId": _string(signature_raw, "keyId"),
             "algorithm": _string(signature_raw, "algorithm").lower(),
             "value": _string(signature_raw, "value"),
+        },
+    }
+
+
+def get_pack_deprecation_declaration(
+    pack_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return a pack's declared deprecation block (2.0-C4 T1 / AT-842).
+
+    Always returns a complete block: a pack that declares nothing (or a partial
+    block) is filled from ``DEFAULT_PACK_DEPRECATION``, so callers never handle a
+    missing key. An undeclared ``status`` is reported as EMPTY rather than
+    ``"active"``, so ``pack_deprecation`` can tell "said nothing" (resolve to active,
+    or infer a notice from the rest of the block) from an explicit "not deprecated".
+
+    Normalisation only cleans shapes, it never repairs meaning: strings are stripped,
+    the status is lower-cased, ``versions`` is de-duplicated order-preservingly, and
+    ``gracePeriodDays`` is passed through UNCHANGED when it is not a whole number so
+    that ``pack_deprecation`` can name it as a defect rather than have it silently
+    disappear. Inventing a missing reason or grace date here would hide exactly the
+    declaration mistakes the structural tests exist to catch.
+
+    Resolution follows ``get_pack()``, so an unknown pack id reads the DEFAULT pack's
+    deprecation, exactly as it reads its detectors.
+    """
+    declared = get_pack(pack_id).get(DEPRECATION_KEY) or {}
+    if not isinstance(declared, dict):
+        declared = {}
+
+    def _string(source: Dict[str, Any], key: str) -> str:
+        raw = source.get(key)
+        return raw.strip() if isinstance(raw, str) else ""
+
+    versions_raw = declared.get("versions")
+    if isinstance(versions_raw, str):
+        versions_raw = [versions_raw]
+    if not isinstance(versions_raw, (list, tuple)):
+        versions_raw = []
+    seen: set[str] = set()
+    versions: List[str] = []
+    for entry in versions_raw:
+        if not isinstance(entry, str):
+            continue
+        version = entry.strip()
+        if not version or version in seen:
+            continue
+        seen.add(version)
+        versions.append(version)
+
+    replacement_raw = declared.get("replacement")
+    if not isinstance(replacement_raw, dict):
+        replacement_raw = {}
+
+    return {
+        # Empty ⇒ undeclared. pack_deprecation resolves that to "active", or infers
+        # "deprecated" when the rest of the block is populated.
+        "status": _string(declared, "status").lower(),
+        "versions": versions,
+        "reason": _string(declared, "reason"),
+        "deprecatedOn": _string(declared, "deprecatedOn"),
+        # Passed through as declared — a non-integer is a defect to be NAMED by
+        # pack_deprecation, not something to coerce away here.
+        "gracePeriodDays": declared.get("gracePeriodDays"),
+        "graceEndsOn": _string(declared, "graceEndsOn"),
+        "replacement": {
+            "packId": _string(replacement_raw, "packId"),
+            "minVersion": _string(replacement_raw, "minVersion"),
+            "notes": _string(replacement_raw, "notes"),
         },
     }
 

@@ -72,8 +72,18 @@ from discovery.packs.template_registry import (
 _STATE_PREFIX = "stack_builder_state"
 
 
-def _state_key(org_id: str) -> str:
+def setup_state_key(org_id: str) -> str:
+    """The kv key holding an org's saved setup state.
+
+    Public because this module OWNS the namespace and other modules need to address
+    the same row — `app/pack_migration.py` (2.0-C4 T3) rewrites the pack/template
+    selections inside it. One definition, so the two can never address different rows.
+    """
     return f"{_STATE_PREFIX}:{org_id}"
+
+
+#: Internal alias kept for this module's own call sites.
+_state_key = setup_state_key
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────

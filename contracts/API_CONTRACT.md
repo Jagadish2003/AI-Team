@@ -1,6 +1,187 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.22
-Date: 2026-08-05
+Version: v1.26
+Date: 2026-08-06
+
+> v1.26 — 2.0-C4 T5 (Deprecation Lifecycle Audit): all three deprecation transitions
+> are audit events, and are readable as one trail. One new route and one new audit
+> event type; no existing response shape changes.
+>
+> **The gap this closes.** Migration (`pack_migration_applied` /
+> `pack_migration_reverted`, v1.24) and post-grace disable (`pack_deprecation_disabled`,
+> v1.25) already reached the audit log. **Deprecation itself did not** — a declaration
+> is a registry fact, and nothing recorded that a particular organisation had ever come
+> under it.
+>
+> **New audit event — `pack_deprecation_announced`.** Written when an org's pack
+> selection is resolved for a run while a deprecated pack is in it: the org-scoped
+> moment the deprecation actually bears on a customer. Payload: `pack_id`,
+> `pack_version`, `phase`, `reason`, `deprecated_on`, `grace_ends_on`,
+> `replacement_pack_id`, `fingerprint`.
+>
+> Emitted **once per (org, pack, declared terms)** — a repeat run is silent, but moving
+> the grace date, changing the replacement, or restating the reason announces again,
+> because that is materially different notice. A pack sliding from `grace` into
+> `grace_expired` is NOT new terms (that is the announced terms coming true, and
+> `pack_deprecation_disabled` records it).
+>
+> **New route — `GET /api/packs/deprecation/audit` (owner).**
+> Query: `packId` (optional), `limit` (1–1000, default 200).
+> Returns `{ orgId, packId, eventTypes[], transitions{}, entries[] }`, newest first.
+> Each entry is `{ id, eventType, transition, actorId, runId, packId, payload, at }`.
+>
+> `transitions` maps the three the story names to the audit event types that record
+> each — `deprecated` → `[pack_deprecation_announced]`, `migrated` →
+> `[pack_migration_applied, pack_migration_reverted]`, `retired` →
+> `[pack_deprecation_disabled]` — so a consumer does not hard-code that applied and
+> reverted are two halves of one transition.
+>
+> **Owner, deliberately** — the same bar as `GET /api/audit-log`, whose rows these are.
+> These events remain available there too; this route is the same data through a
+> narrower, transition-labelled lens. A read failure is an error, never an empty
+> `entries` list: an audit surface reporting "nothing happened" when it could not read
+> would mislead a reviewer.
+
+> v1.25 — 2.0-C4 T4 (Deprecation Grace Behaviour): a pack whose announced grace
+> period has ended is moved to safe-disabled and dropped from future runs. Additive
+> only — one new `reason` value on an existing field; no new routes and no shape
+> change.
+>
+> **A pack still INSIDE its grace is unaffected.** It activates, executes, and is
+> reported exactly as it was before the notice appeared. Nothing in this version
+> changes for it.
+>
+> **Extended shapes:**
+> - `excludedPacks[]` (on `LaunchResponse` and the run record) and `excluded_packs[]`
+>   (on `GET /api/run-health/packs`) — `reason` gains the value
+>   **`deprecation_grace_expired`** alongside the existing `pack_disabled`. `state`
+>   is `disabled` for both.
+> - `pack.execution_skipped` telemetry — the top-level `reason` is now derived from
+>   the exclusions present, so a mixed selection reports
+>   `"deprecation_grace_expired,pack_disabled"`. A homogeneous exclusion still
+>   reports exactly the single value it always did.
+>
+> **The two reasons are not interchangeable and a consumer must not collapse them.**
+> `pack_disabled` means the organisation turned the pack off and can turn it back on.
+> `deprecation_grace_expired` means the vendor retired it on the announced date —
+> re-enabling it does NOT bring it back (the next activation retires it again), and
+> the remedy is the replacement pack. A UI that labels both "disabled" sends the
+> operator to a control that cannot help them.
+>
+> The **409** from `POST /api/stack-builder/launch` and `POST /api/runs/{runId}/compute`
+> when every selected pack is excluded now names any retired packs separately and
+> points at migration rather than at re-enabling.
+>
+> The transition is an audit event (`pack_deprecation_disabled`) attributed to
+> `system:pack_deprecation`, and emits `pack.deprecation_disabled` telemetry. Nothing
+> historical is affected: runs, findings, and evidence produced while the pack was
+> supported are untouched and remain retrievable.
+
+> v1.24 — 2.0-C4 T3 (Pack Migration Assist): where a deprecated pack declares a
+> replacement, an org can migrate its saved run configuration onto it — previewed
+> first, applied only on confirmation, and reversible. Four entirely NEW routes; no
+> existing response shape changes, so a pre-v1.24 consumer is unaffected.
+>
+> **New routes** (all org-scoped from the authenticated context; a request body never
+> carries an org id):
+> - `GET /api/packs/{packId}/migration/preview` (**analyst+**) → `PackMigrationPlan`.
+>   Writes nothing.
+> - `POST /api/packs/{packId}/migration/apply` (**owner**) →
+>   `{ confirm: true, fingerprint?, reason? }` → `PackMigrationRecord`.
+> - `POST /api/packs/migrations/{migrationId}/revert` (**owner**) →
+>   `{ force?, reason? }` → `PackMigrationRecord`.
+> - `GET /api/packs/migrations` (**analyst+**) →
+>   `{ orgId, migrations: PackMigrationRecord[] }`, newest first.
+>
+> **New shape — `PackMigrationPlan`:**
+> `{ orgId, packId, packName, replacementPackId, replacementPackName, available,
+> applicable, reason, reasonCode, changes[], unmapped[], warnings[], deprecation
+> (`PackDeprecationNotice | null`), evaluatedOn, fingerprint }`.
+>
+> `reason` is the sentence to display; `reasonCode`
+> (`"not_deprecated" | "no_replacement_declared"`, empty when a migration IS
+> available) is the same thing machine-readable, so a consumer branches on the code
+> rather than matching on prose.
+>
+> Two words carry the meaning, and they are not the same word. `available` is "a
+> migration exists" (the pack is deprecated AND names a registered replacement);
+> `applicable` is "and this org's configuration actually references the pack".
+> **`available: false` is a 200 with a `reason`, not an error** — a surface has to
+> explain "this pack names no replacement" to the customer.
+>
+> - `changes[]`: `{ surface: "stack_builder_setup_state", field, previousValue,
+>   newValue, description }`. `previousValue` is carried so the migration can be
+>   reverted to exactly what was there. Migrated fields are the SELECTION fields
+>   only: `packId`, `packIds`, `templateId`, `templateIds`.
+> - `unmapped[]`: `{ surface, field, value, reason:
+>   "no_replacement_template" | "ambiguous_replacement_template", detail }` — a
+>   reference deliberately left alone. Reported, never silently skipped.
+> - `warnings[]`: `{ code, detail }` — `replacement_pack_disabled`,
+>   `replacement_pack_incompatible`, `template_contributions_need_review`,
+>   `grace_period_expired`, `deprecation_declaration_issues`. Advisory; none blocks.
+>
+> **New shape — `PackMigrationRecord`:**
+> `{ id, kind: "apply" | "revert", orgId, packId, replacementPackId, changes[],
+> unmapped[], warnings[], reason, actorId, at, fingerprint, revertsMigrationId,
+> reverted, revertedAt, revertedBy, changed }`. The ledger is APPEND-ONLY: a revert
+> adds a row and `reverted` on the original is derived from it, so both halves of the
+> decision stay readable.
+>
+> **`fingerprint` ties the preview to the apply.** Post back the fingerprint of the
+> plan that was displayed; if the configuration or the declaration moved in between,
+> the apply is refused with 409 rather than applying a change set nobody saw.
+>
+> **Status codes:** 400 `confirm` not true · 404 unknown pack or migration id ·
+> 409 nothing to migrate / stale fingerprint / already reverted / the target fields
+> were edited after the migration (use `force` to restore anyway) · 200 including an
+> apply with nothing to change, which reports `changed: false` (idempotent).
+>
+> A migration only affects FUTURE runs. Historical runs, findings, and evidence keep
+> the pack they were produced with; nothing is rewritten and nothing is deleted.
+
+> v1.23 — 2.0-C4 T2 (Pack Deprecation Notice Surfacing): a pack that is being
+> superseded now carries a notice at run configuration, in run health, and on its
+> findings, with the date it stops being supported and what replaces it. All fields
+> are additive; no pack ships a deprecation today, so every shape below is absent or
+> null on current responses and a pre-v1.23 consumer is unaffected.
+>
+> **A notice is present ONLY for a deprecated pack.** There is no "not deprecated"
+> object: the field is `null`/absent otherwise, so a consumer renders a notice or
+> renders nothing. Do not synthesise one.
+>
+> **New shape — `PackDeprecationNotice`** (identical on every surface, built once
+> server-side so the three surfaces cannot word it differently):
+> `{ packId, version, phase: "grace" | "grace_expired", label, statusLabel, reason,
+> deprecatedOn (YYYY-MM-DD), graceEndsOn (YYYY-MM-DD, "" ⇒ no removal date
+> announced), daysRemaining (number | null), replacementPackId ("" ⇒ none named),
+> replacementLabel, summary }`.
+>
+> `phase` is `grace` while the pack still runs normally and `grace_expired` once the
+> announced grace period has passed. An empty `graceEndsOn` never expires.
+>
+> **Extended shapes:**
+> - `GET /api/packs/state` — each pack row gains `deprecation`
+>   (`PackDeprecationNotice | null`; null for a live pack and for an orphaned row).
+> - `GET /api/run-health/packs` — each pack row gains `deprecated` (true, absent
+>   otherwise), `deprecation_phase`, `deprecation_label`, `deprecation_reason`,
+>   `deprecation_on`, `deprecation_ends_on` (null ⇒ no announced date),
+>   `deprecation_days_remaining`, `deprecation_replacement_pack_id`,
+>   `deprecation_replacement_label`, `deprecation_notice`.
+> - `OpportunityCandidate` — gains `packDeprecated` (true, absent otherwise),
+>   `packDeprecationPhase`, `packDeprecationLabel`, `packDeprecationNotice`, and —
+>   only when declared — `packDeprecationEndsOn`, `packDeprecationReplacementPackId`,
+>   `packDeprecationReplacementLabel`. Absent rather than empty, so a surface never
+>   renders a date or replacement with nothing after it.
+> - Run record / `pack_deprecations` run-scoped KV — gains `packDeprecations`, the
+>   deprecation position of each activated pack AS EVALUATED AT LAUNCH
+>   (`{ evaluatedOn, evaluated[], deprecated[], inGrace[], graceExpired[],
+>   replacements{}, packs[] }`). This is an AUDIT record: every display surface
+>   reports the LIVE position, because "is this pack still supported" is a question
+>   about now.
+>
+> Deprecation is a THIRD orthogonal fact beside pack state (2.0-C1) and certification
+> (2.0-C2). A pack can be active, current, certified, and deprecated at once; none of
+> those fields implies another. A deprecated pack in grace runs normally, so a
+> consumer must not present it as an error or as unhealthy.
 
 > v1.22 — 2.0-C3 T6 (Sandbox Validation): installing a pack runs its manifest
 > through validation and its fixtures through the harness, and **activation re-runs

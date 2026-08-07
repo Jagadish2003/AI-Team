@@ -90,6 +90,29 @@ PACK_INSTALLED = "pack_installed"
 # collapsing the two would make "an installed partner pack went live here" and "a
 # first-party pack was re-enabled" indistinguishable in the trail.
 PACK_ACTIVATION_CHANGED = "pack_activation_changed"
+# 2.0-C4 T3 (AT-844): an owner migrated this org's saved run configuration off a
+# DEPRECATED pack onto its declared replacement, or reverted such a migration. The
+# append-only migration ledger is the domain record (which fields moved, and their
+# previous values); these events place the two transitions in the organisation-wide
+# audit stream, which is what parent-story AC4 requires of them.
+# Telemetry counterparts: "pack.migration_applied" / "pack.migration_reverted".
+PACK_MIGRATION_APPLIED = "pack_migration_applied"
+PACK_MIGRATION_REVERTED = "pack_migration_reverted"
+# 2.0-C4 T4 (AT-845): a pack's announced deprecation grace period ended, so the
+# platform moved it to safe-disabled through 2.0-C1's path. Deliberately NOT
+# `pack_state_changed`: "the vendor retired this pack on the announced date" and "an
+# owner turned this pack off" have different remedies (migrate vs. re-enable), and a
+# reviewer must be able to tell them apart without inferring it from the actor.
+# Telemetry counterpart: "pack.deprecation_disabled" (app/telemetry.py).
+PACK_DEPRECATION_DISABLED = "pack_deprecation_disabled"
+# 2.0-C4 T5 (AT-846): this org came under a pack's deprecation terms — the FIRST of
+# the story's three transitions, and the one that had no audit record before. A
+# declaration lives in the registry and is global; this is the org-scoped moment it
+# actually bears on a customer (their pack selection was resolved for a run while a
+# superseded pack was in it). Written once per (org, pack, declared terms), so moving
+# a grace date or changing the replacement re-announces but a repeat run does not.
+# Telemetry counterpart: "pack.deprecation_announced" (app/telemetry.py).
+PACK_DEPRECATION_ANNOUNCED = "pack_deprecation_announced"
 
 # ---------------------------------------------------------------------------
 # Registry — every accepted event type listed here.
@@ -117,6 +140,10 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     PACK_CERTIFICATION_POLICY_CHANGED,
     PACK_INSTALLED,
     PACK_ACTIVATION_CHANGED,
+    PACK_MIGRATION_APPLIED,
+    PACK_MIGRATION_REVERTED,
+    PACK_DEPRECATION_DISABLED,
+    PACK_DEPRECATION_ANNOUNCED,
 })
 
 # ---------------------------------------------------------------------------

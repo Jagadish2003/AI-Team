@@ -920,6 +920,12 @@ def pack_state_view(org_id: str) -> List[Dict[str, Any]]:
     # whole list, and fail-soft — an unresolvable badge is omitted rather than
     # blanking the row, but it is never guessed at.
     certifications = _safe_certification_badges()
+    # 2.0-C4 T2 (AT-843 / AC1): the deprecation notice shown at RUN CONFIGURATION —
+    # this endpoint is what the pack picker reads, so it is where "this pack is
+    # going away on <date>, use <replacement> instead" has to appear BEFORE someone
+    # builds a run on it. Evaluated once for the whole list; only deprecated packs
+    # are in the map.
+    deprecations = _safe_deprecation_notices()
     view: List[Dict[str, Any]] = []
     for pack_id, pack in PACK_REGISTRY.items():
         row = rows.get(pack_id) or {}
@@ -949,6 +955,10 @@ def pack_state_view(org_id: str) -> List[Dict[str, Any]]:
                 # and its label, so a selection surface can never present an
                 # unproved Certified claim as Certified.
                 "certification": certifications.get(pack_id),
+                # 2.0-C4 T2: the deprecation notice, or None for the (overwhelmingly
+                # common) pack that is not deprecated. None rather than a
+                # "notDeprecated" object, so a picker renders a notice or nothing.
+                "deprecation": deprecations.get(pack_id),
             }
         )
 
@@ -971,6 +981,10 @@ def pack_state_view(org_id: str) -> List[Dict[str, Any]]:
                 # report — stating None beats inventing a level for a pack that is
                 # gone (the same rule as its version fields).
                 "certification": None,
+                # Nor a deprecation: a pack that is gone is past deprecation, and
+                # `get_pack()` would resolve the id to the DEFAULT pack and report
+                # its notice against a pack that no longer exists.
+                "deprecation": None,
                 # The pack is no longer in the registry: it cannot run, but its
                 # lifecycle state and history are retained and reachable.
                 "registered": False,
@@ -1019,6 +1033,25 @@ def _safe_certification_badges() -> Dict[str, Dict[str, Any]]:
     except Exception:  # noqa: BLE001
         logger.warning(
             "Could not resolve pack certification badges; omitting them",
+            exc_info=True,
+        )
+        return {}
+
+
+def _safe_deprecation_notices() -> Dict[str, Dict[str, Any]]:
+    """Deprecation notices for every deprecated pack (2.0-C4 T2 / AT-843).
+
+    Fail-soft for the same reason the certification read is: a deprecation-metadata
+    problem must not blank the pack list a customer configures runs from. Only
+    deprecated packs appear, so the normal result is an empty dict.
+    """
+    try:
+        from discovery.packs.pack_deprecation import deprecation_notices
+
+        return deprecation_notices()
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Could not resolve pack deprecation notices; omitting them",
             exc_info=True,
         )
         return {}

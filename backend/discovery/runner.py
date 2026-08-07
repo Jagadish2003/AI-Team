@@ -173,8 +173,11 @@ def _resolve_pack_activation(
 ) -> Dict[str, Any]:
     """Apply the 2.0-C1 activation rules at the execution point.
 
-    Three things happen here, and this is the ONLY place they are guaranteed:
+    Four things happen here, and this is the ONLY place they are guaranteed:
 
+    * **AT-845** (2.0-C4) — a pack whose announced deprecation grace period has
+      ENDED is moved to safe-disabled and dropped. A pack still inside its grace is
+      untouched and runs exactly as it did before the notice appeared.
     * **AT-827** — this org's DISABLED packs are dropped from the selection, so
       their detectors never run.
     * **AT-826** — the remainder is asserted compatible with the platform.
