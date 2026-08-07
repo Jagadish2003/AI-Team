@@ -175,15 +175,6 @@ def extract_event_signatures(*sources: Any) -> Tuple[str, ...]:
         if not isinstance(source, Mapping):
             continue
         for field in EVENT_SIGNATURE_LIST_FIELDS:
-<<<<<<< HEAD
-=======
-            raw = _unwrap_display_value(source.get(field))
-            if isinstance(raw, (list, tuple)):
-                for entry in raw:
-                    text = _text(entry)
-                    if text and _EVENT_SIGNATURE_RE.match(text):
-                        found.add(text)
->>>>>>> c043980d4b10f9c44e6979352abfaa43b81dff28
             for entry in _signature_candidates(source.get(field)):
                 text = _text(entry)
                 if text and _EVENT_SIGNATURE_RE.match(text):
@@ -194,15 +185,10 @@ def extract_event_signatures(*sources: Any) -> Tuple[str, ...]:
                 found.add(text)
     return tuple(sorted(found))
 
+
 def has_event_signature_field(*sources: Any) -> bool:
     """True when a source CARRIES an event-signature link field at all.
 
-<<<<<<< HEAD
-def has_event_signature_field(*sources: Any) -> bool:
-    """True when a source CARRIES an event-signature link field at all.
-
-=======
->>>>>>> c043980d4b10f9c44e6979352abfaa43b81dff28
     Distinguishes "the upstream loop was never established" (the field is absent)
     from "a link was supplied but nothing in it parsed" (the field is present and
     yielded no signature). Both leave the join unlinked — the verdict is
@@ -216,11 +202,8 @@ def has_event_signature_field(*sources: Any) -> bool:
             if source.get(field) is not None:
                 return True
     return False
-<<<<<<< HEAD
 
 
-=======
->>>>>>> c043980d4b10f9c44e6979352abfaa43b81dff28
 def _signature_candidates(raw: Any) -> Tuple[Any, ...]:
     """Every individual signature carried by one column value.
 
