@@ -158,6 +158,20 @@ def identity_pair_key(left: Mapping[str, Any], right: Mapping[str, Any]) -> Opti
     ``None`` when either side cannot supply both parts — a partial key would match
     the wrong pair, and blocking the wrong pair is worse than not blocking this one
     (the row key still covers the common case).
+
+    Two DISTINCT rows that share a source system AND a canonical name still produce a
+    key (``ident:x|x``). That pair — same system, same name — is EXACTLY what
+    name-similarity proposes for merge, so it is the pair that most needs a
+    churn-resistant block: were it to return ``None`` here, only the row-id key would
+    be recorded on unmerge, and once a row churns (a connector begins supplying
+    ``source_record_id`` and ``upsert_source_entity`` inserts a fresh resolved row)
+    the stale row key would no longer match and ``apply_merge`` would silently
+    re-merge a pair a human deliberately separated. ``ident:x|x`` blocks re-merging
+    ONLY two same-identity rows — a merge of this identity with a DIFFERENT identity
+    keys as ``ident:x|y`` and is unaffected — so it is precise, not over-broad, and
+    fails in the safe direction (require human confirmation over silent re-merge).
+    The self-pair case (the same ROW twice) is still refused upstream by
+    ``row_pair_key`` in :func:`pair_keys_for`.
     """
     def _side(row: Mapping[str, Any]) -> Optional[str]:
         system = _text(row.get("source_system")).lower()
@@ -165,9 +179,7 @@ def identity_pair_key(left: Mapping[str, Any], right: Mapping[str, Any]) -> Opti
         return f"{system}|{name}" if system and name else None
 
     a, b = _side(left), _side(right)
-    if not a or not b or a == b:
-        # Equal sides mean one identity, which is not a pair — and would block every
-        # merge of that identity with anything.
+    if not a or not b:
         return None
     lo, hi = sorted((a, b))
     return f"ident:{lo}|{hi}"

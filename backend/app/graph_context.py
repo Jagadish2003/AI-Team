@@ -73,6 +73,34 @@ class GraphContext(BaseModel):
     # for this run's graph context — surfaced for auditability (why each entity /
     # edge was kept or dropped). Empty when assembly logged nothing.
     selection_log: List[Dict[str, Any]] = Field(default_factory=list)
+    # 2.0-B3 T2 (AC2): what the per-finding budgets cost this context — the budget,
+    # what fit, what was dropped, and to which budget. Surfaced here because the
+    # selection_log above technically contained it but nobody could answer "did I
+    # lose context?" without parsing every entry. Empty when assembly reported none.
+    #
+    # This is the artifact 2.0-B1's trace is meant to render ("a record of what was
+    # dropped and why ... traceable in B1"). B1 is not on this branch, so the wiring
+    # is deliberately left to it rather than half-built here.
+    budget_report: Dict[str, Any] = Field(default_factory=dict)
+    # 2.0-B3 T3 (AC3): material disagreements between the sources this context is
+    # composed from, each naming the subject, the attribute and every side. Empty
+    # when the sources agree. ``contradiction_note`` is the rendered block the prompt
+    # carries — rendered once, in app/context_contradictions.py, so no surface
+    # composes its own wording and none can quietly resolve the disagreement.
+    contradictions: List[Dict[str, Any]] = Field(default_factory=list)
+    contradiction_note: str = ""
+    # 2.0-B3 T5 (AC5): the conversation MEDIUM ceiling as assessed over the evidence
+    # actually composed here. Non-empty means the support is conversation content
+    # only and this finding must not be presented above MEDIUM.
+    confidence_ceiling: str = ""
+    ceiling_assessment: Dict[str, Any] = Field(default_factory=dict)
+    # 2.0-B3 T6 (AC6): assembly steps the ACTIVE AI mode cannot support, each with a
+    # visible label. Populated from app/mode_parity.py — today the one structural
+    # case is evidence retrieval on the hosted embedding provider (no embeddings
+    # endpoint), which would otherwise be a silent empty-evidence package. Empty in
+    # a mode that supports every step, so a finding composed in-boundary /
+    # customer-tenant is byte-identical here to before T6.
+    mode_degradations: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 def _entity_get(entity: Any, key: str, default: Any = None) -> Any:
@@ -247,10 +275,30 @@ def build_graph_context(
             evidence_source = retrieval_evidence_source(org_id)
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("graph_context: retrieval evidence source unavailable: %s", exc)
+    # 2.0-B3 T1 (AC1): the assembly policy comes from the DECLARATION
+    # (app/config/assembly_policy.json), so editing precedence there changes what
+    # this run composes with no code deploy. Without this the declaration would be
+    # inert and AC1 would hold only in the abstract.
+    #
+    # Degrades rather than raises, unlike the loader's own contract: graph context
+    # is a non-blocking enrichment step (a failure here must never cost a run its
+    # findings), so a broken declaration falls back to the R16-B2 in-code defaults
+    # and says so LOUDLY at error level — naming the consequence, because a silent
+    # fallback would mean composing against precedence nobody chose.
+    try:
+        policy = AssemblyPolicy.declared()
+    except Exception as exc:  # noqa: BLE001 — enrichment must not fail the run.
+        logger.error(
+            "graph_context: declared assembly policy unusable (%s) — falling back to "
+            "the built-in R16-B2 precedence for run %s; source-type precedence and "
+            "any configured caps/floor are NOT in effect",
+            exc, run_id,
+        )
+        policy = AssemblyPolicy()
     package = assemble_context(
         opportunity={"run_id": run_id},
         graph={"entities": safe_entities, "relationships": safe_relationships},
-        policy=AssemblyPolicy(),
+        policy=policy,
         evidence_source=evidence_source,
     )
     shown_entities = package.entities          # selected, ordered, <= 15
@@ -274,6 +322,39 @@ def build_graph_context(
 
     observed_summary = _render_observed_summary(shown_entities, shown_relationships)
 
+    # 2.0-B3 T3 (AC3): render the disagreement block once, here, from the package's
+    # own records. Kept OUT of observed_summary deliberately — that section lists what
+    # the sources say; this one says where they contradict each other, and folding the
+    # two would let a disagreement read as one more observed fact.
+    contradiction_note = ""
+    try:
+        from app.context_contradictions import render_reported_section
+
+        contradiction_note = render_reported_section(package.contradiction_report)
+    except Exception as exc:  # noqa: BLE001 — enrichment must not fail the run.
+        logger.error(
+            "graph_context: contradiction note unavailable for run %s (%s) — the "
+            "prompt will NOT name any source disagreement, which is not the same as "
+            "there being none", run_id, exc,
+        )
+
+    # 2.0-B3 T6 (AC6): stamp the active AI mode's unsupported-step labels onto the
+    # context, so a finding composed in a mode that cannot embed (hosted) carries a
+    # VISIBLE "retrieval unavailable" label rather than a silently empty evidence
+    # list. Pure (reads provider names only) and guarded — a resolution failure must
+    # never cost a run its findings; the worst case is an unlabelled degradation.
+    mode_degradations: List[Dict[str, Any]] = []
+    try:
+        from app.mode_parity import mode_degradations as _mode_degradations
+
+        mode_degradations = _mode_degradations()
+    except Exception as exc:  # noqa: BLE001 — enrichment must not fail the run.
+        logger.error(
+            "graph_context: AI-mode degradation labels unavailable for run %s (%s) — "
+            "a mode that cannot support a step will NOT be labelled, which is not the "
+            "same as every step being supported", run_id, exc,
+        )
+
     return GraphContext(
         entity_count=total,
         entity_count_shown=shown,
@@ -284,6 +365,12 @@ def build_graph_context(
         truncation_note=truncation_note,
         relationship_count=len(shown_relationships),
         selection_log=package.selection_log,
+        budget_report=package.budget_report or {},
+        contradictions=list(package.contradictions or []),
+        contradiction_note=contradiction_note,
+        confidence_ceiling=package.confidence_ceiling or "",
+        ceiling_assessment=package.ceiling_assessment or {},
+        mode_degradations=mode_degradations,
     )
 
 

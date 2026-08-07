@@ -101,8 +101,11 @@ def register_cloud_ops_signature_routes(app: FastAPI) -> None:
         run_org = _run_org_id(run)
         # Same posture as the graph/retrieval routes: the org comes from the
         # tenancy context, never from the request, and a cross-org run is simply
-        # not found rather than confirming its existence.
-        if run_org and run_org != get_current_org_id():
+        # not found rather than confirming its existence. A MISSING org stamp is
+        # treated the same as a cross-org one — this route serves a run's signed
+        # event-signature rows, so an unconfirmable owner must fail closed rather
+        # than let any tenant read a pre-stamp run's signatures.
+        if not run_org or run_org != get_current_org_id():
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
 
         stored = db.run_kv_get(KV_CLOUD_OPS_EVENT_SIGNATURES, run_id, None)

@@ -191,6 +191,15 @@ def find_export_violations(payload: Any) -> List[Dict[str, str]]:
     """
     floor = _aggregation_floor()
     if floor is None:
+        # Parity with assert_export_safe: an unavailable floor module is "cannot
+        # check", not "clean". Returning [] silently would let a conformance test
+        # asserting find_export_violations(payload) == [] pass VACUOUSLY while a
+        # PII-dense payload goes unchecked — false assurance. Log it loudly so the
+        # gap is visible; callers needing the hard guarantee use assert_export_safe.
+        logger.warning(
+            "export_guard: SecOps aggregation floor unavailable — find_export_violations "
+            "returning [] WITHOUT the enumeration sweep (cannot check, not verified clean)"
+        )
         return []
     return floor.find_output_violations(payload)
 
