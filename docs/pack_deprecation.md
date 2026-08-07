@@ -267,7 +267,7 @@ resolve one must never fail a launch.
 
 ## 9.6 Contract
 
-Contract **v1.21**. All additive; no pack ships a deprecation today, so every new
+Contract **v1.23**. All additive; no pack ships a deprecation today, so every new
 field is absent or null on current responses.
 
 ## 9.7 Tests
@@ -402,7 +402,7 @@ AC4; AT-846 owns the consolidated audit view.
 
 ## 10.9 Contract
 
-Contract **v1.22**. Four new routes; no existing response shape changes.
+Contract **v1.24**. Four new routes; no existing response shape changes.
 
 ## 10.10 Tests
 
@@ -531,7 +531,7 @@ run forever.
 
 ## 11.9 Contract
 
-Contract **v1.23**. Additive only: a new `reason` value on the existing
+Contract **v1.25**. Additive only: a new `reason` value on the existing
 `excludedPacks` / `excluded_packs` field.
 
 ## 11.10 Tests
@@ -650,7 +650,7 @@ the build.
 
 ## 12.7 Contract
 
-Contract **v1.24**. One new route and one new audit event type; no existing response
+Contract **v1.26**. One new route and one new audit event type; no existing response
 shape changes.
 
 ## 12.8 Tests

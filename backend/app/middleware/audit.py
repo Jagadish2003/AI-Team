@@ -79,6 +79,17 @@ PACK_CERTIFICATION_REVIEWED = "pack_certification_reviewed"
 # change — the policy table holds current state, not a timeline — which is why the
 # audit entry matters more here than for most settings.
 PACK_CERTIFICATION_POLICY_CHANGED = "pack_certification_policy_changed"
+# 2.0-C3 T4 (AT-839): an owner installed an authored pack from a signed bundle.
+# Records the bundle digest and the publisher key that vouched for it, so "which
+# bytes were installed into this org, by whom, and on whose signature" is
+# answerable from the audit stream alone.
+# Telemetry counterpart: "pack.installed" (app/telemetry.py).
+PACK_INSTALLED = "pack_installed"
+# 2.0-C3 T4 (AT-839): an owner activated or withdrew an installed authored pack.
+# Distinct from PACK_STATE_CHANGED, which is the lifecycle of a REGISTERED pack —
+# collapsing the two would make "an installed partner pack went live here" and "a
+# first-party pack was re-enabled" indistinguishable in the trail.
+PACK_ACTIVATION_CHANGED = "pack_activation_changed"
 # 2.0-C4 T3 (AT-844): an owner migrated this org's saved run configuration off a
 # DEPRECATED pack onto its declared replacement, or reverted such a migration. The
 # append-only migration ledger is the domain record (which fields moved, and their
@@ -127,6 +138,8 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     PACK_STATE_CHANGED,
     PACK_CERTIFICATION_REVIEWED,
     PACK_CERTIFICATION_POLICY_CHANGED,
+    PACK_INSTALLED,
+    PACK_ACTIVATION_CHANGED,
     PACK_MIGRATION_APPLIED,
     PACK_MIGRATION_REVERTED,
     PACK_DEPRECATION_DISABLED,

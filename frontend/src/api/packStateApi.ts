@@ -33,7 +33,7 @@ export interface PackStateItem {
    * date it stops being supported, and what replaces it. Null for a pack that is
    * not deprecated (the normal case) and for an orphaned row, so a picker renders
    * a notice or nothing. Optional because it is additive — a response served
-   * before contract v1.21 omits the field entirely.
+   * before contract v1.23 omits the field entirely.
    */
   deprecation?: PackDeprecationNotice | null;
   /**

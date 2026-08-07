@@ -1,0 +1,22 @@
+{
+  "name": "a quiet estate: nothing to report",
+  "description": "A handful of unrelated, freshly closed records. There is nothing here worth a finding, and the honest output is silence — a pack that manufactures one from this is a pack whose findings a customer learns to ignore.",
+  "asOf": "2026-06-30T00:00:00Z",
+  "signal": {
+    "records": [
+      {"concept": "incident_workflow", "record_id": "INC-9001", "source_system": "servicenow", "observed_at": "2026-06-28T09:00:00Z", "opened_at": "2026-06-28T08:00:00Z", "last_state_change_at": "2026-06-28T09:00:00Z", "actor_group": "service-desk", "artifact": "general-queue", "entity_reference": "svc-portal", "state": "closed"},
+      {"concept": "incident_workflow", "record_id": "INC-9002", "source_system": "servicenow", "observed_at": "2026-06-29T09:00:00Z", "opened_at": "2026-06-29T08:00:00Z", "last_state_change_at": "2026-06-29T09:00:00Z", "actor_group": "service-desk", "artifact": "general-queue", "entity_reference": "svc-portal", "state": "closed"},
+      {"concept": "resolution_signature", "record_id": "INC-9003", "source_system": "servicenow", "observed_at": "2026-06-30T00:00:00Z", "signature": "password_reset_self_service", "actor_group": "service-desk", "entity_reference": "svc-portal", "state": "closed"}
+    ]
+  },
+  "expect": {
+    "detectors": {
+      "repeated_manual_resolution": {"fires": false},
+      "service_desk_queue_ageing": {"fires": false},
+      "shared_dependency_concentration": {"fires": false},
+      "alert_to_incident_pairing": {"fires": false}
+    },
+    "findingCount": 0,
+    "noOtherDetectorsFire": true
+  }
+}

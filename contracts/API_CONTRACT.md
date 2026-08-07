@@ -1,14 +1,14 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.24
+Version: v1.26
 Date: 2026-08-06
 
-> v1.24 — 2.0-C4 T5 (Deprecation Lifecycle Audit): all three deprecation transitions
+> v1.26 — 2.0-C4 T5 (Deprecation Lifecycle Audit): all three deprecation transitions
 > are audit events, and are readable as one trail. One new route and one new audit
 > event type; no existing response shape changes.
 >
 > **The gap this closes.** Migration (`pack_migration_applied` /
-> `pack_migration_reverted`, v1.22) and post-grace disable (`pack_deprecation_disabled`,
-> v1.23) already reached the audit log. **Deprecation itself did not** — a declaration
+> `pack_migration_reverted`, v1.24) and post-grace disable (`pack_deprecation_disabled`,
+> v1.25) already reached the audit log. **Deprecation itself did not** — a declaration
 > is a registry fact, and nothing recorded that a particular organisation had ever come
 > under it.
 >
@@ -41,7 +41,7 @@ Date: 2026-08-06
 > `entries` list: an audit surface reporting "nothing happened" when it could not read
 > would mislead a reviewer.
 
-> v1.23 — 2.0-C4 T4 (Deprecation Grace Behaviour): a pack whose announced grace
+> v1.25 — 2.0-C4 T4 (Deprecation Grace Behaviour): a pack whose announced grace
 > period has ended is moved to safe-disabled and dropped from future runs. Additive
 > only — one new `reason` value on an existing field; no new routes and no shape
 > change.
@@ -76,10 +76,10 @@ Date: 2026-08-06
 > historical is affected: runs, findings, and evidence produced while the pack was
 > supported are untouched and remain retrievable.
 
-> v1.22 — 2.0-C4 T3 (Pack Migration Assist): where a deprecated pack declares a
+> v1.24 — 2.0-C4 T3 (Pack Migration Assist): where a deprecated pack declares a
 > replacement, an org can migrate its saved run configuration onto it — previewed
 > first, applied only on confirmation, and reversible. Four entirely NEW routes; no
-> existing response shape changes, so a pre-v1.22 consumer is unaffected.
+> existing response shape changes, so a pre-v1.24 consumer is unaffected.
 >
 > **New routes** (all org-scoped from the authenticated context; a request body never
 > carries an org id):
@@ -138,11 +138,11 @@ Date: 2026-08-06
 > A migration only affects FUTURE runs. Historical runs, findings, and evidence keep
 > the pack they were produced with; nothing is rewritten and nothing is deleted.
 
-> v1.21 — 2.0-C4 T2 (Pack Deprecation Notice Surfacing): a pack that is being
+> v1.23 — 2.0-C4 T2 (Pack Deprecation Notice Surfacing): a pack that is being
 > superseded now carries a notice at run configuration, in run health, and on its
 > findings, with the date it stops being supported and what replaces it. All fields
 > are additive; no pack ships a deprecation today, so every shape below is absent or
-> null on current responses and a pre-v1.21 consumer is unaffected.
+> null on current responses and a pre-v1.23 consumer is unaffected.
 >
 > **A notice is present ONLY for a deprecated pack.** There is no "not deprecated"
 > object: the field is `null`/absent otherwise, so a consumer renders a notice or
@@ -182,6 +182,74 @@ Date: 2026-08-06
 > (2.0-C2). A pack can be active, current, certified, and deprecated at once; none of
 > those fields implies another. A deprecated pack in grace runs normally, so a
 > consumer must not present it as an error or as unhealthy.
+
+> v1.22 — 2.0-C3 T6 (Sandbox Validation): installing a pack runs its manifest
+> through validation and its fixtures through the harness, and **activation re-runs
+> both** against today's platform rather than trusting the install-time verdict.
+> Additive; no existing field changed meaning.
+>
+> **New endpoint**
+> - `GET /api/packs/installed/{packId}/validation` (**analyst+**) —
+>   `{ packId, packVersion, status, fixtureCount, validation }`. **404** when the
+>   pack is not installed. Analyst rather than viewer because the reasons quote
+>   partner-supplied manifest and fixture text.
+>
+> **`SandboxValidation`** (the `validation` object, also additive on every
+> `InstalledPack`): `ok` (boolean), `stage`
+> (`admission` | `validation` | `fixtures` | `lint` | `passed`), `reasons[]`,
+> `notes[]`, `caseCount`, `recordCount`, `durationMs`, `platformVersion`,
+> `checkedAt`, and `limits` (`maxCases`, `maxRecordsPerCase`, `maxTotalRecords`,
+> `maxFixtureBytes`, `timeoutSeconds`). `InstalledPack` also gains `fixtureCount`.
+> `validation` is **null** only for a record written before this version — an
+> absent verdict is reported as absent, never as a pass.
+>
+> **New status code** — **409** `sandbox_limit_exceeded` on install or activation:
+> the pack's fixtures are too large or too slow to judge within this deployment's
+> limits. Deliberately distinct from `validation_failed` — "too expensive to judge"
+> and "judged and found wrong" need different actions from the author.
+>
+> **Activation re-runs the gates.** `PUT .../activation` with `active: true` now
+> runs sandbox validation *before* compatibility and the certification floor, so a
+> pack that was installable last month can be refused today with specific reasons.
+> `active: false` runs no gates and is never blocked.
+
+> v1.21 — 2.0-C3 T4 (Pack Packaging & Installation): an authored ("partner") pack
+> installs from a **signed bundle**, gated by C1 compatibility and C2 certification
+> policy. Entirely new routes; no existing response shape changed.
+>
+> **New endpoints**
+> - `POST /api/packs/install` (**owner**, 201) — body
+>   `{ "bundleBase64": string, "activate"?: boolean }`. Returns the installed-pack
+>   record plus `compatibility` (the C1 verdict as evaluated at install) and
+>   `bundle` (`digest`, `keyId`, `fileCount`).
+> - `GET /api/packs/installed` (**viewer+**) — `{ packs: InstalledPack[], count }`.
+> - `PUT /api/packs/installed/{packId}/activation` (**owner**) — body
+>   `{ "active": boolean }`, the TARGET state, so the call is idempotent.
+>
+> **`InstalledPack`**: `packId`, `packName`, `packVersion`, `status`
+> (`installed` | `active` | `inactive`), `active` (boolean), `manifestFingerprint`,
+> `bundleDigest`, `publisher`, `signingKeyId`, `certificationLevel` (always
+> `community` — see below), `certificationLabel`, `requestedCertificationLevel`,
+> `revision`, `installedBy`, `createdAt`, `updatedAt` (v1.22 adds `validation`
+> and `fixtureCount`).
+>
+> **An authored pack is always `community`.** `requestedCertificationLevel` is what
+> the publisher ASKED for; only a CloudFulcrum signature (2.0-C2) grants a level. A
+> consumer must never render the requested level as a badge.
+>
+> **Status codes** — every gate refuses with the gate NAMED in
+> `detail.error`, and `detail.failures[]` lists the specific problems:
+> - **409** `bundle_unverified` (unsigned / tampered / untrusted publisher),
+>   `validation_failed` (manifest schema, author fixtures, or lint),
+>   `incompatible_with_platform`, `certification_policy_violation`,
+>   `reserved_pack_id`;
+> - **400** `bundleBase64` is not valid base64; **413** body above the size cap;
+> - **404** activating a pack that is not installed;
+> - **503** `certification_policy_unavailable` — the floor could not be READ, which
+>   is deliberately distinct from having determined non-compliance.
+>
+> **Withdrawal is never a delete.** `active: false` writes `status: "inactive"`; the
+> record, its manifest, and its bundle provenance remain readable.
 
 > v1.20 — 2.0-C2 T5 (Certification Expiry): a certification now expires on TWO
 > rules — the platform-version scope it was reviewed against, and the age of the

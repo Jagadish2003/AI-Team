@@ -12,7 +12,7 @@
 -- vendor-side license_registry + append-only issuance_audit),
 -- indexes/constraints/rules, seeds the connector catalog, grants the app login
 -- role(s) privileges on the schema, REVOKES DELETE/TRUNCATE on the run-history
--- tables (2.0-C1 AC4), and stamps alembic_version to head 0035.
+-- tables (2.0-C1 AC4), and stamps alembic_version to head 0037.
 --
 -- BEFORE RUNNING ON PRODUCTION — two values in this file are dev defaults and
 -- MUST be set for the target environment. Both are marked "TODO(deploy)" below:
@@ -1503,6 +1503,54 @@ CREATE TABLE IF NOT EXISTS pack_certification_policies (
 
 
 --
+-- Name: installed_packs — 2.0-C3 T4/T6 (AT-839, AT-841) alembic 0036, 0037
+--
+-- The per-org registry of partner packs installed from a signed bundle. One row
+-- per (org, pack); re-installing the same id is an upgrade that bumps `revision`.
+-- No runtime ensure_* helper — provisioning is the only thing that creates it.
+--
+-- WITHDRAWAL IS A STATUS WRITE, NEVER A DELETE. `status = 'inactive'` takes a pack
+-- out of service while its manifest and bundle provenance (digest + publisher key)
+-- stay, so "which pack produced this historical finding, and where did it come
+-- from" survives the pack leaving service.
+--
+-- Deliberately NOT in the protected-history set (0033/0034): this is current
+-- configuration, not a record of what the platform found.
+--
+
+CREATE TABLE IF NOT EXISTS installed_packs (
+    org_id               VARCHAR(64)  NOT NULL,
+    pack_id              VARCHAR(128) NOT NULL,
+    pack_version         VARCHAR(32)  NOT NULL,
+    status               VARCHAR(16)  NOT NULL,
+    manifest             JSONB        NOT NULL,
+    manifest_fingerprint VARCHAR(64)  NOT NULL,
+    bundle_digest        VARCHAR(64)  NOT NULL,
+    publisher            VARCHAR(256),
+    signing_key_id       VARCHAR(128),
+    requested_level      VARCHAR(16)  NOT NULL DEFAULT 'community',
+    fixtures             JSONB        NOT NULL DEFAULT '[]'::jsonb,
+    validation           JSONB        NOT NULL DEFAULT '{}'::jsonb,
+    revision             INTEGER      NOT NULL DEFAULT 1,
+    installed_by         VARCHAR(128),
+    created_at           TIMESTAMPTZ  NOT NULL,
+    updated_at           TIMESTAMPTZ  NOT NULL,
+    PRIMARY KEY (org_id, pack_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_installed_packs_org_status
+    ON installed_packs (org_id, status);
+
+-- 2.0-C3 T6 (AT-841) alembic 0037. Idempotent, so a database provisioned from an
+-- earlier copy of this file converges: activation re-runs the author's fixtures,
+-- which means they have to still be stored.
+ALTER TABLE installed_packs
+    ADD COLUMN IF NOT EXISTS fixtures JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE installed_packs
+    ADD COLUMN IF NOT EXISTS validation JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+
+--
 -- PostgreSQL database dump complete
 --
 
@@ -1572,7 +1620,7 @@ INSERT INTO "public"."connectors" ("id", "payload") VALUES ('zendesk', '{"id": "
 -- freshly provisioned database claiming a head it is ahead of, and `alembic upgrade
 -- head` would then re-run 0031-0033. Those are all idempotent, so it would not
 -- break, but the recorded head would be wrong. Bump this whenever you add DDL here.
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0035') ON CONFLICT DO NOTHING;
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0037') ON CONFLICT DO NOTHING;
 
 
 --
