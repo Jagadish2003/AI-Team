@@ -103,7 +103,7 @@ refused one.
 
 ## 5. The pre-AT-841 row
 
-A record written before migration 0037 has no stored fixtures. Re-validation then
+A record written before migration 0048 has no stored fixtures. Re-validation then
 runs the manifest and lint alone and **records a note saying so** — it neither
 fails the pack (which would break existing installs for no security gain; those
 fixtures did pass at install) nor reports a full pass it did not perform. The

@@ -1,5 +1,6 @@
 import type { OpportunityCandidate } from './analystReview';
 import type { PackCertification } from './packCertification';
+import type { OutcomeReportSection } from './outcome';
 
 export type ExecutiveReportConfidence = 'High' | 'Moderate' | 'Low';
 
@@ -37,4 +38,5 @@ export interface ExecutiveReport {
   // report, in order of first appearance. Frozen into the artifact at generation
   // time — an export states what was verifiable when it was produced.
   packCertifications?: PackCertification[];
+  outcomeSection?: OutcomeReportSection;
 }

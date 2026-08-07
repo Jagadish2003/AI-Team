@@ -91,6 +91,15 @@ def _to_iso(value: Any) -> Optional[str]:
     return str(value)
 
 
+def _valid_timestamp_iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        value = value.isoformat()
+    dt = _parse_iso(value)
+    return dt.isoformat() if dt is not None else None
+
+
 def _age_seconds(value: Any) -> Optional[int]:
     dt = _parse_iso(value if isinstance(value, str) else _to_iso(value))
     if dt is None:
@@ -123,6 +132,23 @@ def _safe_range(org_id: str, event_type: str) -> List[Any]:
     return get_telemetry_range(org_id, event_type, frm, to, limit=1000) or []
 
 
+def _newest_timestamp(*events: Any) -> Optional[str]:
+    """The newest ISO timestamp across the given telemetry events, or None.
+
+    Used to combine several ingestion-completion channels into one "last successful
+    ingestion" value. Events with no usable timestamp are ignored, so an unrelated
+    channel can never suppress a real one.
+    """
+    stamps = [
+        iso
+        for event in events
+        if event is not None
+        for iso in [_to_iso(getattr(event, "timestamp", None))]
+        if iso
+    ]
+    return max(stamps) if stamps else None
+
+
 def _latest_by(events: List[Any], predicate) -> Optional[Any]:
     """Newest matching event (get_telemetry_range is oldest-first, so take the
     last match)."""
@@ -137,6 +163,95 @@ def _latest_by(events: List[Any], predicate) -> Optional[Any]:
 
 
 # ── Connectors panel ────────────────────────────────────────────────────────
+
+def _connector_aliases(connector_id: str) -> set[str]:
+    cid = str(connector_id or "").strip().lower()
+    aliases = {cid} if cid else set()
+    if cid == "salesforce":
+        aliases.update({"ncino", "salesforce_ncino", "salesforce_pss", "salesforce_sc"})
+    elif cid == "jira":
+        aliases.add("jira_confluence")
+    elif cid == "jira_confluence":
+        aliases.update({"jira", "confluence"})
+    return aliases
+
+
+def _succeeded_systems_match(connector_id: str, systems: Any) -> bool:
+    aliases = _connector_aliases(connector_id)
+    if not aliases or not isinstance(systems, (list, tuple, set)):
+        return False
+    for system in systems:
+        sid = str(system or "").strip().lower()
+        if sid in aliases or (connector_id == "salesforce" and sid.startswith("salesforce_")):
+            return True
+    return False
+
+
+def _per_system_succeeded(connector_id: str, per_system: Any) -> bool:
+    if not isinstance(per_system, dict):
+        return False
+    success_states = {"ok", "success", "succeeded", "complete", "completed"}
+    for alias in _connector_aliases(connector_id):
+        value = per_system.get(alias)
+        status = value.get("status") if isinstance(value, dict) else value
+        if str(status or "").strip().lower() in success_states:
+            return True
+    if connector_id == "salesforce":
+        for key, value in per_system.items():
+            if not str(key or "").strip().lower().startswith("salesforce_"):
+                continue
+            status = value.get("status") if isinstance(value, dict) else value
+            if str(status or "").strip().lower() in success_states:
+                return True
+    return False
+
+
+def _run_connector_ingestion_times(org_id: str) -> Dict[str, str]:
+    """Best-effort historical fallback from materialized run status.
+
+    Older Salesforce/ServiceNow/Jira runs wrote connector metrics but did not
+    stamp the connector record with a timestamp. Their run status still records
+    per-system success, so Run Health can recover a real completion time without
+    falling back to display labels such as "Just now".
+    """
+    out: Dict[str, str] = {}
+    for run in db.tenancy_get_runs(org_id):
+        run_id = run.get("id")
+        if not run_id:
+            continue
+        status_kv = db.run_kv_get("status", run_id, {}) or {}
+        if not isinstance(status_kv, dict):
+            status_kv = {}
+        raw_status = str(status_kv.get("status") or run.get("status") or "").lower()
+        if raw_status not in {"complete", "completed", "done", "partial"}:
+            continue
+        completed_at = (
+            _valid_timestamp_iso(run.get("completedAt"))
+            or _valid_timestamp_iso(status_kv.get("updatedAt"))
+            or _valid_timestamp_iso(run.get("updatedAt"))
+        )
+        if not completed_at:
+            continue
+        for connector_id in (
+            "salesforce",
+            "servicenow",
+            "jira",
+            "jira_confluence",
+            "slack",
+            "teams",
+            "confluence",
+            "sharepoint",
+            "github",
+        ):
+            if connector_id in out and out[connector_id] >= completed_at:
+                continue
+            if _succeeded_systems_match(connector_id, status_kv.get("succeeded")):
+                out[connector_id] = completed_at
+                continue
+            if _per_system_succeeded(connector_id, status_kv.get("perSystem")):
+                out[connector_id] = completed_at
+    return out
+
 
 def _auth_mode(org_id: str, connector_id: str) -> Optional[str]:
     """oauth | static | None — read from the credential vault kind, never the
@@ -160,6 +275,87 @@ def _read_checkpoint(org_id: str, connector_id: str):
     return read_checkpoint(org_id, connector_id)
 
 
+def _read_stream_checkpoint(org_id: str, connector_id: str) -> Optional[Dict[str, Any]]:
+    """Newest live PER-STREAM checkpoint for a connector, or None.
+
+    Some connectors do not checkpoint under their bare connector id: a connector
+    reading several independent tables keeps one row per stream under the
+    ``{connector_id}:{stream}`` convention (ServiceNow ships six — ``cmdb_ci``,
+    ``cmdb_rel_ci``, ``sn_si_incident`` and the three Vulnerability Response
+    streams — each advancing on its own cadence). Looking up only the bare
+    ``servicenow`` id found nothing and the panel reported "Not available" for a
+    connector that was in fact checkpointing normally.
+
+    The connector's checkpoint age is the age of its MOST RECENT stream: the panel
+    answers "is this source still advancing", and the newest stream is the honest
+    evidence of that. ``STALLED_CHECKPOINT_SECONDS`` therefore fires only when
+    EVERY stream has gone quiet, which is the condition worth an operator's
+    attention — one lagging table on an otherwise-live connector is not.
+
+    ``is_deleted`` rows are excluded, matching ``read_checkpoint``: a reset
+    checkpoint genuinely has no position, and must not be resurrected here.
+
+    Returns the position/timestamp of the newest stream plus the stream count, or
+    None when the connector has no per-stream rows at all — never a fabricated
+    value. A read failure propagates, in keeping with this module's rule that a
+    backing-store failure is never converted into a false-healthy answer.
+    """
+    # Matched with a plain prefix comparison rather than LIKE: connector ids
+    # legitimately contain '_' (aws_events, ops_event_bridge), which is a LIKE
+    # single-character wildcard, so a LIKE pattern would also match unrelated ids.
+    #
+    # ORDER BY spells out both halves of "newest stream" rather than relying on a
+    # default, because this row IS the stall verdict and getting row 0 wrong
+    # suppresses the alert:
+    #   * NULLS LAST — PostgreSQL orders DESC as NULLS FIRST, so a row with no
+    #     captured_at would sort ahead of every real one and hand row 0 a NULL,
+    #     which `_checkpoint_attention_items` skips (`captured_at is None`) — a
+    #     stalled connector reporting nothing at all. `captured_at` is NOT NULL in
+    #     `database/models/ingestion_checkpoints.py`, so this cannot fire today; it
+    #     is stated so the guarantee survives the column becoming nullable, and
+    #     costs nothing while the column stays NOT NULL.
+    #   * connector_id ASC — this one is load-bearing NOW. Streams of one connector
+    #     routinely share a captured_at (ServiceNow's six advance in the same run,
+    #     written from one `now()`), and with a bare `captured_at DESC` the tie is
+    #     broken arbitrarily, so `stream_id`/`value` could differ between two calls
+    #     over identical rows. The age is unaffected (tied rows share a timestamp);
+    #     the reported stream is what stops flapping.
+    prefix = f"{connector_id}:"
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            # NULLS LAST is load-bearing, not tidiness. PostgreSQL's DESC default
+            # is NULLS FIRST, and a stream can legitimately carry a NULL
+            # captured_at — an optional ServiceNow table (sn_si_incident,
+            # sn_vul_*) that is absent or unreadable records a row with no
+            # timestamp. Such a row sorting first made it the "newest" stream, so
+            # the connector reported checkpoint_age_seconds = None and
+            # _checkpoint_attention_items skipped it (captured_at is None ->
+            # continue) — silently suppressing the stall alert for a connector
+            # whose every real stream had been quiet for days. Ordering real
+            # timestamps ahead of NULLs means the newest stream is the newest
+            # stream that actually has a time.
+            "SELECT connector_id, value, captured_at FROM ingestion_checkpoints "
+            "WHERE org_id = %s AND left(connector_id, %s) = %s AND is_deleted = FALSE "
+            "ORDER BY captured_at DESC NULLS LAST, connector_id ASC",
+            (org_id, len(prefix), prefix),
+        )
+        rows = cur.fetchall() or []
+        con.commit()
+    finally:
+        con.close()
+    if not rows:
+        return None
+    newest_id, newest_value, newest_captured = rows[0][0], rows[0][1], rows[0][2]
+    return {
+        "value": newest_value,
+        "captured_at": newest_captured,
+        "stream_id": newest_id,
+        "stream_count": len(rows),
+    }
+
+
 _CONNECTED_STATES = {"connected", "live", "needs_refresh", "refresh_failed", "needs_auth"}
 
 
@@ -168,18 +364,23 @@ def _connector_entry(
     record: Dict[str, Any],
     ingest_events: List[Any],
     health_events: List[Any],
+    completion_events: Optional[List[Any]] = None,
+    run_ingestion_times: Optional[Dict[str, str]] = None,
 ) -> Optional[Dict[str, Any]]:
     connector_id = record.get("id")
     if not connector_id:
         return None
 
     checkpoint = _read_checkpoint(org_id, connector_id)
+    # A connector that checkpoints per stream has no bare-id row; fall back to its
+    # newest live stream so its age is reported rather than read as "Not available".
+    stream_checkpoint = None if checkpoint is not None else _read_stream_checkpoint(org_id, connector_id)
     auth_mode = _auth_mode(org_id, connector_id)
 
     status = str(record.get("status") or "").strip().lower()
     configured = bool(record.get("configured"))
     has_credential = auth_mode is not None
-    has_checkpoint = checkpoint is not None
+    has_checkpoint = checkpoint is not None or stream_checkpoint is not None
 
     # "Every CONNECTED system in the org": include a connector once the org has
     # established some connection state for it (configured, a live-ish status, a
@@ -195,21 +396,41 @@ def _connector_entry(
     if not is_connected:
         return None
 
-    # Last successful ingestion: newest db.ingestor_completed event for this
-    # connector (existing telemetry). Falls back to the connector record's
-    # lastSynced overlay when no completion event has been recorded.
+    # Last successful ingestion: the newest completion event for this connector,
+    # from EITHER completion channel —
+    #   * db.ingestor_completed — the native DB ingestors' own event (unchanged), and
+    #   * ingestion.completed   — the connector-agnostic event the SHARED change-based
+    #     runner (discovery/ingest/change_runner.py) emits for every
+    #     ChangeBasedIngestor, so a connector reports its ingestion time by virtue of
+    #     being driven by that runner rather than by per-connector code.
+    # Both are org-scoped telemetry carrying a real timestamp, so taking the newest
+    # of the two is source-agnostic; no connector is named here.
     last_ingest_event = _latest_by(
         ingest_events, lambda e: getattr(e, "connector_id", None) == connector_id
     )
-    last_successful_ingestion = (
-        _to_iso(getattr(last_ingest_event, "timestamp", None))
-        if last_ingest_event is not None
-        else None
+    last_completion_event = _latest_by(
+        completion_events or [], lambda e: getattr(e, "connector_id", None) == connector_id
     )
+    last_successful_ingestion = _newest_timestamp(last_ingest_event, last_completion_event)
+    if last_successful_ingestion is None:
+        last_successful_ingestion = (
+            _valid_timestamp_iso(record.get("lastSuccessfulIngestionAt"))
+            or _valid_timestamp_iso(record.get("last_successful_ingestion_at"))
+        )
+    if last_successful_ingestion is None and run_ingestion_times:
+        last_successful_ingestion = _valid_timestamp_iso(
+            run_ingestion_times.get(str(connector_id))
+        )
+    # Last resort for legacy rows that stored a timestamp in lastSynced.
     if last_successful_ingestion is None:
         synced = record.get("lastSynced")
         if isinstance(synced, str) and synced not in ("", "—", "-"):
             last_successful_ingestion = synced
+    # Run Health renders this through Date formatting. Reject labels such as
+    # "Just now"; connector cards may use them, but this API field is timestamp
+    # or null.
+    if last_successful_ingestion is not None:
+        last_successful_ingestion = _valid_timestamp_iso(last_successful_ingestion)
 
     # Last error: newest health-check event whose payload status is an error, or a
     # completed ingestion that reported degraded records.
@@ -229,7 +450,29 @@ def _connector_entry(
         if isinstance(degraded, int) and degraded > 0:
             last_error = f"{degraded} record(s) degraded during last ingestion"
 
-    checkpoint_captured_at = getattr(checkpoint, "captured_at", None) if checkpoint else None
+    # Checkpoint position/age come from the bare-id row when there is one, else
+    # from the connector's newest per-stream row. `checkpoint_streams` records how
+    # many streams that age represents, so the panel can say the age belongs to a
+    # multi-stream connector instead of implying a single cursor.
+    if checkpoint is not None:
+        checkpoint_captured_at = getattr(checkpoint, "captured_at", None)
+        checkpoint_position = getattr(checkpoint, "value", None)
+        checkpoint_streams = None
+    elif stream_checkpoint is not None:
+        checkpoint_captured_at = _to_iso(stream_checkpoint.get("captured_at"))
+        checkpoint_position = stream_checkpoint.get("value")
+        checkpoint_streams = stream_checkpoint.get("stream_count")
+    else:
+        checkpoint_captured_at = None
+        checkpoint_position = None
+        checkpoint_streams = None
+    checkpoint_age_seconds = _age_seconds(checkpoint_captured_at)
+    if checkpoint_age_seconds is None and last_successful_ingestion:
+        # Some legacy/run-level connectors do not publish a resumable checkpoint
+        # row. Use the proven ingestion completion time as their freshness age so
+        # the dashboard still answers "how long since this source advanced?"
+        # without inventing a resettable checkpoint position.
+        checkpoint_age_seconds = _age_seconds(last_successful_ingestion)
 
     return {
         "connector_id": connector_id,
@@ -238,9 +481,10 @@ def _connector_entry(
         "connection_state": record.get("status") or ("connected" if is_connected else "disconnected"),
         "auth_mode": auth_mode,
         "last_successful_ingestion": last_successful_ingestion,
-        "checkpoint_position": getattr(checkpoint, "value", None) if checkpoint else None,
+        "checkpoint_position": checkpoint_position,
         "checkpoint_captured_at": checkpoint_captured_at,
-        "checkpoint_age_seconds": _age_seconds(checkpoint_captured_at),
+        "checkpoint_age_seconds": checkpoint_age_seconds,
+        "checkpoint_streams": checkpoint_streams,
         "last_error": last_error,
     }
 
@@ -251,10 +495,21 @@ def connectors_view(org_id: str) -> List[Dict[str, Any]]:
 
     ingest_events = _safe_range(org_id, "db.ingestor_completed")
     health_events = _safe_range(org_id, "connector.health_check")
+    # The connector-agnostic completion channel (emitted by the shared change-based
+    # ingestion runner for every ChangeBasedIngestor).
+    completion_events = _safe_range(org_id, "ingestion.completed")
+    run_ingestion_times = _run_connector_ingestion_times(org_id)
 
     out: List[Dict[str, Any]] = []
     for record in records:
-        entry = _connector_entry(org_id, record, ingest_events, health_events)
+        entry = _connector_entry(
+            org_id,
+            record,
+            ingest_events,
+            health_events,
+            completion_events,
+            run_ingestion_times,
+        )
         if entry is not None:
             out.append(entry)
     return out

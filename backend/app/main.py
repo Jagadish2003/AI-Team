@@ -43,7 +43,7 @@ from .opportunity_display import (
     with_roadmap_display_titles,
 )
 from .replay import replay_run as replay_run_
-from .roadmap_engine import build_roadmap
+from .roadmap_engine import apply_learned_adjustment, build_roadmap
 from .terminology import apply_run_terminology
 from .routes_normalization import register_normalization_routes
 from .routes_connector_auth import register_connector_auth_routes
@@ -71,13 +71,21 @@ from .routes_temporal import register_temporal_routes
 from .routes_entities import register_entities_routes
 from .routes_causal import register_causal_routes
 from .routes_graph import register_graph_routes
+from .routes_trace_graph import register_trace_graph_routes
+from .routes_evidence_export import register_evidence_export_routes
 from .routes_retrieval import register_retrieval_routes
+from .routes_concepts import register_concept_routes
+from .routes_cloud_ops_signatures import register_cloud_ops_signature_routes
 from .routes_run_health import register_run_health_routes
 from .routes_auth import register_auth_routes
+from .routes_audit_export import register_audit_export_routes
 from .routes_license import register_license_routes
 from .routes_usage_report import register_usage_report_routes
 from .routes_usage_summary import register_usage_summary_routes
 from .routes_ingestion import register_ingestion_routes
+from .routes_entity_match_proposals import register_entity_match_proposal_routes
+from .routes_entity_merges import register_entity_merge_routes
+from .routes_entity_unmerges import register_entity_unmerge_routes
 from .routes_pack_certification import register_pack_certification_routes
 from .routes_pack_deprecation import register_pack_deprecation_routes
 from .routes_pack_install import register_pack_install_routes
@@ -85,13 +93,28 @@ from .routes_pack_migration import register_pack_migration_routes
 from .routes_pack_state import register_pack_state_routes
 from .routes_runbook_matches import register_runbook_match_routes
 from .routes_secops_evidence import register_secops_evidence_routes
+from .routes_opportunity_lifecycle import register_opportunity_lifecycle_routes
+from .routes_opportunity_baseline import register_opportunity_baseline_routes
+from .routes_opportunity_movement import register_opportunity_movement_routes
+from .routes_learning_feedback import register_learning_routes
+from .routes_learning_adjustment import register_learning_adjustment_routes
+from .routes_outcomes import register_outcome_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
+from .middleware.audit import (
+    CONNECTOR_CONFIGURED,
+    CONNECTOR_CONNECTED,
+    CONNECTOR_DISCONNECTED,
+    EVIDENCE_DECISION_RECORDED,
+    OPPORTUNITY_DECISION_RECORDED,
+    OUTCOME_SUCCESS,
+    log_event as audit_log_event,
+)
 from .middleware.tenancy import get_current_org_id, register_tenancy
 from .middleware.license_gate import register_license_gate
 from .retrieval.default_resolvers import register_default_content_resolvers
-from .rbac import require_role, seed_owner
+from .rbac import _get_user_id_from_token, require_role, seed_owner
 
 _DEV_USER = os.getenv("DEV_JWT", "dev-token-change-me")
 _DEV_ORG = "default"
@@ -347,14 +370,29 @@ register_workspace_routes(app)
 register_entities_routes(app)
 register_causal_routes(app)
 register_graph_routes(app)
+# 2.0-B1 T1: per-finding trace graph (finding -> evidence -> source records,
+# with MSP-B7 join/correlation-window surfacing). Registered alongside the
+# other graph/trace routes.
+register_trace_graph_routes(app)
+# 2.0-B1 T4 (AC4): signed evidence-export bundles (per finding + per report),
+# HMAC-signed with the installation's license report_key. Registered after the
+# trace-graph routes it bundles.
+register_evidence_export_routes(app)
 # R18-B2 T6: retrieval freshness metrics for the run-health dashboard (AC7).
 register_retrieval_routes(app)
+# 2.0-B4 T2 (AC5): the normalised-concept contracts, conformance and declared gaps.
+register_concept_routes(app)
+# Read-only view of the cloud-event signature rows a run assembled — the values
+# needed to author matching ServiceNow incidents. Additive; nothing else reads it.
+register_cloud_ops_signature_routes(app)
 # R18-C2 T1: Run-Health Dashboard aggregation endpoints (connectors, runs,
 # content/freshness, packs) — org-scoped, Owner/Analyst read-only.
 register_run_health_routes(app)
 register_auth_routes(app)
 # LIC-1 / T6 (AT-347): Owner-only license status + update-key admin routes.
 register_license_routes(app)
+# 2.0-D4 T2 — Owner-only signed audit export (period-scoped, org-scoped in SQL).
+register_audit_export_routes(app)
 # R-1.9.1-L2 / T3 (AT-695): Owner-only signed usage-report generator route.
 register_usage_report_routes(app)
 # R-1.9.1-L2 / T5 (AT-697): Owner-only pre-invoice usage-summary route (AC6).
@@ -378,6 +416,35 @@ register_pack_migration_routes(app)
 # 2.0-C4 T5 (AT-846): the deprecation / migration / post-grace-disable trail, Owner
 # only — the same bar as /api/audit-log, whose rows these are.
 register_pack_deprecation_routes(app)
+# 2.0-A2 T1: analyst-driven opportunity lifecycle (open -> actioned -> monitoring
+# -> measured, plus dismissed/stalled), keyed on the stable opportunity_identity.
+register_opportunity_lifecycle_routes(app)
+# 2.0-B2 T3: Owner/Analyst review surface for PROPOSED cross-source entity
+# matches — the tier the resolution engine refuses to merge on its own.
+register_entity_match_proposal_routes(app)
+# 2.0-B2 T2: merged-entity provenance — every constituent source identity and
+# the rule that merged it, plus the seam that applies what T1/T3 authorised.
+register_entity_merge_routes(app)
+# 2.0-B2 T5: reversing a resolution — restore the constituents, stop the next run
+# re-merging them, and flag every dependent finding for re-evaluation.
+register_entity_unmerge_routes(app)
+# 2.0-A2 T2: read-only retrieval of the immutable baseline artifact frozen at
+# finding creation. No write verb — the pipeline is the only writer.
+register_opportunity_baseline_routes(app)
+# 2.0-A2 T3: read-only post-action movement records (baseline vs current, with a
+# comparability verdict and both run ids). Measured by the pipeline, never on read.
+register_opportunity_movement_routes(app)
+# 2.0-A2 T6: customer-facing outcome surfaces, assembled from stored lifecycle and
+# movement artifacts with caveat counts and run-id evidence.
+register_outcome_routes(app)
+# 2.0-A3 T1: the learning signal set — analyst accept/dismiss/defer-with-reason
+# plus A2 outcome results, outcome-weighted. Records and inspects signals only;
+# the bounded ranking adjustment is T2 and is not registered here.
+register_learning_routes(app)
+# 2.0-A3 T2: the bounded adjustment layer's read surface + recomputation.
+# The adjustment itself is applied at serve time via the one function in
+# app/learning_adjustment.py; these routes inspect and recompute its state.
+register_learning_adjustment_routes(app)
 
 origins = [
     o.strip()
@@ -491,7 +558,11 @@ def list_connectors() -> List[Dict[str, Any]]:
     "/api/connectors/{connector_id}/connect",
     dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
-def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+def connect_connector(
+    connector_id: str,
+    body: Dict[str, Any],
+    token: str = Depends(require_auth),
+) -> Dict[str, Any]:
     org_id = get_current_org_id()
     status = body.get("status", "connected")
     # R191-R1 T5 (AT-726 / AC2): a roadmap connector (SAP/D365 and any tile whose
@@ -532,6 +603,35 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
         was_connected=was_connected,
         now_connected=status == license_limits.CONNECTED_STATUS,
     )
+    # 2.0-D4 T1 (AC1): D4 names connector create/edit/delete. Delete was audited
+    # and the OAuth CALLBACK emitted connector_connected, but this direct status
+    # toggle — the path a non-OAuth connector actually takes — recorded nothing.
+    # The event follows the resulting state rather than the route name, so a
+    # toggle to a non-connected status reads as a disconnect and matches what the
+    # OAuth revoke path emits for the same outcome.
+    # Two explicit calls rather than one with a conditional event type: the
+    # conformance sweep resolves each log_event call site's type statically, and
+    # a type chosen by an expression is exactly the case it cannot verify.
+    if status == license_limits.CONNECTED_STATUS:
+        audit_log_event(
+            CONNECTOR_CONNECTED,
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+            target=connector_id,
+            status=status,
+            was_connected=was_connected,
+            outcome=OUTCOME_SUCCESS,
+        )
+    else:
+        audit_log_event(
+            CONNECTOR_DISCONNECTED,
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+            target=connector_id,
+            status=status,
+            was_connected=was_connected,
+            outcome=OUTCOME_SUCCESS,
+        )
     return c
 
 
@@ -542,6 +642,7 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
 def configure_connector(
     connector_id: str,
     body: Optional[Dict[str, Any]] = None,
+    token: str = Depends(require_auth),
 ) -> Dict[str, Any]:
     org_id = get_current_org_id()
     c = org_connector_get(org_id, connector_id)
@@ -563,6 +664,19 @@ def configure_connector(
     c["configured"] = True
     c["lastSynced"] = "Just now"
     org_connector_set(org_id, connector_id, c)
+    # 2.0-D4 T1 (AC1): the "edit" half of D4's connector create/edit/delete. The
+    # payload names WHICH settings the request changed, never their values — the
+    # body can carry customer configuration, and an audit row is not the place to
+    # copy it. cmdb_class_scope is recorded by name because narrowing or widening
+    # it changes what ServiceNow data a run may read.
+    audit_log_event(
+        CONNECTOR_CONFIGURED,
+        connector_id=connector_id,
+        user_id=_get_user_id_from_token(token),
+        target=connector_id,
+        settings_changed=sorted(body.keys()) if isinstance(body, dict) else [],
+        outcome=OUTCOME_SUCCESS,
+    )
     return c
 
 
@@ -738,6 +852,15 @@ def set_evidence_decision(
     }
     audit = run_kv_get("audit", run_id, default_audit())
     run_kv_set("audit", run_id, [audit_event, *audit])
+    # 2.0-D4 T1: same reasoning as the opportunity override — the run-scoped entry
+    # is a view, the audit_log row is the durable record of the human decision.
+    audit_log_event(
+        EVIDENCE_DECISION_RECORDED,
+        run_id=run_id,
+        target=evidence_id,
+        outcome=OUTCOME_SUCCESS,
+        decision=decision,
+    )
     return e
 
 
@@ -787,9 +910,124 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
     # with_display(), so a bubble keeps its coordinates when its decision changes.
     # R18-C1 T4: then adapt the finding WORDING to the run's active template
     # (lending language for Commercial Lending). No-op when no template is active.
-    # with_display_all reads this org's pack state ONCE for the whole list (2.0-C1
-    # T2), rather than once per finding as a with_display() comprehension would.
-    return apply_run_terminology(with_display_all(opps), run_id)
+    # 2.0-A1 T5 / AC3 — "no projection output — API, UI, report, or export".
+    # This IS the API output the Opportunity Review renders, so the projection
+    # vocabulary guard runs on the way out, uniformly with the executive report.
+    # Applied AFTER terminology (dev's per-pack apply_run_terminology) so a
+    # template's own wording is covered too, and on copies — the stored
+    # opportunity is never rewritten.
+    from .projection_copy_guard import scrub_opportunity_narratives
+
+    # 2.0-A3 T2: the bounded learned adjustment, at SERVE time — which is what
+    # makes "base scoring untouched and always recoverable" structurally true
+    # rather than a convention: the stored order IS the base order, so turning
+    # learning off restores it with nothing to undo, and every returned finding
+    # carries its own baseRank/baseImpact.
+    #
+    # Applied BEFORE display shaping, deliberately. with_display_scores adds a
+    # deterministic per-id offset (up to +0.6) to spread bubbles on the matrix
+    # chart; running the adjustment after it would compute the score cap from
+    # that offset impact, making the cap vary by opportunity id for a purely
+    # cosmetic reason. The cap must be a fraction of the REAL base score.
+    adjusted = _apply_learned_ranking(opps)
+    try:
+        from .projection_store import projection_for_opportunity
+
+        org_id = get_current_org_id()
+        projected = []
+        for opp in adjusted:
+            projection = projection_for_opportunity(opp, run_id, org_id=org_id)
+            if projection and not isinstance(opp.get("projection"), dict):
+                opp = {**opp, "projection": projection}
+            projected.append(opp)
+        adjusted = projected
+    except Exception as exc:  # noqa: BLE001 - projection fallback is advisory
+        logger.warning("Stored projection fallback not applied: %s", exc)
+    # Merge note: this was `[with_display(opp) for opp in adjusted]` on `dev`.
+    # `with_display_all` is that exact comprehension with the three per-finding
+    # pack lookups (disabled state, certification, deprecation) hoisted and
+    # resolved ONCE for the whole list — the 2.0-C1 T2 optimisation. Same output,
+    # so dev's pipeline is unchanged; it just stops re-reading pack state per row.
+    return scrub_opportunity_narratives(
+        apply_run_terminology(with_display_all(adjusted), run_id)
+    )
+
+
+def _apply_learned_ranking(opps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Route the served list through the ONE adjustment function.
+
+    A call site, not a second implementation — ``app.learning_adjustment`` is
+    the only place a learned adjustment is computed, because a second one would
+    compound into movement nobody could explain.
+
+    Non-blocking: a learning failure serves BASE order rather than no list. That
+    is also the safe direction if the adjustment state is unavailable — no
+    learning beats partial or stale learning.
+    """
+    try:
+        from .learning_adjustment import adjust_ranking
+        from .learning_adjustment_state import get_adjustments
+        from .learning_signals import collect_learning_signals
+
+        org_id = get_current_org_id()
+        adjustments = get_adjustments(org_id)
+        if not adjustments:
+            return opps
+        signal_set = collect_learning_signals(org_id)
+        result = adjust_ranking(
+            opps,
+            adjustments,
+            is_active=signal_set.is_active,
+            inactive_reason=signal_set.inactive_reason,
+        )
+        return list(result.ordered)
+    except Exception as exc:  # noqa: BLE001 - ranking is advisory, never fatal
+        logger.warning("Learned ranking not applied: %s", exc)
+        return opps
+
+
+#: 2.0-A3 T1 — how a review decision maps onto a learning action. UNREVIEWED is
+#: absent on purpose: clearing a decision is the absence of a judgement, and
+#: recording it as one would let a reset teach the ranking layer something.
+_REVIEW_DECISION_TO_LEARNING_ACTION = {"APPROVED": "accept", "REJECTED": "dismiss"}
+
+
+def _mirror_decision_to_learning(
+    opp: Dict[str, Any], decision: str, run_id: str
+) -> None:
+    """Record a review decision as a durable learning signal. Never blocks.
+
+    The review decision answers "is this finding real?" per run; the learning
+    record answers "is this finding type worth our team's time?" across runs.
+    They are different questions with different lifetimes, which is why this
+    mirrors rather than replaces — see ``database/models/opportunity_feedback.py``.
+
+    A finding with no ``opportunity_identity`` (materialized before A1 T6 stamped
+    it) is skipped rather than recorded under a run-scoped id: a learning signal
+    that cannot be matched on the next run is worse than no signal, because it
+    counts towards the cold-start threshold while informing nothing.
+    """
+    action = _REVIEW_DECISION_TO_LEARNING_ACTION.get(decision)
+    if not action:
+        return
+    identity = str(opp.get("opportunity_identity") or "").strip()
+    if not identity:
+        return
+    try:
+        from .learning_feedback import record_feedback
+
+        debug = opp.get("_debug") if isinstance(opp.get("_debug"), dict) else {}
+        record_feedback(
+            get_current_org_id(),
+            identity,
+            action,
+            actor_id="review_decision",
+            detector_id=(debug or {}).get("detector_id"),
+            pack_id=opp.get("packId"),
+            run_id=run_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - learning must never break review
+        logger.warning("Could not mirror decision to learning record: %s", exc)
 
 
 @app.post(
@@ -839,6 +1077,14 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
         }
         audit = run_kv_get("audit", run_id, default_audit())
         run_kv_set("audit", run_id, [event, *audit])
+        # 2.0-A3 T1: mirror the review decision into the durable learning record.
+        # APPROVED/REJECTED is a per-run judgement stored in a KV blob that
+        # materialization rewrites and replay resets; the learning layer needs it
+        # keyed on the stable opportunity_identity and surviving the run. Mirroring
+        # here means the existing analyst UI feeds learning with no frontend
+        # change. UNREVIEWED is deliberately not mirrored — clearing a decision is
+        # the absence of a judgement, not a third kind of one.
+        _mirror_decision_to_learning(o, decision, run_id)
     # with_display (not just title) so impact/effort carry the same stable matrix
     # offset as the list endpoint — otherwise the bubble jumps when its decision
     # response replaces the listed opportunity in the UI. R18-C1 T4: same
@@ -902,6 +1148,21 @@ def set_opp_override(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
     }
     audit = run_kv_get("audit", run_id, default_audit())
     run_kv_set("audit", run_id, [event, *audit])
+    # 2.0-D4 T1: the run-scoped entry above feeds the run's audit VIEW, but it lives
+    # in the `audit` run-KV blob, which materialization rewrites and replay resets —
+    # so it is not a durable record that a human made this call. D4 names "analyst
+    # decisions" as a state-changing action, so the organisation-wide immutable
+    # audit_log gets its own row.
+    audit_log_event(
+        OPPORTUNITY_DECISION_RECORDED,
+        run_id=run_id,
+        target=opp_id,
+        outcome=OUTCOME_SUCCESS,
+        action="override_saved",
+        is_locked=override["isLocked"],
+        has_rationale_override=bool(override.get("rationaleOverride")),
+        override_reason=override.get("overrideReason") or None,
+    )
     # with_display so the override response carries the same stable matrix offset
     # as the list endpoint (keeps the bubble coordinate-stable on override save).
     # R18-C1 T4: same template terminology as the list endpoint.
@@ -922,7 +1183,12 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
     # stage summaries) to the run's active template. No-op without a template.
     run_roadmap = run_kv_get("roadmap", run_id, None)
     if run_roadmap is not None:
-        return apply_run_terminology(with_roadmap_display_titles(run_roadmap), run_id)
+        # 2.0-A3 T2: the learned adjustment at SERVE time. The STORED roadmap is
+        # base order — build_roadmap runs during materialization and must stay
+        # learning-free, or disabling learning could not restore what was stored.
+        return apply_run_terminology(
+            with_roadmap_display_titles(apply_learned_adjustment(run_roadmap)), run_id
+        )
     opps = run_kv_get("opps", run_id, None)
     if opps is None:
         raise HTTPException(
@@ -932,7 +1198,59 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
                 "T2 materialisation has not completed for this run."
             ),
         )
-    return apply_run_terminology(build_roadmap(with_display_titles(opps)), run_id)
+    return apply_run_terminology(
+        apply_learned_adjustment(build_roadmap(with_display_titles(opps))), run_id
+    )
+
+
+def _with_run_completeness(report: Dict[str, Any], run: Dict[str, Any]) -> Dict[str, Any]:
+    """2.0-D4 T5 — stamp the run's completeness onto an executive report.
+
+    Applied on the SERVE path, and to the stored report as well as a freshly
+    composed one, so a report materialised before this shipped still tells the
+    truth about its run. Same retrofit shape the outcome section uses.
+
+    This is the surface the subtask singles out: the executive report is the
+    artifact most likely to reach someone who will never open a health panel. If
+    a partial run's report reads identically to a complete one, none of the rest
+    of this work matters.
+
+    ``sourcesAnalyzed`` is corrected here too. It counted the sources the run was
+    CONFIGURED with, so a run whose ServiceNow died reported the same "2
+    connected" as a clean one — the precise failure this subtask exists to stop.
+    """
+    if not isinstance(report, dict):
+        return report
+    try:
+        from .run_completeness import build_run_completeness
+
+        # No live model/storage probing on a read of a historical run: the
+        # question here is what THIS run delivered, not what the environment
+        # looks like right now.
+        completeness = build_run_completeness(run, include_environment=False)
+        stamped = {**report, "runCompleteness": completeness.to_dict()}
+
+        sources = stamped.get("sourcesAnalyzed")
+        if isinstance(sources, dict):
+            succeeded = run.get("succeeded")
+            if isinstance(succeeded, (list, tuple)):
+                stamped["sourcesAnalyzed"] = {
+                    **sources,
+                    # What actually contributed, not what was configured.
+                    "totalConnected": len(succeeded),
+                    "sourcesRequested": len(_requested_system_ids(run)),
+                    "sourcesFailed": len(completeness.degraded_components),
+                }
+        return stamped
+    except Exception as exc:  # noqa: BLE001 - a report must still render
+        logger.warning("Could not stamp run completeness: %s", exc)
+        return report
+
+
+def _requested_system_ids(run: Dict[str, Any]) -> List[str]:
+    inputs = run.get("inputs") or {}
+    systems = inputs.get("systems")
+    return [str(s) for s in systems] if isinstance(systems, (list, tuple)) else []
 
 
 @app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
@@ -947,7 +1265,19 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
     er = run_kv_get("executive_report", run_id, None)
 
     if er:
-        return apply_run_terminology(with_exec_report_display_titles(er), run_id)
+        if isinstance(er, dict) and "outcomeSection" not in er:
+            from .outcome_surfaces import build_executive_outcome_section
+
+            er = {
+                **er,
+                "outcomeSection": build_executive_outcome_section(
+                    get_current_org_id(),
+                    run_id,
+                ),
+            }
+        return apply_run_terminology(
+            with_exec_report_display_titles(_with_run_completeness(er, run)), run_id
+        )
 
     inputs = run.get("inputs") or {}
     connected_sources = inputs.get("connectedSources") or []
@@ -975,10 +1305,19 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
         )
 
     opps = with_display_titles(opps)
+
+    # 2.0-A1 T5 / AC3 — this route composes the executive report from stored
+    # opps directly rather than through build_executive_report, so the
+    # projection vocabulary guard has to run here too. Scrubbing returns copies;
+    # the stored opportunity a run persisted is never rewritten.
+    from .projection_copy_guard import scrub_opportunity_narratives
+
+    opps = scrub_opportunity_narratives(opps)
     quick_wins = [o for o in opps if o.get("tier") == "Quick Win"]
+    from .outcome_surfaces import build_executive_outcome_section
 
     return apply_run_terminology(
-        {
+        _with_run_completeness({
             "confidence": "Moderate",
             "sourcesAnalyzed": sources_analyzed,
             "topQuickWins": quick_wins,
@@ -989,7 +1328,11 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
                 "next90Count": sum(1 for o in opps if o.get("tier") == "Complex"),
                 "blockerCount": 0,
             },
-        },
+            "outcomeSection": build_executive_outcome_section(
+                get_current_org_id(),
+                run_id,
+            ),
+        }, run),
         run_id,
     )
 

@@ -31,7 +31,6 @@ const items = [
   { to: "/stack-builder", label: "Stack Builder", runScoped: false, analystOnly: true },
   // Run-scoped screens
   { to: "/discovery-run", label: "Discovery Run", runScoped: true },
-  { to: "/run-health", label: "Run Health", runScoped: false, analystOnly: true },
   // { to: "/partial-results", label: "Evidence Collection", runScoped: true }, // Hidden - Sprint 5.1
   {
     to: "/source-intelligence",
@@ -52,6 +51,18 @@ const items = [
     sfOnly: true,
   },
   { to: "/executive-report", label: "Executive Report", runScoped: true },
+  // 2.0-B2 T3: review queue for the cross-source entity matches the resolution
+  // engine will not merge on its own. Placed after the discovery flow rather than
+  // inside it: identity is a property of the org's graph, not of one run, so this
+  // is workspace maintenance — and inserting it mid-flow would break the
+  // Discovery Run -> … -> Executive Report reading order.
+  {
+    to: "/entity-matches",
+    label: "Entity Matches",
+    runScoped: false,
+    analystOnly: true,
+  },
+  { to: "/run-health", label: "Run Health", runScoped: false, analystOnly: true },
 ] satisfies NavItem[];
 
 export default function TopNav() {

@@ -137,6 +137,39 @@ def uniq_permissions_merge(perms: List[Any]) -> List[PermissionItem]:
         out.append(p_obj)
     return out
 
+def _apply_projection_strength_rule(
+    stage_opps: List[OpportunityCandidate],
+) -> List[OpportunityCandidate]:
+    """2.0-A1 AC4 — projection strength, used carefully, inside one stage.
+
+    "Carefully" is the whole point of this function. Projection strength does
+    NOT re-rank the roadmap: stage membership stays tier-driven and approved
+    items stay ahead of unreviewed ones, because those orderings encode analyst
+    decisions that a projection has no business overturning.
+
+    The one rule applied here is AC4's: a finding whose confidence is capped for
+    want of corroboration never presents above a corroborated equivalent. Capped
+    findings sink below uncapped ones within their stage; everything else keeps
+    its incoming relative order (the sort is stable), so this narrows the
+    existing ranking rather than replacing it.
+
+    Deterministic and non-blocking: an opportunity with no projection is treated
+    as uncapped and keeps its place, and a malformed projection can never raise
+    here — the roadmap must build regardless.
+    """
+    try:
+        from discovery.projection import demote_capped_projections
+    except Exception:  # noqa: BLE001 - a roadmap must build without projections
+        return list(stage_opps)
+
+    try:
+        return demote_capped_projections(
+            stage_opps, lambda opp: (opp or {}).get("projection")
+        )
+    except Exception:  # noqa: BLE001 - ordering is advisory, never fatal
+        return list(stage_opps)
+
+
 def build_roadmap(opps: List[OpportunityCandidate]) -> PilotRoadmapModel:
     # Selection rules (match the TypeScript intent):
     # - Always include APPROVED items (they represent explicit analyst decisions)
@@ -158,9 +191,9 @@ def build_roadmap(opps: List[OpportunityCandidate]) -> PilotRoadmapModel:
     # No stage caps: every opportunity appears in its tier's stage
     # (Quick Win -> Phase 1, Strategic -> Phase 2, Complex -> Phase 3).
     # Approved items still take priority ordering ahead of unreviewed ones.
-    stage30_opps = approved_qw + unreviewed_qw
-    stage60_opps = approved_strat + unreviewed_strat
-    stage90_opps = approved_complex + unreviewed_complex
+    stage30_opps = _apply_projection_strength_rule(approved_qw + unreviewed_qw)
+    stage60_opps = _apply_projection_strength_rule(approved_strat + unreviewed_strat)
+    stage90_opps = _apply_projection_strength_rule(approved_complex + unreviewed_complex)
 
     # If any APPROVED items are missing a tier, do NOT drop them silently.
     # For now, place them in the earliest stage so they remain visible to users.
@@ -204,3 +237,72 @@ def build_roadmap(opps: List[OpportunityCandidate]) -> PilotRoadmapModel:
         "dependenciesCount": 0,
         "overallReadiness": overall_readiness(all_perms),
     }
+
+
+def apply_learned_adjustment(roadmap: PilotRoadmapModel) -> PilotRoadmapModel:
+    """2.0-A3 T2 — the bounded learned adjustment, applied at SERVE time.
+
+    Deliberately NOT called from :func:`build_roadmap`. ``build_roadmap`` runs
+    during materialization and its result is STORED (``run_kv_set("roadmap", …)``
+    in ``materialize_t2`` and ``routes_sprint4_t1``). Adjusting inside it would
+    bake the learned order into storage, and then the stored roadmap would no
+    longer be base order — so disabling learning could not restore it, and "what
+    would this have ranked without learning?" would have no answer for the
+    roadmap surface. Materialization also runs without a request-scoped tenancy
+    context, so the org would be wrong or absent.
+
+    So the roadmap is BUILT in base order and stored that way, and this reorders
+    a COPY on the way out, exactly as ``list_opportunities`` does.
+
+    Routed through the single adjustment function in ``app.learning_adjustment``;
+    this is a call site, not a second implementation.
+
+    Reorders WITHIN each stage only — stage membership is tier-driven and stays
+    untouched, so tier placement, approved-before-unreviewed and A1 T4's
+    capped-confidence demotion (already applied at build time) all survive.
+
+    Non-blocking: a roadmap must serve whether or not learning is available.
+    """
+    if not isinstance(roadmap, dict) or not roadmap.get("stages"):
+        return roadmap
+    try:
+        from .learning_adjustment import RANK_SCOPE_ROADMAP_STAGE, adjust_ranking
+        from .learning_adjustment_state import get_adjustments
+        from .learning_signals import collect_learning_signals
+        from .middleware.tenancy import get_current_org_id
+
+        org_id = get_current_org_id()
+        adjustments = get_adjustments(org_id)
+        if not adjustments:
+            return roadmap
+
+        # Resolved ONCE for the whole roadmap rather than per stage: three
+        # stages would otherwise mean three identical signal-set reads.
+        signal_set = collect_learning_signals(org_id)
+        if not signal_set.is_active:
+            return roadmap
+
+        adjusted = dict(roadmap)
+        adjusted["stages"] = [
+            {
+                **stage,
+                "opportunities": list(
+                    adjust_ranking(
+                        stage.get("opportunities") or [],
+                        adjustments,
+                        is_active=True,
+                        inactive_reason=signal_set.inactive_reason,
+                        # Ranks here index THIS STAGE, not the run. The explain
+                        # endpoint adjusts the flat list and so reports a
+                        # run-global rank for the same finding — declaring the
+                        # scope is what stops the two "moved N places" figures
+                        # being read as a contradiction.
+                        rank_scope=RANK_SCOPE_ROADMAP_STAGE,
+                    ).ordered
+                ),
+            }
+            for stage in roadmap["stages"]
+        ]
+        return adjusted
+    except Exception:  # noqa: BLE001 - ordering is advisory, never fatal
+        return roadmap

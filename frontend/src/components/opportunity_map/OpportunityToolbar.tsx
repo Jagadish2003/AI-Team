@@ -140,7 +140,6 @@ export default function OpportunityToolbar({
           label="Confidence"
         />
  
-        {/* Decision */}
         <CustomDropdown<DecisionFilter>
           options={decisionOptions}
           value={decision}

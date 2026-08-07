@@ -61,7 +61,8 @@ vi.mock("../components/common/PageShell", () => ({
 import OpportunityDetail, {
   PackProvenanceRow,
 } from "../components/analyst_review/OpportunityDetail";
-import RunHealthDashboardPage, {
+import {
+  HIDDEN_PANELS,
   packLifecycleLabel,
 } from "../pages/RunHealthDashboardPage";
 
@@ -122,10 +123,21 @@ function packHealth(
 // The health panels read from the shared data cache (so they survive navigation),
 // which needs a provider ancestor. Each render gets a fresh one, so the cache never
 // leaks between tests.
-function renderDashboard() {
+// Merge note: `dev` HID the packs panel from the dashboard grid (see
+// HIDDEN_PANELS in RunHealthDashboardPage — kept intact so re-enabling it is a
+// one-line change). These tests are about what the PANEL renders, not about
+// whether the dashboard currently shows it, so they mount the panel directly.
+// Rendering the whole dashboard would assert dev's layout decision, not this
+// behaviour — and would simply time out waiting for a panel that is not there.
+async function renderDashboard() {
+  const data = await api.fetchPackHealth();
   return renderWithCache(
     <MemoryRouter initialEntries={["/run-health"]}>
-      <RunHealthDashboardPage />
+      <HIDDEN_PANELS.PacksPanel
+        resource={{ status: "success", data, error: null }}
+        retry={() => {}}
+        highlighted={false}
+      />
     </MemoryRouter>,
   );
 }
@@ -206,7 +218,7 @@ describe("Run health packs panel — pack state and version (AC5)", () => {
     api.fetchPackHealth.mockResolvedValue(
       packHealth([packRow()]),
     );
-    renderDashboard();
+    await renderDashboard();
 
     const row = await screen.findByTestId("pack-row-cloud_ops");
     expect(within(row).getByTestId("pack-state-cloud_ops")).toHaveTextContent("Active");
@@ -221,7 +233,7 @@ describe("Run health packs panel — pack state and version (AC5)", () => {
     api.fetchPackHealth.mockResolvedValue(
       packHealth([packRow({ pack_state: "disabled" })]),
     );
-    renderDashboard();
+    await renderDashboard();
 
     const row = await screen.findByTestId("pack-row-cloud_ops");
     expect(within(row).getByTestId("pack-state-cloud_ops")).toHaveTextContent("Disabled");
@@ -243,7 +255,7 @@ describe("Run health packs panel — pack state and version (AC5)", () => {
         { pinned_pack_versions: { cloud_ops: "1.1.0" } },
       ),
     );
-    renderDashboard();
+    await renderDashboard();
 
     const row = await screen.findByTestId("pack-row-cloud_ops");
     expect(within(row).getByTestId("pack-version-cloud_ops")).toHaveTextContent(
@@ -267,7 +279,7 @@ describe("Run health packs panel — pack state and version (AC5)", () => {
         }),
       ]),
     );
-    renderDashboard();
+    await renderDashboard();
 
     expect(await screen.findByTestId("pack-disabled-note-cloud_ops")).toBeInTheDocument();
     expect(screen.getByTestId("pack-rollback-note-cloud_ops")).toBeInTheDocument();
@@ -289,7 +301,7 @@ describe("Run health packs panel — pack state and version (AC5)", () => {
         }),
       ]),
     );
-    renderDashboard();
+    await renderDashboard();
 
     expect(await screen.findByTestId("pack-state-cloud_ops")).toHaveTextContent("Active");
     expect(screen.getByTestId("pack-state-security_ops")).toHaveTextContent("Disabled");
@@ -309,7 +321,7 @@ describe("Run health packs panel — pack state and version (AC5)", () => {
         ],
       }),
     );
-    renderDashboard();
+    await renderDashboard();
 
     const excluded = await screen.findByTestId("packs-excluded");
     expect(within(excluded).getByTestId("pack-excluded-security_ops")).toHaveTextContent(
@@ -329,7 +341,7 @@ describe("Run health packs panel — pack state and version (AC5)", () => {
         ],
       }),
     );
-    renderDashboard();
+    await renderDashboard();
 
     // The generic "no runs yet" message would be actively misleading here.
     const panel = await screen.findByTestId("panel-packs");
@@ -342,7 +354,7 @@ describe("Run health packs panel — pack state and version (AC5)", () => {
     api.fetchPackHealth.mockResolvedValue(
       packHealth([]),
     );
-    renderDashboard();
+    await renderDashboard();
 
     const panel = await screen.findByTestId("panel-packs");
     expect(panel).toHaveTextContent(/No pack executions yet/i);
@@ -354,7 +366,7 @@ describe("Run health packs panel — pack state and version (AC5)", () => {
     api.fetchPackHealth.mockResolvedValue(
       packHealth([packRow({ pack_state: "disabled" })]),
     );
-    renderDashboard();
+    await renderDashboard();
 
     await waitFor(() =>
       expect(screen.getByTestId("panel-packs")).toHaveAttribute("data-state", "healthy"),
@@ -374,7 +386,7 @@ describe("Run health packs panel — pack state and version (AC5)", () => {
         },
       ],
     });
-    renderDashboard();
+    await renderDashboard();
 
     const row = await screen.findByTestId("pack-row-ncino");
     expect(within(row).getByTestId("pack-state-ncino")).toHaveTextContent("Active");

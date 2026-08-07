@@ -1,5 +1,6 @@
 import React from 'react';
 import { OpportunityCandidate, OpportunityTier } from '../../types/analystReview';
+import { RankingAdjustmentCompact } from '../learning/RankingAdjustment';
 
 function tierBadge(tier: OpportunityTier) {
   const cls =
@@ -49,6 +50,7 @@ export default function TopQuickWins({
                   {tierBadge(o.tier)}
                 </div>
                 <div className="mt-2 text-xs text-muted">Impact {o.impact}/10 - Effort {o.effort}/10</div>
+                <RankingAdjustmentCompact ranking={o._ranking} />
               </button>
             );
           })

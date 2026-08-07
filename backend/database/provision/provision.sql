@@ -1,9 +1,11 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0033.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0048.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
 -- 03_lazy_runtime_tables.sql. Creates the agentiq role, all tables (incl.
--- org_licenses, ingestion_checkpoints, opportunity_instances, the R18-B1/B2
+-- org_licenses, ingestion_checkpoints, opportunity_instances, opportunity_lifecycle
+-- (+history), opportunity_baselines, opportunity_movements,
+-- the R18-B1/B2
 -- pgvector-backed retrieval_chunks + retrieval_refresh_queue, the MSP-B8
 -- ops_event_staging + ops_event_load_batches, the MSP-B5 runbook_matches /
 -- runbook_match_decision_history / runbook_match_feedback, the 2.0-C1
@@ -12,7 +14,7 @@
 -- vendor-side license_registry + append-only issuance_audit),
 -- indexes/constraints/rules, seeds the connector catalog, grants the app login
 -- role(s) privileges on the schema, REVOKES DELETE/TRUNCATE on the run-history
--- tables (2.0-C1 AC4), and stamps alembic_version to head 0037.
+-- tables (2.0-C1 AC4), and stamps alembic_version to head 0048.
 --
 -- BEFORE RUNNING ON PRODUCTION — two values in this file are dev defaults and
 -- MUST be set for the target environment. Both are marked "TODO(deploy)" below:
@@ -429,6 +431,225 @@ CREATE TABLE "public"."opportunity_instances" (
     "created_at" timestamp without time zone NOT NULL,
     "is_deleted" boolean DEFAULT false NOT NULL,
     CONSTRAINT "opportunity_instances_pkey" PRIMARY KEY ("opportunity_identity", "run_id")
+);
+
+
+--
+-- Name: opportunity_lifecycle; Type: TABLE; Schema: public; Owner: -
+--
+-- SOURCE OF TRUTH: database/models/opportunity_lifecycle.py
+-- (ALL_OPPORTUNITY_LIFECYCLE_DDL), applied by migration 0031 and the runtime
+-- ensure_opportunity_lifecycle_tables() helper. This pure-SQL provisioning path
+-- mirrors that schema and MUST be kept in sync with it.
+--
+-- 2.0-A2 T1: keyed on (org_id, opportunity_identity) — the STABLE cross-run
+-- identity — because lifecycle is a property of the problem, not of one run's
+-- observation of it.
+--
+
+CREATE TABLE "public"."opportunity_lifecycle" (
+    "org_id" character varying(64) NOT NULL,
+    "opportunity_identity" character varying(64) NOT NULL,
+    "state" character varying(16) NOT NULL,
+    "action_date" "date",
+    "actioned_by" character varying(128),
+    "actioned_at" timestamp with time zone,
+    "revision" integer DEFAULT 0 NOT NULL,
+    "first_seen_run_id" character varying(64),
+    "last_run_id" character varying(64),
+    "last_transition_at" timestamp with time zone,
+    "updated_by" character varying(128),
+    "created_at" timestamp with time zone NOT NULL,
+    "updated_at" timestamp with time zone NOT NULL,
+    CONSTRAINT "opportunity_lifecycle_pkey" PRIMARY KEY ("org_id", "opportunity_identity")
+);
+
+
+--
+-- Name: opportunity_lifecycle_history; Type: TABLE; Schema: public; Owner: -
+--
+-- Append-only transition trail. An analyst unwinding a mistaken action appends a
+-- new forward row; history is never rewritten.
+--
+
+CREATE TABLE "public"."opportunity_lifecycle_history" (
+    "id" character varying(64) NOT NULL,
+    "org_id" character varying(64) NOT NULL,
+    "opportunity_identity" character varying(64) NOT NULL,
+    "revision" integer NOT NULL,
+    "from_state" character varying(16) NOT NULL,
+    "to_state" character varying(16) NOT NULL,
+    "actor" character varying(16) NOT NULL,
+    "actor_id" character varying(128) NOT NULL,
+    "action_date" "date",
+    "reason" "text" NOT NULL,
+    "note" "text",
+    "run_id" character varying(64),
+    "transitioned_at" timestamp with time zone NOT NULL,
+    CONSTRAINT "opportunity_lifecycle_history_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "opportunity_lifecycle_history_rev_key" UNIQUE ("org_id", "opportunity_identity", "revision")
+);
+
+
+--
+-- Name: opportunity_baselines; Type: TABLE; Schema: public; Owner: -
+--
+-- SOURCE OF TRUTH: database/models/opportunity_baselines.py
+-- (ALL_OPPORTUNITY_BASELINES_DDL), applied by migration 0032 and the runtime
+-- ensure_opportunity_baseline_table() helper. Keep in sync with it.
+--
+-- 2.0-A2 T2: the IMMUTABLE measurement basis a finding is born with. Write-once
+-- by primary key; the store issues no UPDATE or DELETE. In production also apply:
+--     REVOKE UPDATE, DELETE ON opportunity_baselines FROM app_user;
+--     GRANT INSERT, SELECT ON opportunity_baselines TO app_user;
+--
+
+CREATE TABLE "public"."opportunity_baselines" (
+    "org_id" character varying(64) NOT NULL,
+    "opportunity_identity" character varying(64) NOT NULL,
+    "run_id" character varying(64) NOT NULL,
+    "detector_id" character varying(128) NOT NULL,
+    "pack_id" character varying(64),
+    "pack_version" character varying(32),
+    "opportunity_ref" character varying(64),
+    "window_days" integer,
+    "window_started_at" timestamp with time zone,
+    "window_ended_at" timestamp with time zone,
+    "window_derivation" character varying(64) NOT NULL,
+    "schema_version" character varying(16) NOT NULL,
+    "artifact" "text" NOT NULL,
+    "captured_at" timestamp with time zone NOT NULL,
+    CONSTRAINT "opportunity_baselines_pkey" PRIMARY KEY ("org_id", "opportunity_identity")
+);
+
+
+--
+-- Name: opportunity_movements; Type: TABLE; Schema: public; Owner: -
+--
+-- SOURCE OF TRUTH: database/models/opportunity_movements.py
+-- (ALL_OPPORTUNITY_MOVEMENTS_DDL), applied by migration 0033 and the runtime
+-- ensure_opportunity_movement_table() helper. Keep in sync with it.
+--
+-- 2.0-A2 T3: one stored movement record per (identity, comparison run) - a
+-- STORED artifact, not a computed-at-read view, so a later pack change cannot
+-- retroactively alter a measurement that was already reported. Both run ids are
+-- real columns (AC7); comparability_verdict is NOT NULL by contract.
+--
+
+CREATE TABLE "public"."opportunity_movements" (
+    "org_id" character varying(64) NOT NULL,
+    "opportunity_identity" character varying(64) NOT NULL,
+    "current_run_id" character varying(64) NOT NULL,
+    "baseline_run_id" character varying(64) NOT NULL,
+    "detector_id" character varying(128) NOT NULL,
+    "action_date" "date" NOT NULL,
+    "comparability_verdict" character varying(24) NOT NULL,
+    "baseline_pack_version" character varying(32),
+    "current_pack_version" character varying(32),
+    "primary_signal" character varying(128),
+    "primary_baseline_value" double precision,
+    "primary_current_value" double precision,
+    "primary_delta" double precision,
+    "primary_direction" character varying(16),
+    "record" "text" NOT NULL,
+    "measured_at" timestamp with time zone NOT NULL,
+    "created_at" timestamp with time zone NOT NULL,
+    "updated_at" timestamp with time zone NOT NULL,
+    "confounder_count" integer DEFAULT 0 NOT NULL,
+    "confounder_material_count" integer DEFAULT 0 NOT NULL,
+    "confounder_types" "text",
+    "projection_validation_verdict" character varying(24) DEFAULT 'not_projected'::character varying NOT NULL,
+    "projection_pack_id" character varying(64),
+    "projection_pack_version" character varying(32),
+    "projection_confidence" character varying(16),
+    CONSTRAINT "opportunity_movements_pkey" PRIMARY KEY ("org_id", "opportunity_identity", "current_run_id")
+);
+
+
+--
+-- Name: opportunity_feedback; Type: TABLE; Schema: public; Owner: -
+--
+-- 2.0-A3 T1: the durable analyst accept/dismiss/defer record the learning
+-- signal set reads. Keyed on the stable opportunity_identity, NOT on a run:
+-- the run-scoped `opps` KV `decision` field is rewritten wholesale by
+-- materialization and reset by replay, so a learning signal stored there would
+-- not survive to inform the next run. APPEND-ONLY: an analyst who changes their
+-- mind appends a new row (see FEEDBACK_GRANTS in the model module for the
+-- production REVOKE that makes that a capability, not a convention).
+--
+
+CREATE TABLE "public"."opportunity_feedback" (
+    "feedback_id" character varying(64) NOT NULL,
+    "org_id" character varying(64) NOT NULL,
+    "opportunity_identity" character varying(64) NOT NULL,
+    "action" character varying(16) NOT NULL,
+    "reason_code" character varying(48),
+    "reason_detail" "text",
+    "actor_id" character varying(128) NOT NULL,
+    "detector_id" character varying(128),
+    "pack_id" character varying(64),
+    "signal_concept" character varying(160),
+    "run_id" character varying(64),
+    "recorded_at" timestamp with time zone NOT NULL,
+    "record" "jsonb" NOT NULL,
+    CONSTRAINT "opportunity_feedback_pkey" PRIMARY KEY ("feedback_id")
+);
+
+
+--
+-- Name: ranking_adjustments; Type: TABLE; Schema: public; Owner: -
+--
+-- 2.0-A3 T2: the per-org learned ranking adjustment, keyed on the T1 similarity
+-- group. Stored as a VALUE rather than derived at read time, so a ranking cannot
+-- shift silently as decision history accrues and T4's reset has something to
+-- reset. Base scoring is never written -- the layer applies at serve time.
+--
+
+CREATE TABLE "public"."ranking_adjustments" (
+    "org_id" character varying(64) NOT NULL,
+    "detector_id" character varying(128) DEFAULT ''::character varying NOT NULL,
+    "pack_id" character varying(64) DEFAULT ''::character varying NOT NULL,
+    "signal_concept" character varying(160),
+    "net_weight" double precision DEFAULT 0 NOT NULL,
+    "outcome_weight" double precision DEFAULT 0 NOT NULL,
+    "decision_weight" double precision DEFAULT 0 NOT NULL,
+    "has_outcome_evidence" boolean DEFAULT false NOT NULL,
+    "signal_count" integer DEFAULT 0 NOT NULL,
+    "learning_active" boolean DEFAULT false NOT NULL,
+    "contributing_refs" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "config_version" character varying(32),
+    "revision" integer DEFAULT 1 NOT NULL,
+    "computed_at" timestamp with time zone NOT NULL,
+    "updated_at" timestamp with time zone NOT NULL,
+    CONSTRAINT "ranking_adjustments_pkey" PRIMARY KEY ("org_id", "detector_id", "pack_id")
+);
+
+
+--
+-- Name: ranking_adjustment_history; Type: TABLE; Schema: public; Owner: -
+--
+-- APPEND-ONLY. Every value an adjustment has held, including the ones a reset
+-- replaced. Present from the start because history cannot be reconstructed
+-- retroactively: a table added later begins with a hole exactly where the first
+-- questions will be asked.
+--
+
+CREATE TABLE "public"."ranking_adjustment_history" (
+    "history_id" character varying(64) NOT NULL,
+    "org_id" character varying(64) NOT NULL,
+    "detector_id" character varying(128) DEFAULT ''::character varying NOT NULL,
+    "pack_id" character varying(64) DEFAULT ''::character varying NOT NULL,
+    "change_kind" character varying(32) NOT NULL,
+    "previous_net_weight" double precision,
+    "net_weight" double precision DEFAULT 0 NOT NULL,
+    "signal_count" integer DEFAULT 0 NOT NULL,
+    "learning_active" boolean DEFAULT false NOT NULL,
+    "actor_id" character varying(128),
+    "config_version" character varying(32),
+    "revision" integer DEFAULT 1 NOT NULL,
+    "record" "jsonb" NOT NULL,
+    "recorded_at" timestamp with time zone NOT NULL,
+    CONSTRAINT "ranking_adjustment_history_pkey" PRIMARY KEY ("history_id")
 );
 
 
@@ -1372,7 +1593,7 @@ CREATE INDEX IF NOT EXISTS idx_runbook_match_feedback_org_created
 
 
 --
--- Name: pack_states, pack_state_history — 2.0-C1 T2 (AT-827) alembic 0031
+-- Name: pack_states, pack_state_history — 2.0-C1 T2 (AT-827) alembic 0042
 --
 -- Per-org pack lifecycle state (active/disabled) and its append-only transition
 -- history. Like the runbook tables above these have NO runtime ensure_* helper:
@@ -1386,7 +1607,7 @@ CREATE INDEX IF NOT EXISTS idx_runbook_match_feedback_org_created
 --
 
 -- pinned_version / previous_version / resulting_version are the 2.0-C1 T3 (AT-828)
--- version-rollback columns (alembic 0032). NULL means "not pinned" — the pack runs
+-- version-rollback columns (alembic 0043). NULL means "not pinned" — the pack runs
 -- its current registry version, exactly as before rollback existed.
 CREATE TABLE IF NOT EXISTS pack_states (
     org_id         VARCHAR(64)  NOT NULL,
@@ -1434,7 +1655,7 @@ CREATE INDEX IF NOT EXISTS idx_pack_states_org_state
 
 
 --
--- Name: pack_certification_reviews — 2.0-C2 T2 (AT-832) alembic 0034
+-- Name: pack_certification_reviews — 2.0-C2 T2 (AT-832) alembic 0045
 --
 -- Append-only certification review trail: who reviewed which pack version,
 -- against which criteria, with what decision and on what date (2.0-C2 AC5).
@@ -1475,7 +1696,7 @@ CREATE INDEX IF NOT EXISTS idx_pack_certification_reviews_org_pack
 
 
 --
--- Name: pack_certification_policies — 2.0-C2 T4 (AT-834) alembic 0035
+-- Name: pack_certification_policies — 2.0-C2 T4 (AT-834) alembic 0046
 --
 -- Per-org activation floor: the MINIMUM certification level a pack must hold to be
 -- activated (e.g. a federal deployment setting 'certified'). No runtime ensure_*
@@ -1503,7 +1724,7 @@ CREATE TABLE IF NOT EXISTS pack_certification_policies (
 
 
 --
--- Name: installed_packs — 2.0-C3 T4/T6 (AT-839, AT-841) alembic 0036, 0037
+-- Name: installed_packs — 2.0-C3 T4/T6 (AT-839, AT-841) alembic 0047, 0048
 --
 -- The per-org registry of partner packs installed from a signed bundle. One row
 -- per (org, pack); re-installing the same id is an upgrade that bumps `revision`.
@@ -1514,7 +1735,7 @@ CREATE TABLE IF NOT EXISTS pack_certification_policies (
 -- stay, so "which pack produced this historical finding, and where did it come
 -- from" survives the pack leaving service.
 --
--- Deliberately NOT in the protected-history set (0033/0034): this is current
+-- Deliberately NOT in the protected-history set (0044/0045): this is current
 -- configuration, not a record of what the platform found.
 --
 
@@ -1541,13 +1762,167 @@ CREATE TABLE IF NOT EXISTS installed_packs (
 CREATE INDEX IF NOT EXISTS idx_installed_packs_org_status
     ON installed_packs (org_id, status);
 
--- 2.0-C3 T6 (AT-841) alembic 0037. Idempotent, so a database provisioned from an
+-- 2.0-C3 T6 (AT-841) alembic 0048. Idempotent, so a database provisioned from an
 -- earlier copy of this file converges: activation re-runs the author's fixtures,
 -- which means they have to still be stored.
 ALTER TABLE installed_packs
     ADD COLUMN IF NOT EXISTS fixtures JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE installed_packs
     ADD COLUMN IF NOT EXISTS validation JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- 2.0-B2 T3 — proposed cross-source entity matches + append-only decision
+-- history (migration 0032).
+--
+-- SOURCE OF TRUTH: database/models/entity_match_proposals.py
+-- (ALL_ENTITY_MATCH_PROPOSAL_DDL), applied by migration 0032. Copied VERBATIM
+-- below — keep identical when the model changes.
+--
+-- These two tables have NO runtime ensure_* helper: app/entity_match_proposals.py
+-- only reads and writes them. Provisioning is therefore the only thing that can
+-- create them, and without them the Entity Match review API fails with
+-- 'relation "entity_match_proposals" does not exist'.
+--
+
+CREATE TABLE IF NOT EXISTS entity_match_proposals (
+    org_id              VARCHAR(64)  NOT NULL,
+    proposal_id         VARCHAR(64)  NOT NULL,
+    entity_type         VARCHAR(32)  NOT NULL,
+    -- The pair, stored in sorted order so (A,B) and (B,A) are ONE row.
+    left_entity_id      VARCHAR(36)  NOT NULL,
+    right_entity_id     VARCHAR(36)  NOT NULL,
+    -- Which resolution tier proposed it (always a propose-only tier — an
+    -- auto-merge tier never reaches this table).
+    tier                VARCHAR(32)  NOT NULL,
+    confidence          FLOAT        NOT NULL,
+    status              VARCHAR(16)  NOT NULL,
+    -- 2.0-B2 T4: the pair's STABLE source identity, independent of the entity ROW
+    -- ids above. Those ids churn (a source that starts supplying record ids makes
+    -- upsert_source_entity insert a NEW resolved row), and a decision keyed on row
+    -- ids alone would then miss its own pair and re-propose it. NULL on rows
+    -- written before T4; backfilled from evidence_payload on the next scan.
+    identity_key        VARCHAR(64),
+    -- The full proposal snapshot the reviewer sees: both entities' display names
+    -- and source identities, the reason, and the corroborating relationships.
+    evidence_payload    TEXT         NOT NULL,
+    revision            INTEGER      NOT NULL DEFAULT 0,
+    decided_by          VARCHAR(128),
+    decided_at          TIMESTAMPTZ,
+    note                TEXT,
+    first_proposed_at   TIMESTAMPTZ  NOT NULL,
+    last_proposed_at    TIMESTAMPTZ  NOT NULL,
+    created_at          TIMESTAMPTZ  NOT NULL,
+    updated_at          TIMESTAMPTZ  NOT NULL,
+    PRIMARY KEY (org_id, proposal_id)
+);
+
+CREATE TABLE IF NOT EXISTS entity_match_proposal_history (
+    id                  VARCHAR(64)  PRIMARY KEY,
+    org_id              VARCHAR(64)  NOT NULL,
+    proposal_id         VARCHAR(64)  NOT NULL,
+    revision            INTEGER      NOT NULL,
+    action              VARCHAR(16)  NOT NULL,
+    previous_status     VARCHAR(16)  NOT NULL,
+    resulting_status    VARCHAR(16)  NOT NULL,
+    actor_id            VARCHAR(128) NOT NULL,
+    note                TEXT,
+    decided_at          TIMESTAMPTZ  NOT NULL,
+    UNIQUE (org_id, proposal_id, revision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_match_proposals_org_status
+    ON entity_match_proposals (org_id, status, last_proposed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_entity_match_proposal_history_org_proposal
+    ON entity_match_proposal_history (org_id, proposal_id, revision DESC);
+
+CREATE INDEX IF NOT EXISTS idx_entity_match_proposals_org_identity
+    ON entity_match_proposals (org_id, identity_key, status);
+
+
+--
+-- 2.0-B2 T5 — unmerge suppression + the dependent-finding re-evaluation work
+-- list (migration 0034).
+--
+-- SOURCE OF TRUTH: database/models/entity_unmerges.py (ALL_ENTITY_UNMERGE_DDL),
+-- applied by migration 0034. Copied VERBATIM below — keep identical when the
+-- model changes.
+--
+-- entity_unmerges is why a reversal survives: the merge appliers are idempotent
+-- and re-run continuously, so without a recorded block the next pass re-merges a
+-- pair somebody just unmerged. finding_reevaluation_flags is the other half of
+-- AC4 — keyed on the STABLE opportunity_identity so a flag raised now is still
+-- findable by the run that re-evaluates it later.
+--
+
+CREATE TABLE IF NOT EXISTS entity_unmerges (
+    org_id                VARCHAR(64)  NOT NULL,
+    -- One of the two keys naming the pair this block covers: the exact entity-row
+    -- pair, and the churn-resistant source-identity pair. Either one matching
+    -- blocks the merge, because the two fail in opposite directions.
+    pair_key              VARCHAR(80)  NOT NULL,
+    -- Groups the rows written by ONE unmerge, so the log reads as one action.
+    unmerge_id            VARCHAR(64)  NOT NULL,
+    pair_key_kind         VARCHAR(16)  NOT NULL,
+    status                VARCHAR(16)  NOT NULL,
+    -- The entity the constituent was detached FROM, and the constituent itself.
+    survivor_entity_id    VARCHAR(36)  NOT NULL,
+    detached_entity_id    VARCHAR(36)  NOT NULL,
+    entity_type           VARCHAR(32)  NOT NULL,
+    -- The rule whose merge was reversed, so the log answers "what kind of
+    -- decision was undone?".
+    previous_rule         VARCHAR(32),
+    -- Every entity id the unmerge handed back, including the detached entity's own
+    -- sub-constituents when a chain of merges was split.
+    restored_entity_ids   TEXT         NOT NULL,
+    -- What the unmerge did about dependent findings, kept with the action itself.
+    flagged_finding_count INTEGER      NOT NULL DEFAULT 0,
+    unlinked_finding_count INTEGER     NOT NULL DEFAULT 0,
+    reason                TEXT,
+    actor_id              VARCHAR(128) NOT NULL,
+    created_at            TIMESTAMPTZ  NOT NULL,
+    released_by           VARCHAR(128),
+    released_at           TIMESTAMPTZ,
+    release_reason        TEXT,
+    PRIMARY KEY (org_id, pair_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_unmerges_org_status
+    ON entity_unmerges (org_id, status, pair_key);
+
+CREATE INDEX IF NOT EXISTS idx_entity_unmerges_org_created
+    ON entity_unmerges (org_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_entity_unmerges_org_unmerge
+    ON entity_unmerges (org_id, unmerge_id);
+
+CREATE TABLE IF NOT EXISTS finding_reevaluation_flags (
+    org_id                VARCHAR(64)  NOT NULL,
+    -- The STABLE cross-run identity of the finding, not a run-scoped opp id: the
+    -- flag has to outlive the run that was current when it was raised.
+    opportunity_identity  VARCHAR(64)  NOT NULL,
+    status                VARCHAR(16)  NOT NULL,
+    -- Why re-evaluation is needed, and what triggered it. 'entity_unmerge' is the
+    -- only producer today; the column exists because it will not be the last.
+    reason                VARCHAR(64)  NOT NULL,
+    trigger_kind          VARCHAR(32)  NOT NULL,
+    trigger_ref           VARCHAR(64),
+    -- The entity ids whose identity changed under this finding, so a reviewer can
+    -- see WHAT changed rather than only that something did.
+    entity_ids            TEXT         NOT NULL,
+    -- The run the finding was last observed in when it was flagged: the "before"
+    -- side of any comparison a re-evaluation makes.
+    flagged_run_id        VARCHAR(64),
+    flagged_by            VARCHAR(128) NOT NULL,
+    flagged_at            TIMESTAMPTZ  NOT NULL,
+    updated_at            TIMESTAMPTZ  NOT NULL,
+    -- Set by the run that re-observed the finding. Recording the run id is what
+    -- turns "will be re-evaluated" into "was re-evaluated, by this run".
+    cleared_run_id        VARCHAR(64),
+    cleared_at            TIMESTAMPTZ,
+    PRIMARY KEY (org_id, opportunity_identity)
+);
+
+CREATE INDEX IF NOT EXISTS idx_finding_reeval_flags_org_status
+    ON finding_reevaluation_flags (org_id, status, flagged_at DESC);
 
 
 --
@@ -1616,11 +1991,79 @@ INSERT INTO "public"."connectors" ("id", "payload") VALUES ('zendesk', '{"id": "
 -- 2.0-C1/C2: this file now carries the 0031 (pack_states / pack_state_history),
 -- 0032 (version-pin columns), 0033 (REVOKE DELETE/TRUNCATE on the history tables)
 -- 0034 (pack_certification_reviews) and 0035 (pack_certification_policies)
--- objects, so it must stamp 0035. A stale stamp would leave a
+-- objects, so it must stamp the post-merge head 0048. A stale stamp would leave a
 -- freshly provisioned database claiming a head it is ahead of, and `alembic upgrade
--- head` would then re-run 0031-0033. Those are all idempotent, so it would not
--- break, but the recorded head would be wrong. Bump this whenever you add DDL here.
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0037') ON CONFLICT DO NOTHING;
+-- head` would then re-run the C-arc migrations (now 0042-0048). Those are all
+-- idempotent, so it would not break, but the recorded head would be wrong. Bump
+-- this whenever you add DDL here.
+CREATE INDEX "idx_opp_lifecycle_org_state" ON "public"."opportunity_lifecycle" USING "btree" ("org_id", "state");
+
+CREATE INDEX "idx_opp_lifecycle_history_org_identity" ON "public"."opportunity_lifecycle_history" USING "btree" ("org_id", "opportunity_identity", "revision" DESC);
+
+CREATE INDEX "idx_opp_baselines_org_run" ON "public"."opportunity_baselines" USING "btree" ("org_id", "run_id");
+
+CREATE INDEX "idx_opp_baselines_org_detector" ON "public"."opportunity_baselines" USING "btree" ("org_id", "detector_id");
+
+CREATE INDEX "idx_opp_movements_org_identity" ON "public"."opportunity_movements" USING "btree" ("org_id", "opportunity_identity", "measured_at" DESC);
+
+CREATE INDEX "idx_opp_movements_org_run" ON "public"."opportunity_movements" USING "btree" ("org_id", "current_run_id");
+
+CREATE INDEX "idx_opp_movements_org_verdict" ON "public"."opportunity_movements" USING "btree" ("org_id", "comparability_verdict");
+
+CREATE INDEX "idx_opp_movements_org_confounders" ON "public"."opportunity_movements" USING "btree" ("org_id", "confounder_count");
+
+CREATE INDEX "idx_opp_movements_org_projection_verdict" ON "public"."opportunity_movements" USING "btree" ("org_id", "projection_validation_verdict");
+
+CREATE INDEX "idx_opp_movements_org_projection_pack" ON "public"."opportunity_movements" USING "btree" ("org_id", "projection_pack_id");
+
+CREATE INDEX "idx_opp_movements_org_detector" ON "public"."opportunity_movements" USING "btree" ("org_id", "detector_id");
+
+CREATE INDEX "idx_opp_movements_org_projection_confidence" ON "public"."opportunity_movements" USING "btree" ("org_id", "projection_confidence");
+
+
+--
+-- Name: idx_opportunity_feedback_*; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_opportunity_feedback_identity" ON "public"."opportunity_feedback" USING "btree" ("org_id", "opportunity_identity", "recorded_at" DESC);
+
+CREATE INDEX "idx_opportunity_feedback_similarity" ON "public"."opportunity_feedback" USING "btree" ("org_id", "detector_id", "pack_id", "recorded_at" DESC);
+
+CREATE INDEX "idx_opportunity_feedback_org_recorded" ON "public"."opportunity_feedback" USING "btree" ("org_id", "recorded_at" DESC);
+
+
+--
+-- Name: idx_ranking_adjustment*; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_ranking_adjustments_org" ON "public"."ranking_adjustments" USING "btree" ("org_id", "updated_at" DESC);
+
+CREATE INDEX "idx_ranking_adjustment_history_org" ON "public"."ranking_adjustment_history" USING "btree" ("org_id", "recorded_at" DESC);
+
+CREATE INDEX "idx_ranking_adjustment_history_group" ON "public"."ranking_adjustment_history" USING "btree" ("org_id", "detector_id", "pack_id", "recorded_at" DESC);
+
+--
+-- 2.0-D4 T2 (AC2): enforce audit_log immutability at the GRANT level.
+--
+-- database/models/audit_log.py has documented this posture since AT-82, but it was
+-- never applied here - the application role held UPDATE, DELETE and TRUNCATE on the
+-- table, so "audit records cannot be updated or deleted through any application
+-- path" was true only of the code, not of the database. Applied by migration 0038
+-- as well, so a deployment provisioned either way ends up in the same state.
+--
+-- LIMITATION, stated rather than discovered later: in PostgreSQL a table OWNER can
+-- re-grant itself anything, so this binds only when the application role does NOT
+-- own audit_log. Provision the table as a migration/DBA role and grant the
+-- application role INSERT + SELECT only. tests/unit/test_audit_log_immutability.py
+-- reports the ownership caveat explicitly rather than implying protection.
+--
+-- Retention is deliberately NOT a DELETE grant here. See
+-- docs/audit_export_and_retention.md: the deletion path is outside the application
+-- by design, run by a separate role.
+--
+REVOKE UPDATE, DELETE, TRUNCATE ON "public"."audit_log" FROM PUBLIC;
+
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0048') ON CONFLICT DO NOTHING;
 
 
 --
@@ -1669,7 +2112,7 @@ $$;
 
 
 --
--- Run-history retention — 2.0-C1 T4 (AT-829) alembic 0033
+-- Run-history retention — 2.0-C1 T4 (AT-829) alembic 0044
 --
 -- The GRANT block above hands each app role ALL PRIVILEGES, which includes DELETE
 -- and TRUNCATE. Claw those two back on the tables holding run history, so no

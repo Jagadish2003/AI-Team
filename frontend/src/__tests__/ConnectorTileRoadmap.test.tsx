@@ -2,8 +2,8 @@
  * ConnectorTileRoadmap.test.tsx — R191-R1 T5 (AT-726)
  *
  * A roadmap connector (SAP/D365 and any tile whose ingestion does not ship yet)
- * renders as a non-connectable "Coming soon" tile in the Integration Hub,
- * regardless of role. A shipped connector is unaffected.
+ * renders with the old disabled grey Connect posture in the Integration Hub,
+ * without a visible "Coming soon" label. A shipped connector is unaffected.
  */
 import React from "react";
 import { render, screen } from "@testing-library/react";
@@ -77,20 +77,21 @@ function renderTile(connector: unknown) {
 beforeEach(() => vi.clearAllMocks());
 
 describe("ConnectorTile — roadmap (AT-726)", () => {
-  it("renders SAP as a non-connectable 'Coming soon' tile", () => {
+  it("renders SAP as a disabled Connect tile without a Coming soon label", () => {
     renderTile(roadmapSap());
-    // Roadmap badge keeps the visual contract clean even when target metadata exists.
-    expect(screen.getByTestId("connector-roadmap-badge")).toHaveTextContent("Coming soon");
-    // The action button is labelled and disabled — never "Connect".
-    const btn = screen.getByRole("button", { name: /coming soon/i });
+    expect(screen.queryByTestId("connector-roadmap-badge")).not.toBeInTheDocument();
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Not configured")).toBeInTheDocument();
+    const btn = screen.getByRole("button", { name: /^connect$/i });
     expect(btn).toBeDisabled();
-    expect(screen.queryByRole("button", { name: /^connect$/i })).not.toBeInTheDocument();
   });
 
-  it("renders an unscheduled roadmap tile as 'Coming soon'", () => {
+  it("renders an unscheduled roadmap tile as disabled Connect", () => {
     renderTile(roadmapUnscheduled());
-    expect(screen.getByTestId("connector-roadmap-badge")).toHaveTextContent("Coming soon");
-    expect(screen.getByRole("button", { name: /coming soon/i })).toBeDisabled();
+    expect(screen.queryByTestId("connector-roadmap-badge")).not.toBeInTheDocument();
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Not configured")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^connect$/i })).toBeDisabled();
   });
 
   it("leaves a shipped connector connectable", () => {

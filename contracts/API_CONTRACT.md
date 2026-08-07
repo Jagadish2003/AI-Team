@@ -1,14 +1,14 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.26
+Version: v1.30
 Date: 2026-08-06
 
-> v1.26 — 2.0-C4 T5 (Deprecation Lifecycle Audit): all three deprecation transitions
+> v1.30 — 2.0-C4 T5 (Deprecation Lifecycle Audit): all three deprecation transitions
 > are audit events, and are readable as one trail. One new route and one new audit
 > event type; no existing response shape changes.
 >
 > **The gap this closes.** Migration (`pack_migration_applied` /
-> `pack_migration_reverted`, v1.24) and post-grace disable (`pack_deprecation_disabled`,
-> v1.25) already reached the audit log. **Deprecation itself did not** — a declaration
+> `pack_migration_reverted`, v1.28) and post-grace disable (`pack_deprecation_disabled`,
+> v1.29) already reached the audit log. **Deprecation itself did not** — a declaration
 > is a registry fact, and nothing recorded that a particular organisation had ever come
 > under it.
 >
@@ -41,7 +41,7 @@ Date: 2026-08-06
 > `entries` list: an audit surface reporting "nothing happened" when it could not read
 > would mislead a reviewer.
 
-> v1.25 — 2.0-C4 T4 (Deprecation Grace Behaviour): a pack whose announced grace
+> v1.29 — 2.0-C4 T4 (Deprecation Grace Behaviour): a pack whose announced grace
 > period has ended is moved to safe-disabled and dropped from future runs. Additive
 > only — one new `reason` value on an existing field; no new routes and no shape
 > change.
@@ -76,10 +76,10 @@ Date: 2026-08-06
 > historical is affected: runs, findings, and evidence produced while the pack was
 > supported are untouched and remain retrievable.
 
-> v1.24 — 2.0-C4 T3 (Pack Migration Assist): where a deprecated pack declares a
+> v1.28 — 2.0-C4 T3 (Pack Migration Assist): where a deprecated pack declares a
 > replacement, an org can migrate its saved run configuration onto it — previewed
 > first, applied only on confirmation, and reversible. Four entirely NEW routes; no
-> existing response shape changes, so a pre-v1.24 consumer is unaffected.
+> existing response shape changes, so a pre-v1.28 consumer is unaffected.
 >
 > **New routes** (all org-scoped from the authenticated context; a request body never
 > carries an org id):
@@ -138,11 +138,11 @@ Date: 2026-08-06
 > A migration only affects FUTURE runs. Historical runs, findings, and evidence keep
 > the pack they were produced with; nothing is rewritten and nothing is deleted.
 
-> v1.23 — 2.0-C4 T2 (Pack Deprecation Notice Surfacing): a pack that is being
+> v1.27 — 2.0-C4 T2 (Pack Deprecation Notice Surfacing): a pack that is being
 > superseded now carries a notice at run configuration, in run health, and on its
 > findings, with the date it stops being supported and what replaces it. All fields
 > are additive; no pack ships a deprecation today, so every shape below is absent or
-> null on current responses and a pre-v1.23 consumer is unaffected.
+> null on current responses and a pre-v1.27 consumer is unaffected.
 >
 > **A notice is present ONLY for a deprecated pack.** There is no "not deprecated"
 > object: the field is `null`/absent otherwise, so a consumer renders a notice or
@@ -183,7 +183,7 @@ Date: 2026-08-06
 > those fields implies another. A deprecated pack in grace runs normally, so a
 > consumer must not present it as an error or as unhealthy.
 
-> v1.22 — 2.0-C3 T6 (Sandbox Validation): installing a pack runs its manifest
+> v1.26 — 2.0-C3 T6 (Sandbox Validation): installing a pack runs its manifest
 > through validation and its fixtures through the harness, and **activation re-runs
 > both** against today's platform rather than trusting the install-time verdict.
 > Additive; no existing field changed meaning.
@@ -213,7 +213,7 @@ Date: 2026-08-06
 > pack that was installable last month can be refused today with specific reasons.
 > `active: false` runs no gates and is never blocked.
 
-> v1.21 — 2.0-C3 T4 (Pack Packaging & Installation): an authored ("partner") pack
+> v1.25 — 2.0-C3 T4 (Pack Packaging & Installation): an authored ("partner") pack
 > installs from a **signed bundle**, gated by C1 compatibility and C2 certification
 > policy. Entirely new routes; no existing response shape changed.
 >
@@ -230,7 +230,7 @@ Date: 2026-08-06
 > (`installed` | `active` | `inactive`), `active` (boolean), `manifestFingerprint`,
 > `bundleDigest`, `publisher`, `signingKeyId`, `certificationLevel` (always
 > `community` — see below), `certificationLabel`, `requestedCertificationLevel`,
-> `revision`, `installedBy`, `createdAt`, `updatedAt` (v1.22 adds `validation`
+> `revision`, `installedBy`, `createdAt`, `updatedAt` (v1.26 adds `validation`
 > and `fixtureCount`).
 >
 > **An authored pack is always `community`.** `requestedCertificationLevel` is what
@@ -251,7 +251,7 @@ Date: 2026-08-06
 > **Withdrawal is never a delete.** `active: false` writes `status: "inactive"`; the
 > record, its manifest, and its bundle provenance remain readable.
 
-> v1.20 — 2.0-C2 T5 (Certification Expiry): a certification now expires on TWO
+> v1.24 — 2.0-C2 T5 (Certification Expiry): a certification now expires on TWO
 > rules — the platform-version scope it was reviewed against, and the age of the
 > review itself. All fields are additive and optional.
 >
@@ -275,6 +275,141 @@ Date: 2026-08-06
 > Review-due reason values: `reviewed_against_older_platform`,
 > `review_date_older_than_interval`, `reviewed_against_platform_version_undeclared`,
 > `review_date_unreadable`.
+
+> v1.23 — PR-fix pass (run-health checkpoint streams + adjustment rank scope).
+> Two additive fields that shipped in code without a contract entry, recorded
+> here so a backend reader treating this file as the source of truth sees them.
+>
+> 1. `GET /api/run-health/connectors` — each connector item may carry
+> `checkpoint_streams` (`number | null`, optional): the number of per-stream
+> checkpoint rows the reported `checkpoint_age_seconds` represents, for a
+> connector that checkpoints per stream (`{connector_id}:{stream}`) rather than
+> under its bare id. Absent/null for a single-cursor connector. The reported age
+> is that of the NEWEST stream **that carries a timestamp** — streams with a null
+> `captured_at` (an optional ServiceNow table that is absent or unreadable) sort
+> last and never displace a real one, so a stalled connector cannot report a
+> null age and thereby suppress its own stall alert. Mirrors
+> `frontend/src/types/runHealth.ts` `ConnectorHealthItem`.
+>
+> 2. `_ranking` (opportunities, roadmap entries) and
+> `GET /api/learning/adjustment/explain/{runId}/{opportunityId}` now carry
+> `rankScope` (`string`): what `baseRank`/`adjustedRank` are relative to —
+> `"run"` for the run-scoped surfaces, which order one flat list, and
+> `"roadmap_stage"` for a roadmap entry, since the roadmap adjusts each stage
+> separately. The SAME finding therefore legitimately holds different `baseRank`
+> values across the two payloads; consumers must not compare ranks (or a
+> "moved N places" figure) across differing scopes. Additive; pre-v1.23
+> consumers are unaffected.
+>
+> Cross-org note (no shape change): the run-scoped learning-adjustment reads
+> (`/preview/{runId}`, `/explain/{runId}/{opportunityId}`, `/base-order/{runId}`)
+> now answer **404** for a run belonging to another org, matching the run-scoped
+> cloud-ops and graph routes. Previously they served it.
+
+> v1.22 — 2.0-B2 T5 (Cross-Source Entity Enrichment — unmerge & re-evaluation):
+> added authenticated Analyst+ endpoints that REVERSE a resolution:
+> `POST /api/entities/{entityId}/unmerge` (detach one constituent),
+> `POST /api/entities/{entityId}/unmerge-all` (split completely),
+> `GET /api/entity-unmerges[?status=&limit=]` (the org's unmerge log),
+> `POST /api/entity-unmerges/{unmergeId}/release` (**Owner only** — re-permit
+> automatic merging), and `GET /api/findings/reevaluation-flags[?status=&limit=]`.
+> An unmerge response reports what actually happened: `outcome`
+> (`unmerged` | `not_merged`), `survivorEntityId`, `detachedEntityId`, `unmergeId`,
+> `previousRule`, `restoredEntityIds[]` (includes any sub-merge that travelled with
+> the detached entity), `remainingConstituents`, `flaggedFindings`, and a
+> `dependencySweep` carrying `findingsExamined`, `dependentFindings`,
+> `unlinkedFindings`, `runsScanned` and `runsTruncated` — the bound is reported, never
+> silently applied. An entity that is not merged answers `not_merged` with HTTP 200
+> (a truthful answer, not an error); an unknown entity is a 404. Nothing is deleted by
+> a reversal: the restored row keeps its identity, edges and `resolution_status`, and
+> gains `metadata.unmerged_from`. **`POST /api/entity-merges/apply` gains a `blocked`
+> count and a `blocked` outcome value** — the only change to a previously documented
+> shape, and additive (existing counts and fields are unchanged): a pair that was
+> unmerged is refused rather than re-merged, with the reason naming the unmerge.
+> A `reevaluation-flags` entry carries `opportunityIdentity`, `status`
+> (`pending` | `cleared`), `reason`, `triggerKind`, `triggerRef`, `entityIds[]`,
+> `flaggedRunId`, `flaggedBy`, `flaggedAt`, and — once a later run has re-observed the
+> finding — `clearedRunId` and `clearedAt`. Organization-scoped: an entity or unmerge
+> id from another org returns 404, indistinguishable from an unknown id.
+
+> v1.21 — 2.0-B2 T2 (Cross-Source Entity Enrichment — merged-entity provenance):
+> added authenticated Analyst+ endpoints exposing what a merged entity is made of:
+> `GET /api/entities/{entityId}/provenance` (one entity),
+> `POST /api/entities/provenance` (many, bounded at 200 ids — the finding-view
+> seam), and `POST /api/entity-merges/apply` (apply the merges T1's auto-merge
+> tiers and T3's confirmed proposals authorised). A provenance body carries
+> `constituents[]` — EVERY constituent source identity including the survivor's own
+> (`is_origin: true`) — plus the `rule` that merged each one
+> (`explicit_reference` | `alias_mapping` | `confirmed_proposal`), `rules[]`,
+> `source_systems[]`, `constituent_count`, and `is_merged`. An entity that was
+> never merged answers with its single own identity and `is_merged: false` (not a
+> 404 — "not merged" and "not found" are different). The same block is stored on
+> `entities.metadata.merge_provenance`, so it also travels with
+> `GET /api/runs/{runId}/entities` — no separate call is required for a surface
+> that already reads entities. Merging never deletes a row or changes
+> `resolution_status`; the merged-away entity keeps its identity and edges and
+> gains a `metadata.merged_into` pointer. Apply is idempotent
+> (`merged` / `already_merged` / `skipped` counts). Organization-scoped: an entity
+> in another org returns 404, indistinguishable from an unknown id. Additive — no
+> previously documented shape changed.
+
+> v1.20 — 2.0-B2 T3 (Cross-Source Entity Enrichment — confirmation review):
+> added authenticated Analyst+ endpoints for the PROPOSED cross-source entity
+> matches the resolution engine refuses to merge on its own:
+> `GET /api/entity-match-proposals[?status=&limit=]`,
+> `GET /api/entity-match-proposals/{proposalId}`,
+> `POST /api/entity-match-proposals/{proposalId}/decision`, and
+> `POST /api/entity-match-proposals/scan`. Only propose-only tiers appear — a pair
+> resolved by an explicit cross-reference or the org alias table auto-merges and is
+> never queued. `action` is one of `confirm | reject`; `changed=false` means the
+> same decision was already current and no history row was added. A decision is
+> RECORDED, not applied: nothing in these endpoints merges the graph. Answered
+> pairs are never re-proposed — a re-scan reports them as
+> `skipped_already_decided` rather than reopening them. Organization-scoped: a
+> proposal id from another org returns 404, indistinguishable from an unknown id.
+> Additive; existing consumers are unaffected.
+> v1.19 - 2.0-A3 T3 (Adjustment explainability): a rank-adjusted opportunity's
+> `_ranking` object now carries `reason` — STRUCTURED data (direction,
+> ranksMoved, decisionCount, decisionsByAction, outcomeCount,
+> outcomesByVerdict, wasCapped, cappedBy, evidenceStrength) plus
+> `contributingDecisions` and `contributingOutcomes`, each with a resolvable
+> `href`, and a rendered `summary` sentence. A finding that did not move
+> carries no `reason`. New route GET /api/learning/adjustment/explain/
+> {runId}/{opportunityId} (analyst+; 404 for an unadjusted finding). The
+> reason is namespaced under `_ranking` and never appears inside or beside
+> confidence, corroboration or the evidence trace. Additive; pre-v1.19
+> consumers are unaffected.
+>
+> v1.18 - 2.0-A3 T2 (Bounded ranking adjustment): opportunities returned by
+> GET /api/runs/{runId}/opportunities and the roadmap stages now carry an
+> additive `_ranking` object: `baseRank`, `baseImpact`, `adjustedRank`,
+> `moved`, `adjusted`, and the `caps` in force; when a learned adjustment
+> applied it also carries `effectiveImpact`, `appliedDelta`, `requestedDelta`,
+> `wasCapped` and `cappedBy`. Base scoring is unchanged — `impact`, `effort`,
+> `tier`, `confidence`, evidence and corroboration are untouched, and the
+> stored order remains the base order. New read routes under
+> /api/learning/adjustment (state, history, recompute, preview, base-order).
+> Additive; pre-v1.18 consumers are unaffected.
+>
+> v1.17 - 2.0-A2 T7 (No outcome without action): outcome measurement writes
+> now require a current customer-recorded action on the opportunity lifecycle.
+> Reopened opportunities clear that action and invalidate dependent stored
+> movement rows; outcome read surfaces suppress invalidated/stale movements
+> rather than exposing them as customer-visible outcomes. No frontend type shape
+> changed.
+
+> v1.16 - 2.0-A2 T6 (Outcome surfaces): added org-scoped, cross-run outcome
+> surfaces `GET /api/outcomes` and `GET /api/outcomes/{opportunityIdentity}`
+> (Analyst+), keyed by `opportunity_identity` rather than a single run. Responses
+> are assembled from stored lifecycle and movement artifacts only, include
+> `numberRefs[]` so displayed numbers resolve to evidence plus baseline/current
+> run ids, and portfolio aggregates require `caveatedMeasurementCount`.
+> `GET /api/runs/{runId}/executive-report` now includes `outcomeSection`, built
+> from stored movement rows for that run and persisted during materialization.
+> Frontend schemas changed in `frontend/src/types/outcome.ts`,
+> `frontend/src/types/executiveReport.ts`, and
+> `frontend/src/types/analystReview.ts`; this version requires FE and BE lead
+> sign-off before merge.
 
 > v1.19 — 2.0-C2 T4 (Pack Certification Policy Control): an org can restrict which
 > certification levels may be activated, Owner-controlled and enforced at activation.
@@ -433,6 +568,27 @@ Date: 2026-08-06
 >   now return **409** when a selected pack declares an unmet platform-capability
 >   range (AT-826, the detail names the unmet requirement) or when EVERY selected
 >   pack is disabled (AT-827).
+> v1.25 - Run Health last-ingestion timestamp honesty.
+> `GET /api/run-health/connectors` keeps the same
+> `last_successful_ingestion` (`string | null`, optional) field, but the value
+> is now timestamp-only: telemetry timestamps, the connector metrics overlay's
+> `lastSuccessfulIngestionAt`, or a historical completed/partial run status whose
+> `perSystem`/`succeeded` data proves that connector ingested successfully. Human
+> display labels from connector `lastSynced` such as `"Just now"` are ignored
+> unless they are parseable timestamps, so the dashboard cannot show a stale
+> "Just now" after OAuth/configuration only. When no concrete checkpoint row
+> exists but such a successful ingestion timestamp exists, `checkpoint_age_seconds`
+> is derived from that timestamp while `checkpoint_position` and
+> `checkpoint_captured_at` remain null; this gives the UI a freshness age without
+> inventing a resettable cursor. No schema change.
+
+> v1.24 - PR-fix pass (capped zero-displacement ranking adjustments).
+> `_ranking.adjusted` means the learned ranking layer applied to that finding,
+> even when `moved` is `0` because a configured cap kept the final position in
+> place. Such capped records may carry `reason`, and
+> `GET /api/learning/adjustment/explain/{runId}/{opportunityId}` explains them
+> instead of treating them as unadjusted. A finding with no learned adjustment
+> still carries no `reason`. Additive; existing `moved` semantics are unchanged.
 
 > v1.15 — MSP-B13 (Cloud Connector Onboarding): added the multi-scope cloud
 > connector routes for `aws_events` / `azure_events` (T3 / AT-745 — create with
@@ -903,6 +1059,262 @@ Requires: authenticated Analyst or Owner. Each item includes `revision`,
 `action`, `previous_action`, `previous_state`, `resulting_state`, `actor_id`, and
 `decided_at`.
 
+#### GET /api/entity-match-proposals
+Purpose: the organization's review queue of PROPOSED cross-source entity matches
+(2.0-B2 T3). Only propose-only tiers appear here: a pair resolved by an explicit
+cross-reference or by the org alias table auto-merges and is never queued.
+Requires: authenticated Analyst or Owner. The organization comes only from the
+authenticated request.
+
+Query: `status` (optional — `pending | confirmed | rejected`; an unrecognised
+value is a 400), `limit` (optional, 1–1000, default 200).
+
+Response:
+```json
+{
+  "proposals": [
+    {
+      "org_id": "org_001",
+      "proposal_id": "emp_9f2c…",
+      "entity_type": "system",
+      "left_entity_id": "e1",
+      "right_entity_id": "e2",
+      "tier": "name_similarity",
+      "confidence": 0.7,
+      "status": "pending",
+      "evidence": {
+        "subject": {
+          "entity_id": "e1", "display_name": "Billing",
+          "canonical_name": "billing", "entity_type": "system",
+          "source_system": "servicenow", "source_record_id": "sn-2"
+        },
+        "target": {
+          "entity_id": "e2", "display_name": "billing",
+          "canonical_name": "billing", "entity_type": "system",
+          "source_system": "git", "source_record_id": "repo-1"
+        },
+        "tier": "name_similarity",
+        "confidence": 0.7,
+        "reason": "exact normalised name match across sources with a corroborating observed relationship",
+        "corroborating_relationships": [
+          { "relationship_type": "depends_on", "entity_id": "e9" }
+        ]
+      },
+      "revision": 0,
+      "decided_by": null,
+      "decided_at": null,
+      "note": null,
+      "first_proposed_at": "2026-08-03T10:00:00+00:00",
+      "last_proposed_at": "2026-08-03T10:00:00+00:00"
+    }
+  ],
+  "counts": { "pending": 1, "confirmed": 0, "rejected": 0 },
+  "status": "pending"
+}
+```
+
+`counts` always carries all three statuses (zero-filled).
+
+#### GET /api/entity-match-proposals/{proposalId}
+Purpose: one proposal plus its append-only decision history, newest first.
+Requires: authenticated Analyst or Owner. A proposal id belonging to another
+organization returns 404 — indistinguishable from an unknown id.
+
+Response: `{ "proposal": <as above>, "history": [ { "revision", "action",
+"previous_status", "resulting_status", "actor_id", "note", "decided_at" } ] }`
+
+#### POST /api/entity-match-proposals/{proposalId}/decision
+Purpose: confirm or reject one proposed match.
+Requires: authenticated Analyst or Owner.
+
+Request:
+```json
+{ "action": "confirm", "note": "same service, different system of record" }
+```
+
+`action` is one of `confirm | reject` (there is no `defer` — a proposal nobody
+has answered is already `pending`). `changed=false` means the same decision was
+already current and no history row was added. Reversing a decision is allowed and
+APPENDS a new forward row; history is never rewritten.
+
+**A decision is recorded, not applied.** Confirming records a durable,
+attributable statement that two entities are the same thing and stops the pair
+being re-proposed; it does not merge the graph. Applying a confirmed identity
+with its provenance is a separate step.
+
+Response: `{ "proposal", "action", "previous_status", "resulting_status",
+"revision", "changed", "actor_id", "decided_at" }`
+
+#### POST /api/entity-match-proposals/scan
+Purpose: recompute the organization's proposals from the ranked resolution
+engine. Writes nothing to the graph.
+Requires: authenticated Analyst or Owner.
+
+Response:
+```json
+{ "created": 1, "refreshed": 0, "skipped_already_decided": 2,
+  "entity_types": ["system", "team", "project", "object"] }
+```
+
+`skipped_already_decided` counts pairs the engine proposed again that a human has
+already answered — reported rather than hidden, since those never reopen.
+
+#### GET /api/entities/{entityId}/provenance
+Purpose: what a merged entity is made of — every constituent source identity and
+the rule that merged each (2.0-B2 T2 / AC2).
+Requires: authenticated Analyst or Owner. An entity in another organization
+returns 404, indistinguishable from an unknown id.
+
+Response:
+```json
+{
+  "version": 1,
+  "entity_id": "e1",
+  "constituents": [
+    { "entity_id": "e1", "source_system": "servicenow", "source_record_id": "sn-1",
+      "display_name": "Payments Platform", "canonical_name": "payments platform",
+      "rule": null, "confidence": null, "merged_at": null, "merged_by": null,
+      "evidence": {}, "is_origin": true },
+    { "entity_id": "e2", "source_system": "jira", "source_record_id": "PAY",
+      "display_name": "Payments", "canonical_name": "payments",
+      "rule": "explicit_reference", "confidence": 1.0,
+      "merged_at": "2026-08-03T10:00:00+00:00", "merged_by": "system",
+      "evidence": { "tier": "explicit_reference" }, "is_origin": false }
+  ],
+  "rules": ["explicit_reference"],
+  "source_systems": ["jira", "servicenow"],
+  "constituent_count": 2,
+  "is_merged": true,
+  "last_merged_at": "2026-08-03T10:00:00+00:00"
+}
+```
+
+The survivor's OWN identity is always present as `is_origin: true`, so
+`source_systems` is the complete set of systems the entity speaks for. `rule` is
+`null` on the origin (it was not merged in) and names the rule on every other
+constituent. An entity that was never merged returns its single own identity with
+`is_merged: false` — "not merged" and "not found" are different answers.
+
+The same block is stored on `entities.metadata.merge_provenance`, so it also
+travels with `GET /api/runs/{runId}/entities`.
+
+#### POST /api/entities/provenance
+Purpose: the same, for many entities in one round trip — a finding view resolving
+provenance for every entity it traverses must not issue one request per node.
+Requires: authenticated Analyst or Owner.
+
+Request: `{ "entity_ids": ["e1", "e2"] }` — at most 200 ids (400 beyond that).
+Response: `{ "provenance": { "<entityId>": <as above> }, "requested": 2,
+"resolved": 2 }`. An unknown id is simply absent from the map.
+
+#### POST /api/entity-merges/apply
+Purpose: apply the merges already authorised — T1's auto-merge tiers (explicit
+cross-reference, org alias table) and, unless `include_confirmed` is false, the
+pairs a human confirmed in the Entity Matches review surface.
+Requires: authenticated Analyst or Owner.
+
+Request: `{ "entity_types": ["system"], "include_confirmed": true }` (both
+optional).
+Response: `{ "merged": 1, "already_merged": 0, "skipped": 0, "blocked": 0,
+"outcomes": [...] }`
+
+`blocked` (v1.18) counts pairs refused because they were UNMERGED — distinct from
+`skipped` ("this applier had no authority here") on purpose, so a reversal being
+honoured never looks like a merge that merely did not apply.
+
+Idempotent: a pair already merged is reported as `already_merged` and is not
+written again. A name-similarity proposal is never merged by this route — only a
+confirmed one is, and it is credited to the `confirmed_proposal` rule rather than
+to the tier that proposed it. Every applied merge emits an audit event.
+
+#### POST /api/entities/{entityId}/unmerge
+Purpose: reverse a resolution — detach this entity from the one it was merged into,
+restore it as an independent entity, and flag every dependent finding for
+re-evaluation on the next run.
+Requires: authenticated Analyst or Owner.
+
+Request (both optional): `{ "reason": "different services", "max_runs": 25 }`
+Response:
+```json
+{
+  "outcome": "unmerged",
+  "survivorEntityId": "e1",
+  "detachedEntityId": "e2",
+  "unmergeId": "unm_...",
+  "previousRule": "explicit_reference",
+  "restoredEntityIds": ["e2"],
+  "remainingConstituents": 0,
+  "flaggedFindings": 1,
+  "reason": "detached from e1",
+  "dependencySweep": {
+    "identities": ["<opportunityIdentity>"],
+    "findingsExamined": 12,
+    "dependentFindings": 1,
+    "unlinkedFindings": 3,
+    "runsScanned": 25,
+    "runsTruncated": 0
+  }
+}
+```
+
+Nothing is deleted: the restored row keeps its identity, its edges and its
+`resolution_status`, and gains `metadata.unmerged_from` (history — resolution follows
+`metadata.merged_into` only). A chain of merges comes apart at the reversed joint
+only, so a sub-merge the detached entity itself contains travels with it and appears
+in `restoredEntityIds`.
+
+`unlinkedFindings` counts findings that carry no entity references and therefore
+cannot be shown to depend on the merge — they are neither flagged nor hidden.
+`runsTruncated` reports findings the bounded sweep did not read.
+
+An entity that is not merged returns HTTP 200 with `outcome: "not_merged"`. An
+unknown entity returns 404. Every unmerge emits an audit event.
+
+#### POST /api/entities/{entityId}/unmerge-all
+Purpose: split a merged entity completely — one reversal per constituent, each with
+its own block and audit event.
+Requires: authenticated Analyst or Owner.
+
+Response: `{ "survivorEntityId": "e1", "detached": 2, "outcomes": [ <as above> ] }`
+
+#### GET /api/entity-unmerges
+Purpose: the org's unmerges, newest first — one entry per action, and the answer to
+"why did this pair stop merging?".
+Requires: authenticated Analyst or Owner.
+
+Query: `status` (`blocked` | `released`, omit for both), `limit` (default 100).
+Response: `{ "unmerges": [ { "unmergeId", "pairKey", "pairKeyKind", "status",
+"survivorEntityId", "detachedEntityId", "entityType", "previousRule",
+"restoredEntityIds", "flaggedFindingCount", "unlinkedFindingCount", "reason",
+"actorId", "createdAt", "releasedBy", "releasedAt", "releaseReason" } ], "count": 1 }`
+
+#### POST /api/entity-unmerges/{unmergeId}/release
+Purpose: allow a previously-unmerged pair to be merged again.
+Requires: authenticated **Owner** — this is the one action that re-permits AUTOMATIC
+merging of a pair a person deliberately separated.
+
+Request (optional): `{ "reason": "confirmed with the team" }`
+Response: `{ "unmergeId": "unm_...", "releasedKeys": 2, "status": "released" }`
+
+Does not itself merge anything — it removes the refusal. Nothing is deleted: the row
+keeps its unmerge record and gains who released it and why. An unknown or
+already-released id returns 404 (never 403, which would confirm the id exists).
+
+#### GET /api/findings/reevaluation-flags
+Purpose: findings awaiting re-evaluation because an entity they were built on
+changed identity.
+Requires: authenticated Analyst or Owner.
+
+Query: `status` (`pending` (default) | `cleared` | `all`), `limit` (default 200).
+Response: `{ "flags": [ { "opportunityIdentity", "status", "reason", "triggerKind",
+"triggerRef", "entityIds", "flaggedRunId", "flaggedBy", "flaggedAt", "updatedAt",
+"clearedRunId", "clearedAt" } ], "count": 1, "pending": 1 }`
+
+Keyed on the stable `opportunityIdentity`, so a flag survives to the run that
+re-evaluates it. A flag is cleared by the run that re-observed the finding and names
+it in `clearedRunId` — a finding that stops appearing keeps its flag rather than being
+treated as handled.
+
 ---
 
 ### F2) LLM Enrichment + Temporal/Entity Context (Screens 4 & 6)
@@ -1012,21 +1424,186 @@ Response: `PilotRoadmapModel` (`src/types/pilotRoadmap.ts`)
 
 ---
 
-### H) Executive Report Stub (Screen 10)
+### H) Executive Report (Screen 10)
 
 #### GET /api/runs/{runId}/executive-report
-Response (v1 stub shape):
+Response:
 ```json
 {
   "confidence": "High",
-  "sourcesAnalyzed": { "recommendedConnected": 2, "totalConnected": 5 },
+  "sourcesAnalyzed": {
+    "recommendedConnected": 2,
+    "totalConnected": 5,
+    "uploadedFiles": 0,
+    "sampleWorkspaceEnabled": false
+  },
   "topQuickWins": [],
   "snapshotBubbles": [{ "x": 90, "y": 55, "r": 18 }],
-  "roadmapHighlights": { "next30Count": 3, "next60Count": 2, "next90Count": 1, "blockerCount": 4 }
+  "roadmapHighlights": {
+    "next30Count": 3,
+    "next60Count": 2,
+    "next90Count": 1,
+    "blockerCount": 4
+  },
+  "aiExecutiveSummary": "",
+  "outcomeSection": {
+    "schemaVersion": "1.0.0",
+    "runId": "run_123",
+    "generatedFrom": "stored_movement_records",
+    "summary": "Stored movement measurements are compared against baseline following recorded actions.",
+    "aggregates": {
+      "actionedOpportunityCount": 2,
+      "measuredOpportunityCount": 2,
+      "measurementCount": 2,
+      "caveatedMeasurementCount": 1,
+      "materialCaveatMeasurementCount": 0,
+      "byDirection": { "improved": 1, "worsened": 1 },
+      "byComparability": { "comparable": 1, "weakly_comparable": 1 },
+      "byProjectionValidation": { "within_band": 1, "too_early": 1 },
+      "numberRefs": []
+    },
+    "highlights": [],
+    "numberRefs": []
+  }
 }
 ```
 
 ---
+
+### I) Outcomes (2.0-A2 T6)
+
+Outcome data is cross-run because each movement compares a frozen baseline run
+with a current run. These routes are org-scoped and keyed by
+`opportunity_identity`; they do not use a latest-run fallback and do not
+recompute measurements on read. Requires authentication and Analyst role.
+Unactioned and reopened opportunities are not outcome resources: the per-
+opportunity outcome route returns 404 when the lifecycle has no current recorded
+action, and portfolio/report aggregates exclude any movement rows invalidated by
+action reversal.
+
+#### GET /api/outcomes
+
+Query filters:
+`comparabilityVerdict[]`, `projectionVerdict[]`, `pack[]`, `detector[]`,
+`confidence[]`, `limit`.
+
+Response: `OutcomePortfolioView` (`frontend/src/types/outcome.ts`)
+```json
+{
+  "schemaVersion": "1.0.0",
+  "orgId": "org_123",
+  "filters": {
+    "comparabilityVerdict": [],
+    "projectionVerdict": [],
+    "pack": [],
+    "detector": [],
+    "confidence": []
+  },
+  "aggregates": {
+    "actionedOpportunityCount": 4,
+    "measuredOpportunityCount": 3,
+    "measurementCount": 5,
+    "caveatedMeasurementCount": 2,
+    "materialCaveatMeasurementCount": 1,
+    "byDirection": { "improved": 3, "worsened": 1, "unchanged": 1 },
+    "byComparability": { "comparable": 3, "weakly_comparable": 2 },
+    "byProjectionValidation": { "within_band": 2, "above_band": 1, "too_early": 2 },
+    "numberRefs": [
+      {
+        "id": "aggregate:caveatedMeasurementCount",
+        "label": "Measurements carrying caveats",
+        "value": 2,
+        "unit": "count",
+        "evidence": {
+          "measurementCount": 2,
+          "runIds": ["run_baseline", "run_current"],
+          "runPairs": [
+            {
+              "opportunityIdentity": "opp_stable_identity",
+              "baselineRunId": "run_baseline",
+              "currentRunId": "run_current"
+            }
+          ],
+          "lifecycles": [
+            {
+              "opportunityIdentity": "opp_stable_identity",
+              "state": "measured",
+              "actionDate": "2026-06-15",
+              "lastRunId": "run_current"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "count": 4,
+  "items": []
+}
+```
+
+`caveatedMeasurementCount` is required on every aggregate response and is
+computed at aggregation time. A missing field is a schema violation.
+
+#### GET /api/outcomes/{opportunityIdentity}
+
+Response: `OpportunityOutcomeView` (`frontend/src/types/outcome.ts`)
+```json
+{
+  "schemaVersion": "1.0.0",
+  "orgId": "org_123",
+  "opportunityIdentity": "opp_stable_identity",
+  "lifecycle": { "state": "measured", "actionDate": "2026-06-15" },
+  "measurementCount": 1,
+  "caveatedMeasurementCount": 0,
+  "latestMeasurement": {
+    "opportunityIdentity": "opp_stable_identity",
+    "detectorId": "HANDOFF_FRICTION",
+    "actionDate": "2026-06-15",
+    "measuredAt": "2026-07-31T00:00:00+00:00",
+    "baselineRunId": "run_baseline",
+    "currentRunId": "run_current",
+    "primaryMovement": {
+      "signalName": "owner_changes_90d",
+      "baselineValue": 240,
+      "currentValue": 150,
+      "delta": -90,
+      "deltaPct": -37.5,
+      "direction": "improved"
+    },
+    "comparability": { "verdict": "comparable", "reasons": [] },
+    "projectionValidation": { "verdict": "within_band" },
+    "confounderSummary": { "count": 0, "materialCount": 0 },
+    "confounders": [],
+    "numberRefs": [
+      {
+        "id": "opp_stable_identity:run_current:owner_changes_90d:delta",
+        "label": "Movement against baseline",
+        "value": -90,
+        "unit": null,
+        "signalName": "owner_changes_90d",
+        "field": "delta",
+        "evidence": {
+          "opportunityIdentity": "opp_stable_identity",
+          "signalName": "owner_changes_90d",
+          "baselineRunId": "run_baseline",
+          "currentRunId": "run_current",
+          "postActionRunIds": ["run_current"],
+          "baseline": { "runId": "run_baseline", "value": 240, "window": {} },
+          "current": { "runId": "run_current", "value": 150, "window": {} },
+          "confounderSummary": { "count": 0, "materialCount": 0 }
+        }
+      }
+    ]
+  },
+  "measurements": [],
+  "numberRefs": [],
+  "emptyState": null
+}
+```
+
+Outcome vocabulary across API, UI, report and export must be
+movement-and-comparison shaped. The contract forbids outcome text that claims
+causation, credit or financial return.
 
 ## DoD (Contract Freeze)
 - Every `src/data/mock*.json` file is listed in `mock_to_endpoint_map.json` and mapped to an endpoint above.

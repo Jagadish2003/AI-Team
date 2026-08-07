@@ -157,6 +157,19 @@ class OppEnrichment(BaseModel):
     # until all three gates pass.
     preliminary:              bool = True
     preliminary_reason:       Optional[str] = None
+    # 2.0-A1 T1 — intervention projection. Read from the STORED opportunity (the
+    # run pipeline computes and persists it), never recomputed here, so the
+    # projection an analyst reads is byte-identical to the one 2.0-A2 will later
+    # compare a measured outcome against.
+    #
+    # Defaults to None — absence is semantically distinct from an empty
+    # projection, and the UI branches on it: None -> omit the panel (the
+    # detector has no signal profile, or the finding carries too few measured
+    # instances to project); present -> render direction + band + horizon.
+    # Deliberately a free-form dict rather than a nested model: the projection is
+    # produced whole by discovery/projection and stored as-is, so declaring its
+    # shape twice would just create a drift surface.
+    projection:               Optional[Dict[str, Any]] = None
 
 
 class RunEnrichment(BaseModel):
@@ -379,6 +392,25 @@ def _corroboration_fields(opp: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _projection_field(
+    opp: Optional[Dict[str, Any]],
+    run_id: Optional[str] = None,
+    org_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Extract the 2.0-A1 stored projection from a stored opportunity record.
+
+    Returns None when the opportunity is missing, predates projections, or was
+    not projectable — absence is meaningful and the UI branches on it. Never
+    recomputes: a served projection must be the stored one.
+    """
+    if run_id:
+        from .projection_store import projection_for_opportunity
+
+        return projection_for_opportunity(opp, run_id, org_id=org_id)
+    projection = (opp or {}).get("projection")
+    return dict(projection) if isinstance(projection, dict) else None
+
+
 def _full_fallback(
     opp_id: str,
     ai_rationale: str,
@@ -387,6 +419,7 @@ def _full_fallback(
     relationships: Optional[List[RelationshipSummary]] = None,
     corroboration: Optional[Dict[str, Any]] = None,
     causal_hypothesis: Optional[CausalHypothesisSummary] = None,
+    projection: Optional[Dict[str, Any]] = None,
 ) -> OppEnrichment:
     """
     Fix 6: Return the full OppEnrichment shape on fallback.
@@ -420,6 +453,7 @@ def _full_fallback(
         corroboration_label=corr["corroboration_label"],
         triple_corroboration=corr["triple_corroboration"],
         corroboration_rule_ids=corr["corroboration_rule_ids"],
+        projection=projection,
     )
 
 
@@ -666,6 +700,15 @@ def register_sprint4_t6_routes(app) -> None:
         stored_opp = next((o for o in stored_opps if o.get("id") == opp_id), None)
         stored_opp = apply_run_terminology(stored_opp, run_id)
         corroboration = _corroboration_fields(stored_opp)
+        # 2.0-A1 T1: the intervention projection also lives on the stored
+        # opportunity (written by the run pipeline). Served as stored.
+        try:
+            from app.middleware.tenancy import get_current_org_id_optional
+
+            projection_org_id = get_current_org_id_optional()
+        except Exception:
+            projection_org_id = None
+        projection = _projection_field(stored_opp, run_id, projection_org_id)
 
         relationship_summaries = _load_relationship_summaries(run_id, stored_opp)
 
@@ -692,6 +735,7 @@ def register_sprint4_t6_routes(app) -> None:
                 relationship_summaries,
                 corroboration,
                 causal_hypothesis,
+                projection,
             )
 
         per_opp  = enrichment.get("perOpportunity", {})
@@ -756,6 +800,8 @@ def register_sprint4_t6_routes(app) -> None:
             hallucination_llm_rewrites=opp_data.get("hallucination_llm_rewrites", 0),
             preliminary=opp_data.get("preliminary", True),
             preliminary_reason=opp_data.get("preliminary_reason"),
+            # 2.0-A1 T1 — intervention projection, from the stored opportunity.
+            projection=projection,
         )
 
     @app.get(

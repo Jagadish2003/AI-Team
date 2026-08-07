@@ -200,6 +200,95 @@ def test_connectors_reports_connected_system_with_checkpoint(client):
         assert key in sn
 
 
+def test_connector_checkpoint_age_falls_back_to_newest_per_stream_checkpoint(client):
+    """A connector that checkpoints PER STREAM still reports a checkpoint age.
+
+    ServiceNow keeps one row per table it reads (``servicenow:cmdb_ci``,
+    ``servicenow:sn_si_incident``, …) and nothing under the bare ``servicenow`` id,
+    so looking up only the bare id reported "Not available" for a connector that was
+    checkpointing normally. The reported age is that of the NEWEST stream, because
+    the panel answers "is this source still advancing".
+    """
+    org = _owner_org("rh_streams")
+    # Deliberately seeded oldest-first so the assertion cannot pass by luck of order.
+    _seed_checkpoint(org, "servicenow:cmdb_ci", "2026-07-01 00:00:00", _now_iso(-86400))
+    _seed_checkpoint(org, "servicenow:sn_si_incident", "2026-07-02 00:00:00", _now_iso(-1800))
+
+    resp = client.get("/api/run-health/connectors", headers=_auth(org))
+    assert resp.status_code == 200
+    sn = next((c for c in resp.json()["connectors"] if c["connector_id"] == "servicenow"), None)
+    assert sn is not None
+
+    # The NEWEST stream (30 min) wins, not the oldest (24 h).
+    assert sn["checkpoint_age_seconds"] is not None
+    assert sn["checkpoint_age_seconds"] < 3600
+    assert sn["checkpoint_position"] == "2026-07-02 00:00:00"
+    # The age is labelled as standing for several streams, not a single cursor.
+    assert sn["checkpoint_streams"] == 2
+
+
+def test_tied_per_stream_checkpoints_resolve_deterministically(client):
+    """Streams sharing a captured_at must not report a different one call to call.
+
+    ServiceNow's six streams routinely advance in the same run and are written from
+    one timestamp, so ties are the normal case rather than a corner. With a bare
+    ``ORDER BY captured_at DESC`` the winning row was arbitrary, so the reported
+    ``checkpoint_position``/stream could flip between two reads of identical data.
+    The age was never wrong (tied rows share a timestamp) — the reported stream was.
+    """
+    org = _owner_org("rh_tie")
+    tied = _now_iso(-600)
+    for stream in ("servicenow:sn_si_incident", "servicenow:cmdb_ci", "servicenow:cmdb_rel_ci"):
+        _seed_checkpoint(org, stream, f"pos-{stream.split(':')[1]}", tied)
+
+    seen = set()
+    for _ in range(4):
+        resp = client.get("/api/run-health/connectors", headers=_auth(org))
+        assert resp.status_code == 200
+        sn = next(c for c in resp.json()["connectors"] if c["connector_id"] == "servicenow")
+        assert sn["checkpoint_streams"] == 3
+        seen.add(sn["checkpoint_position"])
+
+    assert len(seen) == 1, f"tie resolved inconsistently across reads: {seen}"
+    # Lowest connector_id wins the tie, so the choice is stated rather than emergent.
+    assert seen == {"pos-cmdb_ci"}
+
+
+def test_bare_connector_checkpoint_wins_over_per_stream_rows(client):
+    """A bare-id checkpoint is authoritative; the per-stream scan is only a fallback."""
+    org = _owner_org("rh_bare_wins")
+    _seed_checkpoint(org, "servicenow", "cursor-bare", _now_iso(-7200))
+    _seed_checkpoint(org, "servicenow:cmdb_ci", "cursor-stream", _now_iso(-60))
+
+    resp = client.get("/api/run-health/connectors", headers=_auth(org))
+    sn = next(c for c in resp.json()["connectors"] if c["connector_id"] == "servicenow")
+    assert sn["checkpoint_position"] == "cursor-bare"
+    # No stream count: this age came from the connector's own single cursor.
+    assert sn["checkpoint_streams"] is None
+
+
+def test_per_stream_scan_does_not_match_a_different_connector(client):
+    """The prefix match is exact — '_' in a connector id is not a wildcard.
+
+    Connector ids contain underscores (``aws_events``, ``ops_event_bridge``), which
+    are LIKE single-character wildcards, so a LIKE-based scan could attribute one
+    connector's streams to another.
+    """
+    org = _owner_org("rh_prefix")
+    _seed_checkpoint(org, "aws_events:us-east-1", "pos-aws", _now_iso(-120))
+
+    resp = client.get("/api/run-health/connectors", headers=_auth(org))
+    by_id = {c["connector_id"]: c for c in resp.json()["connectors"]}
+
+    # aws_events picks up its own stream…
+    if "aws_events" in by_id:
+        assert by_id["aws_events"]["checkpoint_age_seconds"] is not None
+    # …and no other connector borrows it.
+    for cid, entry in by_id.items():
+        if cid != "aws_events":
+            assert entry["checkpoint_position"] != "pos-aws"
+
+
 # ── AC2: runs — non-blocking failure shown as degraded ──────────────────────────
 
 def test_degraded_run_shows_stage_and_reason(client):

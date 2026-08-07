@@ -77,6 +77,11 @@ ORG = "acme"
 OTHER_ORG = "globex"
 ACTOR = "owner-1"
 PRIOR = "1.1.0"
+#: The version the registry ships TODAY. Derived, not hardcoded: `dev` bumped
+#: cloud_ops 1.2.0 -> 1.2.1 and every literal here broke. The pack's external
+#: config JSON still declares 1.2.0, so the assertions about THAT file are
+#: deliberately left as literals — they are not the same fact.
+CURRENT = get_pack_version("cloud_ops")
 
 
 @pytest.fixture(autouse=True)
@@ -232,7 +237,7 @@ class TestRollbackTransition:
     def test_the_registry_is_not_modified(self):
         rollback_pack_version(ORG, "cloud_ops", PRIOR, actor_id=ACTOR)
         # A rollback is per-org configuration, not a global downgrade.
-        assert get_pack_version("cloud_ops") == "1.2.0"
+        assert get_pack_version("cloud_ops") == CURRENT
         assert len(get_pack("cloud_ops")["detectors"]) == 6
         assert "pinnedVersion" not in get_pack("cloud_ops")
 
@@ -286,7 +291,7 @@ class TestRollbackTargetValidation:
         message = str(excinfo.value)
         assert "9.9.9" in message
         assert PRIOR in message
-        assert "1.2.0" in message  # the current version, for orientation
+        assert CURRENT in message  # the current version, for orientation
 
     def test_a_code_only_pack_cannot_be_rolled_back(self):
         with pytest.raises(PackVersionUnavailable) as excinfo:
@@ -350,7 +355,7 @@ class TestResolutionUsesThePriorVersion:
         decision = resolve_activatable_packs(org_id=ORG, pack_ids=["cloud_ops"])
         assert decision.pinned_versions == {}
         assert decision.pinned_config_paths == {}
-        assert decision.effective_version("cloud_ops") == "1.2.0"
+        assert decision.effective_version("cloud_ops") == CURRENT
 
     def test_activation_emits_the_pin_as_telemetry(self, no_telemetry_db):
         rollback_pack_version(ORG, "cloud_ops", PRIOR, actor_id=ACTOR)
@@ -551,7 +556,7 @@ class TestFailSoftReads:
         assert pinned_pack_versions_safe(ORG) == {}
         decision = resolve_activatable_packs(org_id=ORG, pack_ids=["cloud_ops"])
         assert decision.pinned_versions == {}
-        assert decision.effective_version("cloud_ops") == "1.2.0"
+        assert decision.effective_version("cloud_ops") == CURRENT
 
     def test_no_org_reads_as_no_pins(self):
         assert pinned_pack_versions_safe(None) == {}
@@ -570,7 +575,7 @@ class TestFailSoftReads:
         )
         # The pack still runs — but at the CURRENT version, stamped consistently.
         assert decision.pinned_versions == {}
-        assert decision.effective_version("cloud_ops") == "1.2.0"
+        assert decision.effective_version("cloud_ops") == CURRENT
         # …and the stale pin is never silent.
         unservable = [
             payload
@@ -597,16 +602,16 @@ class TestFailSoftReads:
 class TestPackStateViewVersions:
     def test_unpinned_pack_reports_current_as_effective(self):
         rows = {row["packId"]: row for row in pack_state_view(ORG)}
-        assert rows["cloud_ops"]["packVersion"] == "1.2.0"
+        assert rows["cloud_ops"]["packVersion"] == CURRENT
         assert rows["cloud_ops"]["pinnedVersion"] is None
-        assert rows["cloud_ops"]["effectiveVersion"] == "1.2.0"
+        assert rows["cloud_ops"]["effectiveVersion"] == CURRENT
 
     def test_pinned_pack_reports_the_pin_as_effective(self):
         rollback_pack_version(ORG, "cloud_ops", PRIOR, actor_id=ACTOR)
         rows = {row["packId"]: row for row in pack_state_view(ORG)}
         # packVersion stays what the REGISTRY ships; effectiveVersion is what a run
         # started now would execute and stamp.
-        assert rows["cloud_ops"]["packVersion"] == "1.2.0"
+        assert rows["cloud_ops"]["packVersion"] == CURRENT
         assert rows["cloud_ops"]["pinnedVersion"] == PRIOR
         assert rows["cloud_ops"]["effectiveVersion"] == PRIOR
 
@@ -620,7 +625,7 @@ class TestPackStateViewVersions:
         restore_pack_version(ORG, "cloud_ops", actor_id=ACTOR)
         rows = {row["packId"]: row for row in pack_state_view(ORG)}
         assert rows["cloud_ops"]["pinnedVersion"] is None
-        assert rows["cloud_ops"]["effectiveVersion"] == "1.2.0"
+        assert rows["cloud_ops"]["effectiveVersion"] == CURRENT
 
     def test_a_pack_can_be_both_disabled_and_pinned(self):
         rollback_pack_version(ORG, "cloud_ops", PRIOR, actor_id=ACTOR)
@@ -633,4 +638,4 @@ class TestPackStateViewVersions:
         rollback_pack_version(ORG, "cloud_ops", PRIOR, actor_id=ACTOR)
         rows = {row["packId"]: row for row in pack_state_view(OTHER_ORG)}
         assert rows["cloud_ops"]["pinnedVersion"] is None
-        assert rows["cloud_ops"]["effectiveVersion"] == "1.2.0"
+        assert rows["cloud_ops"]["effectiveVersion"] == CURRENT

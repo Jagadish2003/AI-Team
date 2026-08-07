@@ -1,3 +1,4 @@
+import logging
 from fastapi import BackgroundTasks, Depends
 
 from . import db
@@ -104,4 +105,17 @@ def register_sprint4_t2_routes(app):
         # CS-4 / AT-313: steps whose ingest failed, so the progress UI can render
         # them as failed instead of as completed (green-check) stages.
         s["failed_steps"] = run.get("failed_steps", [])
+        # 2.0-D4 T5 (AC6): a run that finished is not necessarily a run that
+        # delivered everything. Without this, a run whose ServiceNow died polls
+        # as "complete" and every consumer downstream believes it.
+        try:
+            from .run_completeness import build_run_completeness
+
+            s["completeness"] = build_run_completeness(
+                run, include_environment=False
+            ).to_dict()
+        except Exception:  # noqa: BLE001 - status must always answer
+            logging.getLogger(__name__).warning(
+                "Could not attach run completeness", exc_info=True
+            )
         return s

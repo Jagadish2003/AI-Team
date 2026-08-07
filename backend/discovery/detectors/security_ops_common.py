@@ -23,7 +23,10 @@ cannot drift between detectors:
     ``ops_pingpong`` (never an assignee).
   * ``severity_band`` normalises a raw ServiceNow severity label to a band token.
   * ``cmdb_adjacency`` / ``ci_class_index`` turn the raw B3 edges into a directed
-    depends-on graph + a CI→class lookup for depth-bounded traversal.
+    depends-on graph + a CI→class lookup for depth-bounded traversal. The graph
+    construction and the bounded walk (``reachable_within``, re-exported here) live
+    in the SHARED ``ci_dependency_graph`` module so the SecOps and cloud-ops packs
+    cannot drift into two different notions of "reachable within N hops".
 
 Detectors import these; the four-part contract itself lives in
 ``packs.security_ops_finding`` (inherited from the operational scaffold).
@@ -37,6 +40,13 @@ try:  # package-qualified first, bare fallback (mirrors the other detector modul
     from backend.app.provenance import EvidencePointer
 except ModuleNotFoundError:  # pragma: no cover - import shim
     from app.provenance import EvidencePointer
+
+from .ci_dependency_graph import (
+    DEPENDS_FORWARD,
+    DEPENDS_REVERSE,
+    build_adjacency,
+    reachable_within,
+)
 
 SOURCE_SYSTEM = "servicenow"
 
@@ -260,11 +270,13 @@ def group_sequence(record: Mapping[str, Any]) -> List[str]:
 
 
 # ── CMDB dependency graph (MSP-B3) ───────────────────────────────────────────
-
-# Relationship types where source depends on target (target is the more underlying
-# CI). ``used_by`` is the inverse (target depends on source), so it is reversed.
-_DEPENDS_FORWARD = frozenset({"depends_on", "runs_on", "uses", "connects_to", "hosted_on"})
-_DEPENDS_REVERSE = frozenset({"used_by", "hosts", "runs"})
+#
+# The adjacency construction and the depth-bounded walk live in ONE place
+# (``ci_dependency_graph``) shared with the cloud-ops hotspot detector — see that
+# module's docstring for why the copies were consolidated. Re-exported here so the
+# SecOps detectors keep importing their graph helpers from this one module.
+_DEPENDS_FORWARD = DEPENDS_FORWARD
+_DEPENDS_REVERSE = DEPENDS_REVERSE
 
 
 def _edges(cmdb: Mapping[str, Any]) -> List[Mapping[str, Any]]:
@@ -277,33 +289,12 @@ def _edges(cmdb: Mapping[str, Any]) -> List[Mapping[str, Any]]:
 def cmdb_adjacency(cmdb: Mapping[str, Any]) -> Dict[str, List[str]]:
     """Build a directed depends-on graph from B3 edges: ``adj[X]`` = CIs X depends on.
 
-    Tolerant of the key variants a relationship record may carry
-    (``source_ci_id``/``target_ci_id``, ``from_ci_sys_id``/``to_ci_sys_id``,
-    ``parent``/``child``, ``from``/``to``). Direction is normalised so an edge
-    always points from the dependent CI to the underlying CI; ``used_by`` reverses.
+    Thin adaptor: reads the ``relationships`` records off the B3 CMDB block and hands
+    them to the shared :func:`~discovery.detectors.ci_dependency_graph.build_adjacency`,
+    which owns the key-variant tolerance and the direction normalisation
+    (``used_by``/``hosts``/``runs`` reverse).
     """
-    adj: Dict[str, List[str]] = {}
-    for edge in _edges(cmdb):
-        src = _text(
-            edge.get("source_ci_id") or edge.get("from_ci_sys_id")
-            or edge.get("parent") or edge.get("from")
-        )
-        dst = _text(
-            edge.get("target_ci_id") or edge.get("to_ci_sys_id")
-            or edge.get("child") or edge.get("to")
-        )
-        if not src or not dst:
-            continue
-        rel = str(edge.get("relationship_type") or "depends_on").strip().lower()
-        if rel in _DEPENDS_REVERSE:
-            src, dst = dst, src
-        adj.setdefault(src, [])
-        if dst not in adj[src]:
-            adj[src].append(dst)
-    # Deterministic neighbour ordering.
-    for node in adj:
-        adj[node].sort()
-    return adj
+    return build_adjacency(_edges(cmdb))
 
 
 def ci_class_index(cmdb: Mapping[str, Any]) -> Dict[str, str]:

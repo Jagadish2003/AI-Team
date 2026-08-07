@@ -200,6 +200,23 @@ class ChangeBasedIngestor(abc.ABC):
     #: still emitted). See ``discovery.ingest.conversation_content``.
     manages_retrieval_freshness: bool = False
 
+    #: MSP-B1 — does this connector's records correspond to RETRIEVAL artifacts at
+    #: all? DEFAULT True: a change record's ``artifact_id`` is a retrieval
+    #: ``source_artifact``, so the runner emits one ``ingestion.artifact_changed``
+    #: per record and notifies the retrieval-freshness subscriber (R16-A1 §4 /
+    #: R18-B2 T1). A TRANSPORT-ONLY event connector (the native AWS/Azure cloud
+    #: event connectors, the MSP-B8 bridge) sets this False: a cloud event is an
+    #: append-only observation, never an indexed artifact that can change — nothing
+    #: chunks it, nothing resolves it, and it can never be updated or deleted
+    #: upstream (hence ``reports_deletes = False``). Emitting per-event change
+    #: telemetry for those records is not just useless, it is actively harmful at
+    #: event volume: each event would cost a telemetry row plus a
+    #: mark-stale-and-enqueue transaction, and would park an unresolvable row in the
+    #: retrieval refresh queue. The runner therefore skips BOTH per-record paths for
+    #: such a connector and logs one per-batch summary instead, so the volume stays
+    #: observable rather than silent.
+    produces_retrieval_content: bool = True
+
     @abc.abstractmethod
     def ingest_changes(
         self, org_id: str, since: Optional[Checkpoint]

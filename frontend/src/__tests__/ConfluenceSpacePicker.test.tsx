@@ -4,7 +4,11 @@
  * Run: npx vitest run src/__tests__/ConfluenceSpacePicker.test.tsx
  */
 import '@testing-library/jest-dom/vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+// The picker reads its spaces through the shared data cache (see
+// usePickerResource), which the app provides at its root — so these tests mount a
+// provider too. A fresh one per render keeps each test's cache isolated.
+import { renderWithCache as render } from '../test-utils/renderWithCache';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 const mockApiGet = vi.fn();
@@ -63,8 +67,13 @@ describe('ConfluenceSpacePicker', () => {
   it('honours a previously-saved selection on load', async () => {
     mockApiGet.mockResolvedValue({ ok: true, available: AVAILABLE, selected: ['OPS'], configured: true });
     render(<ConfluenceSpacePicker />);
-    const ops = await screen.findByRole('checkbox', { name: /Operations/ });
-    expect(ops).toHaveAttribute('aria-checked', 'true');
+    // The picker reads spaces through the shared data cache (usePickerResource),
+    // which can surface the list and the saved selection in separate ticks — so
+    // the checkbox can exist a beat before aria-checked flips. Poll the attribute
+    // rather than snapshotting it, or this races under CI load.
+    await waitFor(() =>
+      expect(screen.getByRole('checkbox', { name: /Operations/ })).toHaveAttribute('aria-checked', 'true'),
+    );
     expect(screen.getByText('1 of 2 spaces selected')).toBeInTheDocument();
   });
 });

@@ -58,7 +58,10 @@ const INITIAL_STATE: ResourceState<never> = {
   error: null,
 };
 
-const PANEL_IDS: HealthPanelId[] = ["connectors", "runs", "content", "packs"];
+// Panels rendered on the dashboard grid, and therefore the only ?panel= targets a
+// deep link can scroll to. "content" and "packs" are intentionally absent: their
+// panels are hidden, so scrolling to them would be a no-op on a missing element.
+const PANEL_IDS: HealthPanelId[] = ["connectors", "runs"];
 
 // Panels with more than this many cards get an internal scrollbar so the panel
 // stays compact instead of growing with the list. The height fits ~3 cards.
@@ -95,6 +98,7 @@ function errorMessage(error: unknown, fallback: string): string {
 function useHealthResource<T>(cacheKey: string, loader: () => Promise<T>, label: string) {
   const { data, error, refetch } = useResource<T>(cacheKey, loader);
 
+
   const state: ResourceState<T> = useMemo(() => {
     // Data wins over a later error: if a BACKGROUND revalidation fails we keep
     // showing the last good panel rather than replacing it with an error.
@@ -122,6 +126,25 @@ function formatDate(value: string | null | undefined): string {
   }).format(date);
 }
 
+/**
+ * Why a connector has no checkpoint age, stated instead of a bare "Not available".
+ *
+ * A checkpoint age can be genuinely absent for reasons an operator should be able
+ * to tell apart, and none of them can be shown as a number without inventing data:
+ *  - the connector is not connected, so nothing has ingested;
+ *  - it has ingested but does not keep a resumable cursor (it is not on the
+ *    change-based ingestion path, e.g. Salesforce/Jira today);
+ *  - its checkpoint was reset, so it will re-read from the start on the next run.
+ * Reporting the reason keeps the panel honest while making the blank cell useful.
+ */
+function checkpointAbsenceReason(item: ConnectorHealthItem): string {
+  if (["disconnected", "needs_auth", "refresh_failed", "error"].includes(item.connection_state)) {
+    return "Not connected";
+  }
+  if (item.last_successful_ingestion) return "No resumable cursor";
+  return "Awaiting first ingestion";
+}
+
 function formatAge(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined) return "Not available";
   if (seconds < 60) return `${Math.max(0, Math.round(seconds))} sec`;
@@ -143,6 +166,176 @@ function labelize(value: string): string {
 
 function detectorLabel(value: string): string {
   return labelize(value.split(".").at(-1) ?? value);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseJson(value: string): unknown | null {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function compactText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function looksLikeDate(value: string): boolean {
+  if (!/[0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}/.test(value)) return false;
+  return !Number.isNaN(new Date(value).getTime());
+}
+
+function checkpointReadTime(values: unknown[]): string | null {
+  const usable = values
+    .map((value) => (typeof value === "string" || typeof value === "number" ? String(value).trim() : ""))
+    .filter(Boolean);
+  if (usable.length === 0) return null;
+
+  const dated = usable
+    .filter(looksLikeDate)
+    .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+  if (dated.length > 0) return formatDate(dated[0]);
+
+  return null;
+}
+
+/**
+ * The ONE place a raw checkpoint position is decoded.
+ *
+ * A checkpoint value is opaque to the frontend by design — it is a plain ISO
+ * string for a single-cursor connector and a nested per-scope map for the cloud
+ * ones. Decoding it in exactly one function means a serialisation change (a key
+ * rename, a new nesting level) has a single site to update; when two callers
+ * each parsed it independently, one could be updated and the other would
+ * silently render nothing.
+ */
+function parseCheckpointPosition(raw: string | null | undefined): unknown | null {
+  if (!raw || !raw.trim()) return null;
+  // A bare ISO timestamp is not JSON, so a parse failure is expected, not an
+  // error: fall back to the raw string and let the caller read a time off it.
+  return parseJson(raw) ?? raw;
+}
+
+function checkpointProgressRows(item: ConnectorHealthItem): Array<{ label: string; value: string; readTime?: string }> {
+  const source = parseCheckpointPosition(item.checkpoint_position);
+  if (source === null) return [];
+
+  if (isPlainRecord(source)) {
+    return Object.entries(source).flatMap(([key, value]) => {
+      const label = labelize(key);
+      if (isPlainRecord(value)) {
+        const readTime = checkpointReadTime(Object.values(value));
+        return readTime ? [{ label, value: `Continues after ${readTime}`, readTime }] : [];
+      }
+      if (Array.isArray(value)) {
+        const readTime = checkpointReadTime(value);
+        return readTime ? [{ label, value: `Continues after ${readTime}`, readTime }] : [];
+      }
+      const readTime = checkpointReadTime([value]);
+      return readTime ? [{ label, value: `Continues after ${readTime}`, readTime }] : [];
+    });
+  }
+
+  const readTime = checkpointReadTime([source]);
+  return readTime ? [{ label: "Data checkpoint", value: `Continues after ${readTime}`, readTime }] : [];
+}
+
+/**
+ * The supporting-details view of the same rows, minus the readTime the progress
+ * view uses for ordering. Derived from `checkpointProgressRows` rather than
+ * re-parsing the position, so the two views cannot disagree about what a
+ * checkpoint says.
+ */
+function checkpointSupportingRows(item: ConnectorHealthItem): Array<{ label: string; value: string }> {
+  return checkpointProgressRows(item).map(({ label, value }) => ({ label, value }));
+}
+
+function sentenceCase(value: string): string {
+  const trimmed = compactText(value).replace(/[.!?]+$/, "");
+  if (!trimmed) return "";
+  return `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}.`;
+}
+
+function messageFromErrorJson(value: unknown): string | null {
+  const first = Array.isArray(value) ? value[0] : value;
+  if (!isPlainRecord(first)) return null;
+  const message = first.message ?? first.error ?? first.detail ?? first.error_description;
+  return typeof message === "string" && message.trim() ? compactText(message) : null;
+}
+
+function extractErrorJson(text: string): string | null {
+  const withoutQuery = text.replace(/\s+Query:\s*[\s\S]*$/i, "");
+  const jsonMatch = withoutQuery.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
+  if (!jsonMatch) return null;
+  const parsed = parseJson(jsonMatch[1]);
+  return parsed === null ? null : messageFromErrorJson(parsed);
+}
+
+function customerStageIssue(stage: string | null | undefined, reason: string | null | undefined) {
+  const stageLabel = labelize(stage || "Stage");
+  const raw = compactText(reason || "");
+  const jsonMessage = raw ? extractErrorJson(raw) : null;
+  const searchable = `${stageLabel} ${raw}`;
+
+  if (/salesforce/i.test(searchable) && /(invalid_session_id|session expired|http 401|unauthori[sz]ed)/i.test(searchable)) {
+    return {
+      stage: stageLabel,
+      issue: "Salesforce session expired or is no longer valid.",
+      action: "Reconnect Salesforce, then rerun discovery.",
+    };
+  }
+  if (/(http 401|unauthori[sz]ed|authentication|needs_auth|invalid session)/i.test(searchable)) {
+    return {
+      stage: stageLabel,
+      issue: `${stageLabel} authentication failed.`,
+      action: `Reconnect ${stageLabel}, then rerun discovery.`,
+    };
+  }
+  if (/(http 403|forbidden|permission)/i.test(searchable)) {
+    return {
+      stage: stageLabel,
+      issue: `${stageLabel} does not have permission to read the requested data.`,
+      action: `Update ${stageLabel} permissions, then rerun discovery.`,
+    };
+  }
+  if (/(http 429|rate.?limit|too many requests)/i.test(searchable)) {
+    return {
+      stage: stageLabel,
+      issue: `${stageLabel} rate limit was reached.`,
+      action: "Wait for the source limit to reset, then rerun discovery.",
+    };
+  }
+  if (/(timed out|timeout)/i.test(searchable)) {
+    return {
+      stage: stageLabel,
+      issue: sentenceCase(jsonMessage ?? raw),
+      action: "Rerun discovery after the source is responding normally.",
+    };
+  }
+
+  const withoutQuery = raw.replace(/\s+Query:\s*[\s\S]*$/i, "");
+  const withoutJson = withoutQuery.replace(/(\[[\s\S]*\]|\{[\s\S]*\})/, jsonMessage ?? "The source returned an error response");
+  return {
+    stage: stageLabel,
+    issue: sentenceCase(jsonMessage ?? (withoutJson || "This stage reported an issue")),
+    action: null,
+  };
+}
+
+function stageLevelTone(level: string | null | undefined): "warn" | "bad" | "info" | "neutral" {
+  const normalized = String(level || "").toUpperCase();
+  if (normalized === "ERROR" || normalized === "AI_ERROR") return "bad";
+  if (normalized === "WARNING") return "warn";
+  if (normalized === "INFO") return "info";
+  return "neutral";
+}
+
+function stageOutcomeNeedsAttention(level: string | null | undefined): boolean {
+  return ["WARNING", "ERROR", "AI_ERROR"].includes(String(level || "").toUpperCase());
 }
 
 function StatusPill({ label, tone }: { label: string; tone: "good" | "warn" | "bad" | "info" | "neutral" }) {
@@ -277,6 +470,29 @@ function connectorTone(item: ConnectorHealthItem): "good" | "warn" | "bad" | "ne
   if (["error", "disconnected", "needs_auth", "refresh_failed"].includes(item.connection_state)) return "bad";
   if (item.last_error || !["connected", "live"].includes(item.connection_state)) return "warn";
   return "good";
+}
+
+// Display order within the Connectors panel: healthy connectors first, then ones
+// with a warning, then disconnected/failed ones last. Sinking the broken ones to
+// the bottom is deliberate — the panel scrolls after three cards, so the states
+// an operator acts on sit together at the end of a predictable list rather than
+// being scattered through it by the backend's arbitrary order.
+const CONNECTOR_TONE_ORDER: Record<"good" | "warn" | "neutral" | "bad", number> = {
+  good: 0,
+  warn: 1,
+  neutral: 2,
+  bad: 3,
+};
+
+function sortConnectorsByHealth(items: ConnectorHealthItem[]): ConnectorHealthItem[] {
+  // Copy first: the array belongs to the shared data cache and must not be sorted
+  // in place. Ties keep the backend's order (stable sort) and break on name so the
+  // list never reshuffles between two renders of the same data.
+  return [...items].sort((a, b) => {
+    const delta = CONNECTOR_TONE_ORDER[connectorTone(a)] - CONNECTOR_TONE_ORDER[connectorTone(b)];
+    if (delta !== 0) return delta;
+    return a.name.localeCompare(b.name);
+  });
 }
 
 // ── In-context actions (R18-C2 T5) ────────────────────────────────────────────
@@ -503,6 +719,13 @@ function ConnectorsPanel({
     setResetOutcomes((prev) => ({ ...prev, [connectorId]: outcome }));
   }, []);
 
+  // Healthy first, disconnected last. Sorting here (not in the panel's state
+  // calculation below) keeps the derived state independent of display order.
+  const orderedConnectors = useMemo(
+    () => (resource.status === "success" ? sortConnectorsByHealth(resource.data.connectors) : []),
+    [resource],
+  );
+
   let state: string = resource.status;
   if (resource.status === "success") {
     const hasIssues = resource.data.connectors.some((item) => connectorTone(item) !== "good");
@@ -539,8 +762,8 @@ function ConnectorsPanel({
             <Metric label="Data flowing" value={resource.data.connectors.filter((item) => connectorTone(item) === "good").length} />
             <Metric label="Need attention" value={resource.data.connectors.filter((item) => connectorTone(item) !== "good").length} />
           </div>
-          <div className={cardListClasses(resource.data.connectors.length)}>
-            {resource.data.connectors.map((item) => (
+          <div className={cardListClasses(orderedConnectors.length)}>
+            {orderedConnectors.map((item) => (
               <article key={item.connector_id} className="rounded-xl border border-border p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
@@ -551,7 +774,28 @@ function ConnectorsPanel({
                 </div>
                 <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
                   <div><dt className="text-muted">Last ingestion</dt><dd className="mt-0.5 font-medium text-text">{formatDate(item.last_successful_ingestion)}</dd></div>
-                  <div><dt className="text-muted">Checkpoint age</dt><dd className="mt-0.5 font-medium text-text">{formatAge(item.checkpoint_age_seconds)}</dd></div>
+                  <div>
+                    <dt className="text-muted">Checkpoint age</dt>
+                    <dd className="mt-0.5 font-medium text-text">
+                      {item.checkpoint_age_seconds === null || item.checkpoint_age_seconds === undefined ? (
+                        // No age exists — say WHY rather than showing a bare blank or
+                        // a fabricated zero.
+                        <span className="text-muted">{checkpointAbsenceReason(item)}</span>
+                      ) : (
+                        <>
+                          {formatAge(item.checkpoint_age_seconds)}
+                          {/* A multi-stream connector's age is that of its newest
+                              stream, so say how many streams it stands for rather
+                              than implying a single cursor. */}
+                          {item.checkpoint_streams && item.checkpoint_streams > 1 ? (
+                            <span className="ml-1 font-normal text-muted">
+                              (newest of {item.checkpoint_streams} streams)
+                            </span>
+                          ) : null}
+                        </>
+                      )}
+                    </dd>
+                  </div>
                   <div><dt className="text-muted">Authentication</dt><dd className="mt-0.5 font-medium text-text">{item.auth_mode ? labelize(item.auth_mode) : "Not available"}</dd></div>
                 </dl>
                 {item.last_error ? (
@@ -559,13 +803,19 @@ function ConnectorsPanel({
                     <span className="font-semibold">Latest issue:</span> {item.last_error}
                   </div>
                 ) : null}
-                <details className="mt-3 text-sm">
-                  <summary className="cursor-pointer font-medium text-accent">Supporting details</summary>
-                  <dl className="mt-2 grid gap-2 rounded-lg bg-bg/40 p-3 sm:grid-cols-2">
-                    <div><dt className="text-muted">Checkpoint position</dt><dd className="font-medium text-text">{item.checkpoint_position ?? "Not available"}</dd></div>
-                    <div><dt className="text-muted">Checkpoint recorded</dt><dd className="font-medium text-text">{formatDate(item.checkpoint_captured_at)}</dd></div>
-                  </dl>
-                </details>
+                {checkpointSupportingRows(item).length > 0 ? (
+                  <details className="mt-3 text-sm">
+                    <summary className="cursor-pointer font-medium text-accent">Supporting details</summary>
+                    <dl className="mt-2 grid gap-2 rounded-lg bg-bg/40 p-3 sm:grid-cols-2">
+                      {checkpointSupportingRows(item).map((row) => (
+                        <div key={`${item.connector_id}-${row.label}`}>
+                          <dt className="text-muted">{row.label}</dt>
+                          <dd className="font-medium text-text">{row.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </details>
+                ) : null}
                 <ConnectorActions
                   item={item}
                   role={role}
@@ -591,31 +841,71 @@ function runTone(status: string | null | undefined): "good" | "warn" | "bad" | "
 }
 
 function RunDetails({ run }: { run: RunHealthItem }) {
+  const stageIssues = (run.degraded_stages ?? []).map((stage) => customerStageIssue(stage.stage, stage.reason));
+  const additionalIssues = (run.stage_outcomes ?? [])
+    .filter((stage) => stageOutcomeNeedsAttention(stage.level))
+    .filter((stage) =>
+      !stageIssues.some(
+        (issue) => issue.stage === labelize(stage.stage || "Stage") && issue.issue === customerStageIssue(stage.stage, stage.message).issue,
+      ),
+    );
+  const hasIssues = stageIssues.length > 0 || additionalIssues.length > 0;
+
   return (
     <details className="mt-3 text-sm">
       <summary className="cursor-pointer font-medium text-accent">Stage and detector details</summary>
       <div className="mt-2 space-y-3 rounded-lg bg-bg/40 p-3">
-        {(run.degraded_stages?.length ?? 0) > 0 ? (
+        {stageIssues.length > 0 ? (
           <div>
             <div className="font-semibold text-text">Stages needing attention</div>
-            <ul className="mt-1 space-y-1 text-muted">
-              {run.degraded_stages?.map((stage, index) => (
-                <li key={`${stage.stage}-${index}`}>
-                  <span className="font-medium">{labelize(stage.stage)}:</span> {stage.reason}
-                </li>
+            <dl className="mt-2 space-y-2">
+              {stageIssues.map((issue, index) => (
+                <div key={`${issue.stage}-${index}`} className="rounded-lg border border-border/70 bg-panel/50 p-3">
+                  <dt className="font-medium text-text">{issue.stage}</dt>
+                  <dd className="mt-1 min-w-0 space-y-1 text-muted">
+                    <div className="break-words leading-relaxed">{issue.issue}</div>
+                    {issue.action ? <div className="break-words leading-relaxed text-text">{issue.action}</div> : null}
+                  </dd>
+                </div>
               ))}
-            </ul>
+            </dl>
           </div>
         ) : null}
-        {(run.stage_outcomes?.length ?? 0) > 0 ? (
-          <div className="flex flex-wrap gap-2">
-            {run.stage_outcomes?.map((stage, index) => (
-              <StatusPill key={`${stage.stage}-${index}`} label={`${labelize(stage.stage ?? "Unknown stage")}: ${labelize(stage.level ?? "Recorded")}`} tone={runTone(stage.level)} />
-            ))}
+        {additionalIssues.length > 0 ? (
+          <div>
+            <div className="font-semibold text-text">Additional stage issues</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {additionalIssues.map((stage, index) => (
+                <StatusPill
+                  key={`${stage.stage}-${index}`}
+                  label={`${labelize(stage.stage ?? "Unknown stage")}: ${labelize(stage.level ?? "Needs review")}`}
+                  tone={stageLevelTone(stage.level)}
+                />
+              ))}
+            </div>
           </div>
-        ) : (
-          <div className="text-muted">No stage-level events were recorded.</div>
-        )}
+        ) : null}
+        {!hasIssues ? (
+          <div className="text-muted">
+            No stage issues were recorded.
+          </div>
+        ) : null}
+        {(run.detectors_evaluated !== null && run.detectors_evaluated !== undefined) || (run.detectors_fired !== null && run.detectors_fired !== undefined) ? (
+          <div className="grid gap-2 border-t border-border pt-3 text-sm sm:grid-cols-2">
+            {run.detectors_evaluated !== null && run.detectors_evaluated !== undefined ? (
+              <div>
+                <div className="text-muted">Detectors checked</div>
+                <div className="font-medium text-text">{run.detectors_evaluated}</div>
+              </div>
+            ) : null}
+            {run.detectors_fired !== null && run.detectors_fired !== undefined ? (
+              <div>
+                <div className="text-muted">Findings raised</div>
+                <div className="font-medium text-text">{run.detectors_fired}</div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </details>
   );
@@ -624,11 +914,9 @@ function RunDetails({ run }: { run: RunHealthItem }) {
 function RunsPanel({
   resource,
   retry,
-  highlighted,
 }: {
   resource: ResourceState<RunHealthResponse>;
   retry: () => void;
-  highlighted: boolean;
 }) {
   const hasIncompleteSummary = resource.status === "success" && resource.data.runs.some(
     (run) =>
@@ -664,7 +952,7 @@ function RunsPanel({
       description="Understand which recent discovery runs succeeded, degraded, failed, or are still in progress."
       icon={<Clock3 className="h-5 w-5" aria-hidden="true" />}
       state={state}
-      highlighted={highlighted}
+      highlighted={false}
     >
       {resource.status === "loading" ? <PanelLoading label="Run health" /> : null}
       {resource.status === "error" ? <PanelError label="Run health" message={resource.error} onRetry={retry} /> : null}
@@ -683,8 +971,11 @@ function RunsPanel({
             {resource.data.runs.map((run) => (
               <article key={run.run_id} className="rounded-xl border border-border p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h3 className="font-semibold text-text">Run {run.run_id.slice(0, 8)}</h3>
+                  <div className="min-w-0">
+                    {/* Full run id, never truncated: it is the identifier an operator
+                        copies to correlate with logs and run-scoped API calls, so a
+                        shortened prefix is not actionable. */}
+                    <h3 className="break-all font-semibold text-text">Run {run.run_id}</h3>
                     <p className="text-sm text-muted">{formatDate(run.started_at)}</p>
                   </div>
                   <StatusPill label={labelize(run.health_status)} tone={runTone(run.health_status)} />
@@ -942,7 +1233,13 @@ function PacksPanel({
             return (
             <article key={`${resource.data.run_id}-${pack.pack_id}`} data-testid={`pack-row-${pack.pack_id}`} className="rounded-xl border border-border p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div><h3 className="font-semibold text-text">{pack.pack_name ?? pack.pack_id}</h3><p className="text-sm text-muted">Run {resource.data.run_id?.slice(0, 8) ?? "Not available"} · Executed {formatDate(pack.executed_at)}</p></div>
+                {/* Merge note: `dev` widened this header — `min-w-0` + `break-all`
+                    and the FULL run id rather than an 8-char slice, so a run id is
+                    correlatable and long ids cannot overflow the card. Kept. */}
+                <div className="min-w-0"><h3 className="font-semibold text-text">{pack.pack_name ?? pack.pack_id}</h3><p className="break-all text-sm text-muted">Run {resource.data.run_id ?? "Not available"} · Executed {formatDate(pack.executed_at)}</p></div>
+                {/* `dev` had a single "Version …" pill here. This pill ROW supersedes
+                    it: `lifecycle.versionLabel` renders the same text (and "Rolled
+                    back to X" when pinned), beside the three other orthogonal facts. */}
                 <div className="flex flex-wrap items-center gap-2">
                   <span data-testid={`pack-state-${pack.pack_id}`}><StatusPill label={lifecycle.stateLabel} tone={lifecycle.stateTone} /></span>
                   <span data-testid={`pack-version-${pack.pack_id}`}><StatusPill label={lifecycle.versionLabel} tone={lifecycle.versionTone} /></span>
@@ -1036,6 +1333,11 @@ function PacksPanel({
   );
 }
 
+// ContentPanel and PacksPanel are currently hidden from the dashboard grid but are
+// kept intact so re-enabling either is a one-line change in the grid below. This
+// reference keeps them from reading as dead code to a reader or a linter.
+export const HIDDEN_PANELS = { ContentPanel, PacksPanel };
+
 function AttentionStrip({ resource, retry }: { resource: ResourceState<AttentionHealthResponse>; retry: () => void }) {
   const state = resource.status === "success" ? (resource.data.items.length === 0 ? "empty" : "attention") : resource.status;
   return (
@@ -1126,31 +1428,74 @@ function RunHealthDashboard({ role }: { role: "owner" | "analyst" }) {
     [connectors.state, runs.state, content.state, packs.state, attention.state],
   );
   const SummaryIcon = summary.icon;
-  const refreshedAt = content.state.status === "success" ? content.state.data.generated_at : null;
-  const refreshAll = () => {
-    void connectors.refresh();
-    void runs.refresh();
-    void content.refresh();
-    void packs.refresh();
-    void attention.refresh();
-  };
+
+  // Refresh state. The cache keeps the previous object reference when a refetch
+  // returns structurally identical data (see dataCache.payloadsEqual), which is
+  // correct — it avoids pointless re-renders — but it means an unchanged refresh
+  // produced NO visible feedback at all and read as a dead button. So the click is
+  // tracked explicitly: a busy state while the reads are in flight, and a
+  // completion time afterwards, whether or not the data turned out to differ.
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
+
+  const refreshAll = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      // All five in parallel; each read reports its own failure through its panel,
+      // so one failing read must not prevent the others from refreshing.
+      await Promise.all([
+        connectors.refresh(),
+        runs.refresh(),
+        content.refresh(),
+        packs.refresh(),
+        attention.refresh(),
+      ]);
+      setRefreshedAt(new Date().toISOString());
+    } finally {
+      setRefreshing(false);
+    }
+  }, [connectors, runs, content, packs, attention]);
+
+  // Prefer the time of an explicit refresh; fall back to the backend's own
+  // generated_at so the timestamp is never blank on first load.
+  const generatedAt = content.state.status === "success" ? content.state.data.generated_at : null;
+  const displayedRefreshedAt = refreshedAt ?? generatedAt;
 
   return (
     <PageShell
       title="Run Health"
       description="A tenant-level view of whether data is flowing, discovery is completing, content is fresh, and the expected analysis packs ran."
-      actions={<div className="flex items-center gap-2">{role === "analyst" ? <StatusPill label="Read-only" tone="neutral" /> : null}<button type="button" onClick={refreshAll} className="inline-flex items-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 text-sm font-semibold text-muted shadow-sm hover:bg-bg/40"><RefreshCw className="h-4 w-4" aria-hidden="true" />Refresh</button></div>}
+      actions={
+        <div className="flex items-center gap-2">
+          {role === "analyst" ? <StatusPill label="Read-only" tone="neutral" /> : null}
+          <button
+            type="button"
+            data-testid="refresh-health"
+            onClick={() => {
+              void refreshAll();
+            }}
+            disabled={refreshing}
+            aria-busy={refreshing}
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 text-sm font-semibold text-muted shadow-sm hover:bg-bg/40 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} aria-hidden="true" />
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+      }
     >
       <div className="space-y-5">
         <section data-testid="tenant-health-summary" className="rounded-2xl border border-border bg-gradient-to-br from-panel to-panel2 p-5 text-text shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-4"><div className="flex items-start gap-3"><div className="rounded-xl bg-accent/10 p-2"><SummaryIcon className={`h-5 w-5 ${summary.icon === Loader2 ? "animate-spin" : ""}`} aria-hidden="true" /></div><div><h2 className="text-lg font-semibold">{summary.label}</h2><p className="mt-1 max-w-3xl text-sm text-muted">{summary.detail}</p></div></div><div className="text-xs text-muted">{refreshedAt ? `Updated ${formatDate(refreshedAt)}` : "Update time unavailable"}</div></div>
+          <div className="flex flex-wrap items-start justify-between gap-4"><div className="flex items-start gap-3"><div className="rounded-xl bg-accent/10 p-2"><SummaryIcon className={`h-5 w-5 ${summary.icon === Loader2 ? "animate-spin" : ""}`} aria-hidden="true" /></div><div><h2 className="text-lg font-semibold">{summary.label}</h2><p className="mt-1 max-w-3xl text-sm text-muted">{summary.detail}</p></div></div><div className="text-xs text-muted" data-testid="health-updated-at">{refreshing ? "Refreshing…" : displayedRefreshedAt ? `Updated ${formatDate(displayedRefreshedAt)}` : "Update time unavailable"}</div></div>
         </section>
         <AttentionStrip resource={attention.state} retry={attention.refresh} />
+        {/* The Content-and-Freshness and Packs panels are hidden from the grid.
+            Their health reads are deliberately still performed above, so both
+            still contribute to the tenant summary and the Attention Strip —
+            hiding a card must not make a degraded tenant read as healthy. */}
         <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <ConnectorsPanel resource={connectors.state} retry={connectors.refresh} refresh={connectors.refresh} role={role} highlighted={selectedPanel === "connectors"} />
-          <RunsPanel resource={runs.state} retry={runs.refresh} highlighted={selectedPanel === "runs"} />
-          <ContentPanel resource={content.state} retry={content.refresh} highlighted={selectedPanel === "content"} />
-          <PacksPanel resource={packs.state} retry={packs.refresh} highlighted={selectedPanel === "packs"} />
+          <RunsPanel resource={runs.state} retry={runs.refresh} />
         </div>
       </div>
     </PageShell>

@@ -1,0 +1,655 @@
+{
+  "opportunities": [
+    {
+      "confidence": "HIGH",
+      "detector_id": "REPETITIVE_AUTOMATION",
+      "effort": 2,
+      "evidence": [
+        {
+          "confidence": "HIGH",
+          "decision": "UNREVIEWED",
+          "entities": [
+            "ent_flow_case-notify"
+          ],
+          "evidenceType": "Metric",
+          "id": "ev_sf_golden_0001",
+          "packId": "service_cloud",
+          "provenanceType": "observed",
+          "snippet": "4 active AutoLaunchedFlow(s) on the Case object. Avg element count: 5 (LOW complexity). 300 Case records processed in last 90 days (3.3/day). Flow activity score: 2.128 (threshold: 0.6).",
+          "source": "Salesforce",
+          "title": "Multiple low-complexity AutoLaunchedFlows running on high-volume Case object",
+          "tsLabel": "<normalized>"
+        }
+      ],
+      "evidenceIds": [
+        "ev_sf_golden_0001"
+      ],
+      "impact": 5,
+      "metric_value": 2.128,
+      "opportunity_identity": "opp_e5a336ec838675cb520878d8",
+      "orgId": "r191-p1-golden-org",
+      "packId": "service_cloud",
+      "packVersion": "1.0.0",
+      "raw_evidence": {
+        "active_flow_count_on_object": 4,
+        "element_count": 5,
+        "flow_activity_score": 2.128,
+        "flow_id": "301xx000001ABC1",
+        "flow_label": "Case-Notify",
+        "records_90d": 300,
+        "trigger_object": "Case"
+      },
+      "roadmap_stage": "NEXT_30",
+      "runId": "r191-p1-single-pack-golden",
+      "score_debug": {
+        "effective_proxy_ratio": 3.5467,
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 2.0,
+          "proc_pts": 2.0,
+          "sys_pts": 2.0
+        },
+        "impact_factors": {
+          "customer_pts": 3.0,
+          "external_pts": 1.0,
+          "friction_pts": 5.0,
+          "raw_impact_max": 6.1,
+          "raw_impact_min": 1.2,
+          "raw_sum": 3.375,
+          "revenue_pts": 2.0,
+          "volume_pts": 3.5,
+          "weighted_raw": 3.375
+        },
+        "proxy_ratio": 3.5467,
+        "source_weighting": null,
+        "t3_ceiling_clamp": {
+          "applied": false,
+          "confidence_after_clamp": "HIGH",
+          "confidence_before_clamp": "HIGH",
+          "role": "",
+          "system_id": "salesforce"
+        },
+        "t4_provenance": {
+          "base_role_weight": 1.0,
+          "confidence_after_provenance": "HIGH",
+          "confidence_before_provenance": "HIGH",
+          "confidence_clamped": false,
+          "effective_weight": 1.0,
+          "observed_beats_inferred_holds": true,
+          "provenance_type": "observed",
+          "source_weight": 1.0,
+          "weight_capped": false
+        }
+      },
+      "signal_source": "salesforce",
+      "threshold": 0.6,
+      "tier": "Quick Win"
+    },
+    {
+      "confidence": "MEDIUM",
+      "detector_id": "HANDOFF_FRICTION",
+      "effort": 2,
+      "evidence": [
+        {
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED",
+          "entities": [
+            "ent_case_all_categories",
+            "ent_casehistory_owner_changes"
+          ],
+          "evidenceType": "Metric",
+          "id": "ev_sf_golden_0002",
+          "packId": "service_cloud",
+          "provenanceType": "observed",
+          "snippet": "480 owner changes recorded across 300 Cases in the last 90 days. Avg 1.6 owner changes per Case (threshold: 1.5). Top categories: Technical Issue (avg 4.0/case), Billing Inquiry (avg 3.8/case), Account Management (avg 3.5/case).",
+          "source": "Salesforce",
+          "title": "Elevated case owner reassignment rate detected",
+          "tsLabel": "<normalized>"
+        }
+      ],
+      "evidenceIds": [
+        "ev_sf_golden_0002"
+      ],
+      "impact": 4,
+      "metric_value": 1.6,
+      "opportunity_identity": "opp_3a515aa4df5b98801d45211a",
+      "orgId": "r191-p1-golden-org",
+      "packId": "service_cloud",
+      "packVersion": "1.0.0",
+      "raw_evidence": {
+        "handoff_score": 1.6,
+        "owner_changes_90d": 480,
+        "top_categories": [
+          {
+            "category": "Technical Issue",
+            "handoff_score": 4.0
+          },
+          {
+            "category": "Billing Inquiry",
+            "handoff_score": 3.8
+          },
+          {
+            "category": "Account Management",
+            "handoff_score": 3.5
+          }
+        ],
+        "total_cases_90d": 300
+      },
+      "roadmap_stage": "NEXT_30",
+      "runId": "r191-p1-single-pack-golden",
+      "score_debug": {
+        "effective_proxy_ratio": 1.0667,
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 2.0,
+          "proc_pts": 2.0,
+          "sys_pts": 2.0
+        },
+        "impact_factors": {
+          "customer_pts": 3.0,
+          "external_pts": 1.0,
+          "friction_pts": 5.0,
+          "raw_impact_max": 6.1,
+          "raw_impact_min": 1.2,
+          "raw_sum": 3.075,
+          "revenue_pts": 0.0,
+          "volume_pts": 3.5,
+          "weighted_raw": 3.075
+        },
+        "proxy_ratio": 1.0667,
+        "source_weighting": null,
+        "t3_ceiling_clamp": {
+          "applied": false,
+          "confidence_after_clamp": "MEDIUM",
+          "confidence_before_clamp": "MEDIUM",
+          "role": "",
+          "system_id": "salesforce"
+        },
+        "t4_provenance": {
+          "base_role_weight": 1.0,
+          "confidence_after_provenance": "MEDIUM",
+          "confidence_before_provenance": "MEDIUM",
+          "confidence_clamped": false,
+          "effective_weight": 1.0,
+          "observed_beats_inferred_holds": true,
+          "provenance_type": "observed",
+          "source_weight": 1.0,
+          "weight_capped": false
+        }
+      },
+      "signal_source": "salesforce",
+      "threshold": 1.5,
+      "tier": "Quick Win"
+    },
+    {
+      "confidence": "MEDIUM",
+      "detector_id": "APPROVAL_BOTTLENECK",
+      "effort": 3,
+      "evidence": [
+        {
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED",
+          "entities": [
+            "ent_approval_discount_approval"
+          ],
+          "evidenceType": "Metric",
+          "id": "ev_sf_golden_0003",
+          "packId": "service_cloud",
+          "provenanceType": "observed",
+          "snippet": "60 pending 'Discount Approval' records with average delay of 5.0 days (threshold: 3.0 days). Bottleneck score: 30.0 (threshold: 10). 2 approver(s) handling all pending items.",
+          "source": "Salesforce",
+          "title": "Approval records exceeding SLA due to high delay in 'Discount Approval'",
+          "tsLabel": "<normalized>"
+        }
+      ],
+      "evidenceIds": [
+        "ev_sf_golden_0003"
+      ],
+      "impact": 5,
+      "metric_value": 5.0,
+      "opportunity_identity": "opp_cff07e6f8a4d78ad26126ab5",
+      "orgId": "r191-p1-golden-org",
+      "packId": "service_cloud",
+      "packVersion": "1.0.0",
+      "raw_evidence": {
+        "approver_count": 2,
+        "avg_delay_days": 5.0,
+        "bottleneck_score": 30.0,
+        "pending_count": 60,
+        "process_name": "Discount Approval"
+      },
+      "roadmap_stage": "NEXT_30",
+      "runId": "r191-p1-single-pack-golden",
+      "score_debug": {
+        "effective_proxy_ratio": 1.6667,
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 5.0,
+          "proc_pts": 5.0,
+          "sys_pts": 2.0
+        },
+        "impact_factors": {
+          "customer_pts": 0.0,
+          "external_pts": 1.0,
+          "friction_pts": 8.0,
+          "raw_impact_max": 6.1,
+          "raw_impact_min": 1.2,
+          "raw_sum": 3.3,
+          "revenue_pts": 2.0,
+          "volume_pts": 2.0,
+          "weighted_raw": 3.3
+        },
+        "proxy_ratio": 1.6667,
+        "source_weighting": null,
+        "t3_ceiling_clamp": {
+          "applied": false,
+          "confidence_after_clamp": "MEDIUM",
+          "confidence_before_clamp": "MEDIUM",
+          "role": "",
+          "system_id": "salesforce"
+        },
+        "t4_provenance": {
+          "base_role_weight": 1.0,
+          "confidence_after_provenance": "MEDIUM",
+          "confidence_before_provenance": "MEDIUM",
+          "confidence_clamped": false,
+          "effective_weight": 1.0,
+          "observed_beats_inferred_holds": true,
+          "provenance_type": "observed",
+          "source_weight": 1.0,
+          "weight_capped": false
+        }
+      },
+      "signal_source": "salesforce",
+      "threshold": 3.0,
+      "tier": "Quick Win"
+    },
+    {
+      "confidence": "MEDIUM",
+      "detector_id": "KNOWLEDGE_GAP",
+      "effort": 2,
+      "evidence": [
+        {
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED",
+          "entities": [
+            "ent_case_closed",
+            "ent_knowledge_articles"
+          ],
+          "evidenceType": "Metric",
+          "id": "ev_sf_golden_0004",
+          "packId": "service_cloud",
+          "provenanceType": "observed",
+          "snippet": "30 of 60 closed Cases in the last 90 days have a linked Knowledge Article. Knowledge gap score: 0.5 (threshold: 0.4). 50.0% of Cases closed with KB reuse \u2014 30 resolved without KB linkage.",
+          "source": "Salesforce",
+          "title": "Significant knowledge gap in Case resolution \u2014 low KB article linkage",
+          "tsLabel": "<normalized>"
+        }
+      ],
+      "evidenceIds": [
+        "ev_sf_golden_0004"
+      ],
+      "impact": 4,
+      "metric_value": 0.5,
+      "opportunity_identity": "opp_8fe6504d56c54ebecf0cb30a",
+      "orgId": "r191-p1-golden-org",
+      "packId": "service_cloud",
+      "packVersion": "1.0.0",
+      "raw_evidence": {
+        "cases_with_kb_link": 30,
+        "closed_cases_90d": 60,
+        "knowledge_gap_score": 0.5
+      },
+      "roadmap_stage": "NEXT_30",
+      "runId": "r191-p1-single-pack-golden",
+      "score_debug": {
+        "effective_proxy_ratio": 1.25,
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 2.0,
+          "proc_pts": 2.0,
+          "sys_pts": 2.0
+        },
+        "impact_factors": {
+          "customer_pts": 3.0,
+          "external_pts": 1.0,
+          "friction_pts": 5.0,
+          "raw_impact_max": 6.1,
+          "raw_impact_min": 1.2,
+          "raw_sum": 2.7,
+          "revenue_pts": 0.0,
+          "volume_pts": 2.0,
+          "weighted_raw": 2.7
+        },
+        "proxy_ratio": 1.25,
+        "source_weighting": null,
+        "t3_ceiling_clamp": {
+          "applied": false,
+          "confidence_after_clamp": "MEDIUM",
+          "confidence_before_clamp": "MEDIUM",
+          "role": "",
+          "system_id": "salesforce"
+        },
+        "t4_provenance": {
+          "base_role_weight": 1.0,
+          "confidence_after_provenance": "MEDIUM",
+          "confidence_before_provenance": "MEDIUM",
+          "confidence_clamped": false,
+          "effective_weight": 1.0,
+          "observed_beats_inferred_holds": true,
+          "provenance_type": "observed",
+          "source_weight": 1.0,
+          "weight_capped": false
+        }
+      },
+      "signal_source": "salesforce",
+      "threshold": 0.4,
+      "tier": "Quick Win"
+    },
+    {
+      "confidence": "MEDIUM",
+      "detector_id": "INTEGRATION_CONCENTRATION",
+      "effort": 3,
+      "evidence": [
+        {
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED",
+          "entities": [
+            "ent_credential_servicenow_integration"
+          ],
+          "evidenceType": "Metric",
+          "id": "ev_sf_golden_0005",
+          "packId": "service_cloud",
+          "provenanceType": "observed",
+          "snippet": "3 active Flow(s) reference the 'ServiceNow Integration' Named Credential (threshold: 3 distinct flows). Match type: name. Referencing flow IDs: 301xx000001ABC2, 301xx000001ABC3, 301xx000001ABC4.",
+          "source": "Salesforce",
+          "title": "Multiple Flows referencing the same Named Credential 'ServiceNow Integration'",
+          "tsLabel": "<normalized>"
+        }
+      ],
+      "evidenceIds": [
+        "ev_sf_golden_0005"
+      ],
+      "impact": 1,
+      "metric_value": 3.0,
+      "opportunity_identity": "opp_3be4f534577e281b8ed97a23",
+      "orgId": "r191-p1-golden-org",
+      "packId": "service_cloud",
+      "packVersion": "1.0.0",
+      "raw_evidence": {
+        "credential_developer_name": "ServiceNow_Integration",
+        "credential_name": "ServiceNow Integration",
+        "flow_reference_count": 3,
+        "match_type": "name",
+        "referencing_flow_ids": [
+          "301xx000001ABC2",
+          "301xx000001ABC3",
+          "301xx000001ABC4"
+        ]
+      },
+      "roadmap_stage": "NEXT_30",
+      "runId": "r191-p1-single-pack-golden",
+      "score_debug": {
+        "effective_proxy_ratio": 1.0,
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 2.0,
+          "proc_pts": 2.0,
+          "sys_pts": 5.0
+        },
+        "impact_factors": {
+          "customer_pts": 0.0,
+          "external_pts": 3.0,
+          "friction_pts": 2.0,
+          "raw_impact_max": 6.1,
+          "raw_impact_min": 1.2,
+          "raw_sum": 1.4,
+          "revenue_pts": 0.0,
+          "volume_pts": 2.0,
+          "weighted_raw": 1.4
+        },
+        "proxy_ratio": 1.0,
+        "source_weighting": null,
+        "t3_ceiling_clamp": {
+          "applied": false,
+          "confidence_after_clamp": "MEDIUM",
+          "confidence_before_clamp": "MEDIUM",
+          "role": "",
+          "system_id": "salesforce"
+        },
+        "t4_provenance": {
+          "base_role_weight": 1.0,
+          "confidence_after_provenance": "MEDIUM",
+          "confidence_before_provenance": "MEDIUM",
+          "confidence_clamped": false,
+          "effective_weight": 1.0,
+          "observed_beats_inferred_holds": true,
+          "provenance_type": "observed",
+          "source_weight": 1.0,
+          "weight_capped": false
+        }
+      },
+      "signal_source": "salesforce",
+      "threshold": 3.0,
+      "tier": "Quick Win"
+    },
+    {
+      "confidence": "MEDIUM",
+      "detector_id": "PERMISSION_BOTTLENECK",
+      "effort": 3,
+      "evidence": [
+        {
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED",
+          "entities": [
+            "ent_approval_discount_approval",
+            "ent_user_approvers"
+          ],
+          "evidenceType": "Metric",
+          "id": "ev_sf_golden_0006",
+          "packId": "service_cloud",
+          "provenanceType": "observed",
+          "snippet": "60 pending 'Discount Approval' records. Only 2 active approver(s) identified via ProcessInstanceWorkitem. Bottleneck score: 30.0 pending per approver (threshold: 10.0).",
+          "source": "Salesforce",
+          "title": "Approval queue overloaded with limited approver capacity in 'Discount Approval'",
+          "tsLabel": "<normalized>"
+        }
+      ],
+      "evidenceIds": [
+        "ev_sf_golden_0006"
+      ],
+      "impact": 5,
+      "metric_value": 30.0,
+      "opportunity_identity": "opp_e6d14079032d42b746c132b4",
+      "orgId": "r191-p1-golden-org",
+      "packId": "service_cloud",
+      "packVersion": "1.0.0",
+      "raw_evidence": {
+        "approver_count": 2,
+        "bottleneck_score": 30.0,
+        "pending_count": 60,
+        "process_name": "Discount Approval"
+      },
+      "roadmap_stage": "NEXT_30",
+      "runId": "r191-p1-single-pack-golden",
+      "score_debug": {
+        "effective_proxy_ratio": 3.0,
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 5.0,
+          "proc_pts": 5.0,
+          "sys_pts": 2.0
+        },
+        "impact_factors": {
+          "customer_pts": 0.0,
+          "external_pts": 1.0,
+          "friction_pts": 8.0,
+          "raw_impact_max": 6.1,
+          "raw_impact_min": 1.2,
+          "raw_sum": 3.3,
+          "revenue_pts": 2.0,
+          "volume_pts": 2.0,
+          "weighted_raw": 3.3
+        },
+        "proxy_ratio": 3.0,
+        "source_weighting": null,
+        "t3_ceiling_clamp": {
+          "applied": false,
+          "confidence_after_clamp": "MEDIUM",
+          "confidence_before_clamp": "MEDIUM",
+          "role": "",
+          "system_id": "salesforce"
+        },
+        "t4_provenance": {
+          "base_role_weight": 1.0,
+          "confidence_after_provenance": "MEDIUM",
+          "confidence_before_provenance": "MEDIUM",
+          "confidence_clamped": false,
+          "effective_weight": 1.0,
+          "observed_beats_inferred_holds": true,
+          "provenance_type": "observed",
+          "source_weight": 1.0,
+          "weight_capped": false
+        }
+      },
+      "signal_source": "salesforce",
+      "threshold": 10.0,
+      "tier": "Quick Win"
+    },
+    {
+      "confidence": "MEDIUM",
+      "detector_id": "CROSS_SYSTEM_ECHO",
+      "effort": 3,
+      "evidence": [
+        {
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED",
+          "entities": [
+            "ent_case_all_categories",
+            "ent_incident_servicenow_access"
+          ],
+          "evidenceType": "Log",
+          "id": "ev_sf_golden_0007",
+          "packId": "service_cloud",
+          "provenanceType": "observed",
+          "snippet": "75 of 300 Salesforce Cases reference external ticket IDs (SF echo score: 0.25, threshold: 0.15). 62 of 280 Jira CRM issues reference Salesforce cases (Jira echo score: 0.22). Patterns matched: CS-, INC-, JIRA-.",
+          "source": "Salesforce",
+          "title": "Cross-system ticket duplication detected across Salesforce and external systems",
+          "tsLabel": "<normalized>"
+        },
+        {
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED",
+          "entities": [
+            "ent_case_all_categories"
+          ],
+          "evidenceType": "Log",
+          "id": "ev_jira_golden_0008",
+          "packId": "service_cloud",
+          "provenanceType": "observed",
+          "snippet": "62 of 280 Jira issues reference Salesforce case IDs (Jira echo score: 0.22). Corroborates cross-system duplication signal from 280 issues in 90 days.",
+          "source": "Jira",
+          "title": "Jira cross-system echo: 62 issues reference Salesforce cases",
+          "tsLabel": "<normalized>"
+        }
+      ],
+      "evidenceIds": [
+        "ev_sf_golden_0007",
+        "ev_jira_golden_0008"
+      ],
+      "impact": 4,
+      "metric_value": 0.25,
+      "opportunity_identity": "opp_48ec8cd334189ea52a32b9a6",
+      "orgId": "r191-p1-golden-org",
+      "packId": "service_cloud",
+      "packVersion": "1.0.0",
+      "raw_evidence": {
+        "jira_echo_score": 0.22,
+        "jira_sf_label_count": 62,
+        "jira_total_issues": 280,
+        "matched_patterns": [
+          "CS-",
+          "INC-",
+          "JIRA-"
+        ],
+        "sf_echo_count": 75,
+        "sf_echo_score": 0.25,
+        "sf_total_cases": 300,
+        "sn_echo_score": 0.0,
+        "sn_match_count": 0,
+        "sn_total_incidents": 0
+      },
+      "roadmap_stage": "NEXT_30",
+      "runId": "r191-p1-single-pack-golden",
+      "score_debug": {
+        "effective_proxy_ratio": 1.6667,
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 2.0,
+          "proc_pts": 5.0,
+          "sys_pts": 5.0
+        },
+        "impact_factors": {
+          "customer_pts": 0.0,
+          "external_pts": 3.0,
+          "friction_pts": 5.0,
+          "raw_impact_max": 6.1,
+          "raw_impact_min": 1.2,
+          "raw_sum": 2.675,
+          "revenue_pts": 0.0,
+          "volume_pts": 3.5,
+          "weighted_raw": 2.675
+        },
+        "proxy_ratio": 1.6667,
+        "source_weighting": null,
+        "t3_ceiling_clamp": {
+          "applied": false,
+          "confidence_after_clamp": "MEDIUM",
+          "confidence_before_clamp": "MEDIUM",
+          "role": "",
+          "system_id": "salesforce"
+        },
+        "t4_provenance": {
+          "base_role_weight": 1.0,
+          "confidence_after_provenance": "MEDIUM",
+          "confidence_before_provenance": "MEDIUM",
+          "confidence_clamped": false,
+          "effective_weight": 1.0,
+          "observed_beats_inferred_holds": true,
+          "provenance_type": "observed",
+          "source_weight": 1.0,
+          "weight_capped": false
+        }
+      },
+      "signal_source": "salesforce",
+      "threshold": 0.15,
+      "tier": "Quick Win"
+    }
+  ],
+  "run": {
+    "detectorsExecuted": [
+      "REPETITIVE_AUTOMATION",
+      "HANDOFF_FRICTION",
+      "APPROVAL_BOTTLENECK",
+      "KNOWLEDGE_GAP",
+      "INTEGRATION_CONCENTRATION",
+      "PERMISSION_BOTTLENECK",
+      "CROSS_SYSTEM_ECHO"
+    ],
+    "mode": "offline",
+    "packId": "service_cloud",
+    "packIds": [
+      "service_cloud"
+    ],
+    "packName": "Service Cloud",
+    "packVersion": "1.0.0",
+    "packVersions": {
+      "service_cloud": "1.0.0"
+    },
+    "succeeded": [
+      "salesforce",
+      "jira"
+    ],
+    "topLevelEvidence": []
+  }
+}

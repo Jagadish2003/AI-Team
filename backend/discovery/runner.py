@@ -564,6 +564,62 @@ def _surface_operational_credential_health(
         )
 
 
+#: Run-scoped KV key holding the assembled cloud-event signature rows.
+#: Read-only surface: ``GET /api/runs/{runId}/cloud-ops/event-signatures``.
+KV_CLOUD_OPS_EVENT_SIGNATURES = "cloud_ops_event_signatures"
+
+
+def _persist_cloud_ops_event_signatures(run_id: str, block: Dict[str, Any]) -> None:
+    """Persist the assembled ``cloud_ops.event_signatures`` rows for this run.
+
+    The rows are the EXACT detector input ``build_cloud_ops_runtime`` produced —
+    stored verbatim, computed nowhere else, so this is a record of what the run
+    actually saw rather than a re-derivation. Until now the only trace a run left
+    of them was the count in the ``cloudOpsRuntime`` health block and the assembly
+    log line: ``build_org_context`` does not carry the cloud_ops block, nothing in
+    the app layer persists it, and ``AzureEventIngestor.produces_retrieval_content
+    = False`` means no per-event telemetry is emitted either. A signature VALUE
+    therefore only survived a run inside a FIRED finding's evidence — which cannot
+    exist until a ServiceNow incident already carries that signature. This write
+    breaks that circularity so the values can be read and stamped into ServiceNow.
+
+    Write-only, additive, and strictly after assembly: it reads ``block`` and
+    never mutates it, so no detector, corroboration, or scoring input changes.
+    Non-blocking — any KV problem is logged and swallowed, exactly like
+    :func:`_surface_operational_credential_health`.
+    """
+    rows = block.get("event_signatures")
+    if not isinstance(rows, list):
+        return
+    try:
+        try:
+            from app.db import run_kv_set
+        except ModuleNotFoundError:  # project-root execution uses backend as package
+            from backend.app.db import run_kv_set  # type: ignore
+
+        run_kv_set(
+            KV_CLOUD_OPS_EVENT_SIGNATURES,
+            run_id,
+            {
+                "runId": run_id,
+                "capturedAt": datetime.now(timezone.utc).isoformat(),
+                "count": len(rows),
+                "rows": rows,
+            },
+        )
+        logger.info(
+            "Persisted %d cloud-ops event signature row(s) for run %s "
+            "(read via GET /api/runs/%s/cloud-ops/event-signatures)",
+            len(rows), run_id, run_id,
+        )
+    except Exception as e:  # noqa: BLE001 — persisting the record is non-blocking.
+        logger.warning(
+            "Could not persist cloud-ops event signatures (non-blocking) "
+            "run=%s: [%s]",
+            run_id, type(e).__name__,
+        )
+
+
 def _ingest_ops_event_bridge(org_id: str, run_id: str) -> Dict[str, Any]:
     """Drive MSP-B8 on the shared checkpoint path and validate each batch.
 
@@ -649,6 +705,23 @@ def _ingest_ops_event_bridge(org_id: str, run_id: str) -> Dict[str, Any]:
             result.checkpoint_advanced,
         )
     return {"records": collected, "health": health}
+
+
+def _cloud_event_step_ok(result: Dict[str, Any]) -> bool:
+    """Whether a native cloud-event ingest counts as a SUCCESSFUL discovery step.
+
+    The two native cloud connectors report a health ``status`` rather than raising
+    (both are non-blocking), so the Discovery Progress step outcome is derived from
+    it: ``ok``/``degraded`` are successes — degraded means partial data was ingested
+    and the reason is already carried in the run's ``cloudOpsRuntime`` health block,
+    so a red "failed" row would overstate it. ``unavailable`` (import/config/ingest
+    failure) and ``not_configured`` (selected for the run but no pinned
+    accounts/subscriptions) are failures: the connector delivered nothing, and a
+    green check on a source that produced no events is exactly the dishonest
+    reporting the progress list exists to prevent.
+    """
+    status = str((result.get("health") or {}).get("status") or "").strip().lower()
+    return status in {"ok", "degraded"}
 
 
 def _ingest_aws_events(org_id: str, run_id: str) -> Dict[str, Any]:
@@ -739,10 +812,16 @@ def _ingest_aws_events(org_id: str, run_id: str) -> Dict[str, Any]:
 
     status = "degraded" if result.error is not None else "ok"
     accounts = _aws_account_health(ingestor)
+    poll = _cloud_poll_health(ingestor)
     # AC8: a per-account auth/throttle failure is LOUD. Even when the run itself
     # succeeded, an account that failed degrades the connector's reported status —
     # a partial ingest must never read as a clean one.
     if accounts and not accounts.get("all_healthy", True):
+        status = "degraded"
+    # Same rule for an undrained backlog: a scope that stopped on the per-run poll
+    # bound (poll cap / deadline / B7 budget) resumes next run, but this run's ingest
+    # was partial and must say so rather than reporting a clean pass.
+    if poll and not poll.get("complete", True):
         status = "degraded"
     health: Dict[str, Any] = {
         "status": status,
@@ -753,6 +832,7 @@ def _ingest_aws_events(org_id: str, run_id: str) -> Dict[str, Any]:
         "first_run": bool(result.first_run),
         "checkpoint_advanced": bool(result.checkpoint_advanced),
         "accounts": accounts,
+        "poll": poll,
     }
     if result.error is not None:
         health["reason"] = type(result.error).__name__
@@ -771,6 +851,21 @@ def _ingest_aws_events(org_id: str, run_id: str) -> Dict[str, Any]:
         )
     _surface_cloud_account_health(org_id, run_id, "aws_events", accounts)
     return {"records": collected, "health": health}
+
+
+def _cloud_poll_health(ingestor: Any) -> Dict[str, Any]:
+    """The native cloud connector's poll-phase report, or ``{}`` when unavailable.
+
+    Names the scopes whose backlog did NOT drain this run and the per-run bound that
+    stopped each (MSP-B1: an early stop is resume, not truncation — but it must be
+    visible). Never raises: reporting must not be able to fail a good run.
+    """
+    try:
+        report = getattr(ingestor, "poll_report", None)
+        return dict(report()) if callable(report) else {}
+    except Exception:  # noqa: BLE001 — health is advisory, never fatal
+        logger.debug("Could not read cloud connector poll report (non-blocking)", exc_info=True)
+        return {}
 
 
 def _aws_account_health(ingestor: Any) -> Dict[str, Any]:
@@ -977,6 +1072,54 @@ def _ingest_azure_events(org_id: str, run_id: str) -> Dict[str, Any]:
         "first_run": bool(result.first_run),
         "checkpoint_advanced": bool(result.checkpoint_advanced),
     }
+    # MSP-B7 T4: the connector admits its own events, so its budget report is the
+    # deferral proof for this poll. A breached budget is a partial ingest and must
+    # never be reported as a clean one (mirrors the AWS `poll` health block).
+    try:
+        budget = ingestor.budget_report()
+    except Exception:  # noqa: BLE001 — health reporting is never run-critical
+        budget = {}
+    if budget:
+        health["budget"] = dict(budget)
+        if budget.get("breached"):
+            health["status"] = "degraded"
+            health.setdefault("reason", "run_event_budget_exhausted")
+    # 2.0-D3 T4: the budget's own counters can only report events it SAW, so a poll
+    # the budget stopped before it fetched anything leaves `breached` False — which
+    # would report a run that skipped whole subscriptions as a clean one. The
+    # connector's deferral report names those polls; mirrors the AWS `poll` block.
+    try:
+        deferrals = ingestor.deferral_report()
+    except Exception:  # noqa: BLE001 — health reporting is never run-critical
+        deferrals = {}
+    if deferrals and not deferrals.get("complete", True):
+        health["deferrals"] = dict(deferrals)
+        health["status"] = "degraded"
+        health.setdefault("reason", deferrals.get("reason", "run_event_budget_exhausted"))
+    # 2.0-D3 T1: the Application Insights picture for this poll. Derived from the
+    # emitted records (each in-scope record carries its scope on the WRAPPER), so no
+    # extra plumbing is needed and run health states what the bounded App Insights
+    # read actually produced rather than leaving it implicit inside the connector.
+    # Omitted entirely when the poll met no App Insights signal, so a run with no
+    # App Insights estate reports exactly the health block it reported before D3.
+    app_insights_records = [r for r in collected if r.get("app_insights")]
+    if app_insights_records:
+        by_kind: Dict[str, int] = {}
+        components: set = set()
+        for record in app_insights_records:
+            scope = record.get("app_insights") or {}
+            # An in-scope record whose kind could not be established is counted as
+            # 'unclassified' rather than folded into a real kind — the same honesty
+            # the classifier itself applies (see azure_app_insights.py).
+            kind = scope.get("signal_kind") or "unclassified"
+            by_kind[kind] = by_kind.get(kind, 0) + 1
+            if scope.get("component_id"):
+                components.add(str(scope["component_id"]))
+        health["app_insights"] = {
+            "records": len(app_insights_records),
+            "components": sorted(components),
+            "by_signal_kind": dict(sorted(by_kind.items())),
+        }
     if result.error is not None:
         health["reason"] = type(result.error).__name__
         logger.warning(
@@ -1660,6 +1803,7 @@ def run(
         is_enterprise_ops_pack,
         is_cloud_ops_pack,
         is_security_ops_pack,
+        is_financial_services_cloud_pack,
     )
     from .packs.platform_capabilities import get_platform_version
 
@@ -1755,6 +1899,7 @@ def run(
     _any_db_opsignal = "sqlserver_opsignal" in _selected_domains
     _any_security_ops = "security_ops" in _selected_domains
     _any_cloud_ops = "cloud_ops" in _selected_domains
+    _any_fsc = "financial_services_cloud" in _selected_domains
 
     # Default to all systems if None
     if mode is None:
@@ -2031,7 +2176,13 @@ def run(
     # OpsEventStream folds duplicate signatures — so native + bridge never
     # double-count. Non-blocking, exactly like the bridge.
     if _any_cloud_ops and "azure_events" in _systems:
+        update_run_step(run_id, "azure_events")
         azure_events_data = _ingest_azure_events(org_id, run_id)
+        update_run_step(
+            run_id,
+            "azure_events",
+            ok=_cloud_event_step_ok(azure_events_data),
+        )
 
     # MSP-B1: the NATIVE AWS Event Connector — the AWS half of the B1/B2 pair, and
     # the live counterpart of the B8 bridge for AWS. Identical gating and posture
@@ -2041,7 +2192,13 @@ def run(
     # assembly seam — where the OpsEventStream folds duplicate signatures, so a
     # native event and its bridged twin never double-count. Non-blocking.
     if _any_cloud_ops and "aws_events" in _systems:
+        update_run_step(run_id, "aws_events")
         aws_events_data = _ingest_aws_events(org_id, run_id)
+        update_run_step(
+            run_id,
+            "aws_events",
+            ok=_cloud_event_step_ok(aws_events_data),
+        )
 
     # Single-ingest: materialization now hands the runner ALL connected systems
     # (not just the ones a probe pre-pass confirmed had data), so guard against
@@ -2210,6 +2367,48 @@ def run(
             ncino_ok = False
             logger.warning("nCino ingestion failed (non-blocking): %s", e)
         update_run_step(run_id, "sf_ncino", ok=ncino_ok)
+
+    # 2a-ii. Financial Services Cloud ingest (2.0-D1 T2) — FSC managed-package
+    # objects (FinServ__Referral__c, FinServ__FinancialAccount__c and their
+    # histories) alongside the standard-object reads, normalised into ONE
+    # detector-visible block at sf_data["fsc"]. Mirrors the nCino block above:
+    # gated on the pack being selected AND Salesforce being connected, merged into
+    # sf_data, and NON-BLOCKING — an FSC ingest failure degrades this pack's
+    # signal rather than aborting a run that may also be running other packs.
+    if _any_fsc and "salesforce" in _systems:
+        fsc_ok = True
+        try:
+            from .ingest.fsc import ingest as fsc_ingest
+            fsc_data = fsc_ingest()
+            if sf_data is None:
+                sf_data = {}
+            sf_data["fsc"] = fsc_data
+            logger.info(
+                "FSC ingestion: OK — %d servicing-request type(s), %d referral "
+                "route(s), %d review type(s), %d queue(s), %d rework pair(s)",
+                len(fsc_data.get("servicing_requests", [])),
+                len(fsc_data.get("referral_handoffs", [])),
+                len(fsc_data.get("approval_reviews", [])),
+                len(fsc_data.get("service_queues", [])),
+                len(fsc_data.get("cross_object_rework", [])),
+            )
+            _fsc_meta = fsc_data.get("_meta", {}) or {}
+            if _fsc_meta.get("unavailable_objects"):
+                logger.warning(
+                    "FSC ingestion: object(s) unavailable in this org — %s. The "
+                    "signals that read them degrade to empty.",
+                    _fsc_meta["unavailable_objects"],
+                )
+            if _fsc_meta.get("record_types_unresolved"):
+                logger.warning(
+                    "FSC ingestion: %s case(s) had an unresolvable RecordType and "
+                    "were excluded from scope rather than assumed in-scope.",
+                    _fsc_meta["record_types_unresolved"],
+                )
+        except Exception as e:
+            fsc_ok = False
+            logger.warning("FSC ingestion failed (non-blocking): %s", e)
+        update_run_step(run_id, "sf_fsc", ok=fsc_ok)
 
     # 2b. STRS Benefits ingest — if strs_benefits pack
     from .packs.pack_config import is_strs_benefits_pack as _is_strs
@@ -2393,6 +2592,10 @@ def run(
                 len(runtime.block.get("oscillation_records") or ()),
                 len(runtime.block.get("event_signatures") or ()),
             )
+            # Objective 2: record the assembled signature rows so they survive the
+            # run. Read-only over `runtime.block`, after every detector input is
+            # final — nothing downstream observes this call.
+            _persist_cloud_ops_event_signatures(run_id, runtime.block)
         except Exception as exc:  # noqa: BLE001
             cloud_ops_runtime_health = {
                 "status": "unavailable",
@@ -2455,6 +2658,13 @@ def run(
         score_security_ops,
         is_security_ops_detector,
         rank_security_ops_findings,
+    )
+    # 2.0-D1 T3: FSC scoring calibration (per-detector base scores in the scorer's
+    # _FSC_SCORES with inline provenance; the three dimension weights in pack config).
+    from .packs.financial_services_cloud_scorer import (
+        score_financial_services_cloud,
+        is_financial_services_cloud_detector,
+        rank_fsc_findings,
     )
     from .evidence_builder import build_evidence
     # R16-B1 (T3): stable cross-run opportunity identity, computed at assembly.
@@ -2539,6 +2749,23 @@ def run(
                 approval_bottleneck,
             ]
             logger.info("Pack: ncino — 5 lending detectors active")
+        elif is_financial_services_cloud_pack(pack_id):
+            # 2.0-D1 T2 — five FSC detectors reading sf_data["fsc"].
+            from .detectors import (
+                fsc_servicing_request_recurrence,
+                fsc_referral_handoff_friction,
+                fsc_approval_review_cycle,
+                fsc_service_queue_ageing,
+                fsc_cross_object_rework,
+            )
+            all_detectors = [
+                fsc_servicing_request_recurrence,
+                fsc_referral_handoff_friction,
+                fsc_approval_review_cycle,
+                fsc_service_queue_ageing,
+                fsc_cross_object_rework,
+            ]
+            logger.info("Pack: financial_services_cloud — 5 FSC detectors active")
         elif _is_strs(pack_id):
             from .detectors import (
                 application_stall,
@@ -2661,6 +2888,20 @@ def run(
                 _validated,
             )
 
+        # 2.0-D1 T2: the FSC pack's four-part contract AND its AC5 aggregation
+        # floor are enforced at the pack boundary. Deliberately NOT wrapped in a
+        # try/except — a finding missing a contract part, or one that names an
+        # individual, must fail the run rather than reach a report.
+        if is_financial_services_cloud_pack(pack_id):
+            from .packs.fsc_finding import enforce_pack_findings
+
+            _validated = enforce_pack_findings(detector_results)
+            logger.info(
+                "Pack: financial_services_cloud — four-part contract and "
+                "no-individuals floor enforced on %d finding(s)",
+                _validated,
+            )
+
         if is_security_ops_pack(pack_id):
             from .packs.security_ops_ai_mode import apply_ai_mode_gate
 
@@ -2771,6 +3012,42 @@ def run(
                 e,
             )
 
+        # 2.0-B2 T4 (AC3): refresh the cross-source match proposals for this org.
+        # Placed AFTER relationship mapping because the ranked engine's tier-3
+        # corroboration reads the observed edges written above — scanning earlier
+        # would judge the graph as it was before this run.
+        #
+        # Writes nothing to the graph: the engine only decides (T1), and a pair a
+        # human has already confirmed or rejected is never re-proposed (the store
+        # keys decisions on a stable source identity, so a decision survives entity
+        # row ids changing between runs). Non-blocking for the same reason entity
+        # extraction is: a review queue is not worth failing a run over.
+        try:
+            from app.entity_match_proposals import scan_for_proposals
+
+            _proposal_outcome = scan_for_proposals(org_id)
+            if (
+                _proposal_outcome.created
+                or _proposal_outcome.skipped_already_decided
+            ):
+                logger.info(
+                    "2.0-B2 cross-source match proposals: run_id=%s org_id=%s "
+                    "created=%d refreshed=%d already_decided=%d",
+                    run_id,
+                    org_id,
+                    _proposal_outcome.created,
+                    _proposal_outcome.refreshed,
+                    _proposal_outcome.skipped_already_decided,
+                )
+        except Exception as e:
+            logger.warning(
+                "Cross-source match proposal scan failed (non-blocking): "
+                "run_id=%s org_id=%s error=%s",
+                run_id,
+                org_id,
+                e,
+            )
+
         # Issue 3 fix: collect Jira/SN lending correlation by detector for ncino pack.
         # Wave 2 (ENG-AIQ-NC-2/NC-3) built lending_correlation — wire it into evidence here.
         jira_by_detector: Dict[str, List[str]] = {}
@@ -2849,6 +3126,19 @@ def run(
                     _rank_err,
                 )
 
+        # 2.0-D1 T3: FSC ops-impact ranking, computed once per run so the three
+        # config-weighted dimensions normalise across the whole finding SET.
+        _fsc_ranking: Dict[int, Dict[str, Any]] = {}
+        if is_financial_services_cloud_pack(pack_id):
+            try:
+                _fsc_ranking = rank_fsc_findings(detector_results)
+            except Exception as _rank_err:  # noqa: BLE001 — ranking is non-blocking.
+                logger.warning(
+                    "financial_services_cloud ops-impact ranking failed "
+                    "(non-blocking): %s",
+                    _rank_err,
+                )
+
         pack_opportunities: List[Dict[str, Any]] = []
         for dr in detector_results:
             # Select scorer based on pack — this pack scores ONLY its own detectors
@@ -2883,6 +3173,13 @@ def run(
                 scored = score_cloud_ops(dr, ranking=_cloud_ops_ranking)
             elif is_security_ops_pack(pack_id) and is_security_ops_detector(dr.detector_id):
                 scored = score_security_ops(dr, ranking=_security_ops_ranking)
+            elif (
+                is_financial_services_cloud_pack(pack_id)
+                and is_financial_services_cloud_detector(dr.detector_id)
+            ):
+                # 2.0-D1 T3: FSC-specific calibration. Same two-key guard as every
+                # other pack, so no pack ever applies another pack's calibration.
+                scored = score_financial_services_cloud(dr, ranking=_fsc_ranking)
             else:
                 # R16-C1 T1: pass weighting context so the scorer can read
                 # role/priority for dr.signal_source (modulation is T2 work).
@@ -3193,6 +3490,12 @@ def main():
 
     if args.output_format == "track_a_seed":
         payload = export_track_a_seed(payload)
+
+    # 2.0-B1 T5 (AC5): this CLI writes the FULL run payload (opportunities +
+    # evidence) to disk, so it is an export path — redact secrets and enforce
+    # the 1.9 aggregation floor before anything is serialised.
+    from .export_safety import guard_exported_payload
+    payload = guard_exported_payload(payload, where="runner CLI payload export")
 
     out = json.dumps(payload, indent=2)
     if args.output:

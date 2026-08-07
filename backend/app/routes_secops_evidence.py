@@ -15,6 +15,12 @@ from discovery.packs.security_ops_evidence_resolver import (
 )
 
 from . import db
+from .middleware.audit import (
+    EVIDENCE_POINTER_RESOLVED,
+    OUTCOME_FAILURE,
+    OUTCOME_SUCCESS,
+    log_event,
+)
 from .middleware.tenancy import get_current_org_id
 from .rbac import _get_user_id_from_token, get_user_role, require_role
 from .security import require_auth
@@ -76,7 +82,7 @@ def resolve_secops_evidence(
         record_event(event_type, {**payload, "run_id": run_id})
 
     try:
-        return resolve_evidence_pointer(
+        resolved = resolve_evidence_pointer(
             body.pointer,
             requesting_org=org_id,
             user_id=user_id,
@@ -85,12 +91,37 @@ def resolve_secops_evidence(
             emit=emit,
         )
     except EvidenceAccessDenied as exc:
+        # 2.0-D4 T1 (AC1): a REFUSED disclosure is audited too, with
+        # outcome=failure. A trail that records only successful reads cannot
+        # answer "who tried to reach evidence they were not entitled to?", which
+        # is the question a security review actually asks.
+        log_event(
+            EVIDENCE_POINTER_RESOLVED,
+            run_id=run_id,
+            user_id=user_id,
+            target=f"{run_id}:secops_evidence",
+            reason=exc.reason,
+            outcome=OUTCOME_FAILURE,
+        )
         if exc.reason == REASON_INSUFFICIENT_ROLE:
             raise HTTPException(status_code=403, detail="Insufficient role")
         if exc.reason == REASON_INVALID_POINTER:
             raise HTTPException(status_code=400, detail="invalid evidence pointer")
         # Same response for absent and cross-org records.
         raise HTTPException(status_code=404, detail="evidence pointer not found")
+
+    # The pointer identifies the record; the record's CONTENT is never copied
+    # into the audit row — the trail says who read what, not what it said.
+    log_event(
+        EVIDENCE_POINTER_RESOLVED,
+        run_id=run_id,
+        user_id=user_id,
+        target=f"{run_id}:secops_evidence",
+        source_system=str(body.pointer.get("source_system") or ""),
+        source_artifact=str(body.pointer.get("source_artifact") or ""),
+        outcome=OUTCOME_SUCCESS,
+    )
+    return resolved
 
 
 def register_secops_evidence_routes(app: FastAPI) -> None:

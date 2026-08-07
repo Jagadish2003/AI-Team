@@ -87,6 +87,12 @@ _SOURCE_SYSTEM_FAMILY: Dict[str, str] = {
     "azuremonitor": "azure",
     "azureactivity": "azure",
     "azureactivitylog": "azure",
+    # 2.0-D3: Application Insights signals are Azure signals. Registering the
+    # family here is what makes an App Insights event's signature comparable with
+    # every other Azure event's — without it the source system would fall back to
+    # "generic" and the same recurring fault would fingerprint differently
+    # depending on which Azure surface reported it.
+    "azureappinsights": "azure",
     "eventbridge": "event_bridge",
     "eventhistorybridge": "event_bridge",
     "eventhistory": "event_bridge",

@@ -120,11 +120,11 @@ describe("AC1 — Source Intake absent from TopNav", () => {
       "Integration Hub",
       "Stack Builder",
       "Discovery Run",
-      "Run Health",
       "Source Intelligence",
       "Opportunity Review",
       "Agent Blueprint",
       "Executive Report",
+      "Run Health",
     ];
     for (const label of expectedItems) {
       expect(screen.getByText(label)).toBeDefined();
@@ -134,7 +134,7 @@ describe("AC1 — Source Intake absent from TopNav", () => {
     expect(screen.queryByText("Source Intake")).toBeNull();
   });
 
-  it("places Run Health immediately after Discovery Run in primary navigation", () => {
+  it("places Run Health last in primary navigation", () => {
     render(
       <MemoryRouter initialEntries={["/integration-hub"]}>
         <TopNav />
@@ -146,12 +146,16 @@ describe("AC1 — Source Intake absent from TopNav", () => {
       "Integration Hub",
       "Stack Builder",
       "Discovery Run",
-      "Run Health",
       "Source Intelligence",
       "Opportunity Review",
       "Agent Blueprint",
       "Executive Report",
+      // 2.0-B2 T3 — Entity Matches is workspace maintenance (org-scoped, not part
+      // of a run), so it sits AFTER the discovery flow, ahead of Run Health.
+      "Entity Matches",
+      "Run Health",
     ]);
+    expect(labels.at(-1)).toBe("Run Health");
   });
 });
 

@@ -303,11 +303,11 @@ class TestProvisioningRevokesEveryProtectedTable:
         for table in DELETABLE_TABLE_REASONS:
             assert f"'{table}'" not in ddl
 
-    def test_migration_0033_applies_the_revoke(self):
+    def test_migration_0044_applies_the_revoke(self):
         migration = (
-            _BACKEND_DIR / "migrations" / "versions" / "0033_revoke_history_deletion.py"
+            _BACKEND_DIR / "migrations" / "versions" / "0044_revoke_history_deletion.py"
         ).read_text(encoding="utf-8")
-        assert 'down_revision: Union[str, None] = "0032"' in migration
+        assert 'down_revision: Union[str, None] = "0043"' in migration
         assert "ALL_HISTORY_RETENTION_DDL" in migration
 
 

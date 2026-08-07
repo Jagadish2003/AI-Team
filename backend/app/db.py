@@ -468,7 +468,7 @@ def delete_run_events(run_id: str) -> None:
     the underlying rows remain.
 
     2.0-C1 T4 (AT-829 / AC4): ``run_events`` is a protected history table — the app
-    login role has DELETE/TRUNCATE REVOKED on it (provision.sql / alembic 0033), so
+    login role has DELETE/TRUNCATE REVOKED on it (provision.sql / alembic 0044), so
     this MUST stay an UPDATE. A previous version of this comment claimed the app role
     had "UPDATE but not DELETE" generally; that was not true of this provisioning
     path, which grants ALL PRIVILEGES and then revokes only on the protected tables.

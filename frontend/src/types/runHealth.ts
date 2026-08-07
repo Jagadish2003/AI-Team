@@ -11,6 +11,13 @@ export interface ConnectorHealthItem {
   checkpoint_position?: string | null;
   checkpoint_captured_at?: string | null;
   checkpoint_age_seconds?: number | null;
+  /**
+   * Number of per-stream checkpoints the reported age represents, when the
+   * connector checkpoints per stream ({connector_id}:{stream}) rather than under
+   * its bare id. Absent/null for a single-cursor connector. The age is that of the
+   * NEWEST stream — see health_aggregation._read_stream_checkpoint.
+   */
+  checkpoint_streams?: number | null;
   last_error?: string | null;
 }
 

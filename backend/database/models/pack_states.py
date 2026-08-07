@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS pack_state_history (
 """
 
 # 2.0-C1 T3 (AT-828): columns added to the T2 tables for version rollback. Applied
-# separately by migration 0032 so a deployment already carrying 0031's tables gains
+# separately by migration 0043 so a deployment already carrying 0042's tables gains
 # them without a table rebuild; ALL_PACK_STATE_DDL above already includes them for a
 # fresh install, and IF NOT EXISTS makes both paths idempotent.
 #

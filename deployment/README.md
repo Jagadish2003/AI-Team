@@ -345,6 +345,163 @@ python scripts/sign_pack_certifications.py --check
 Re-issuing signatures (after editing certification metadata, or on key rotation) is a
 release activity performed by the key holder — see
 [`docs/pack_certification.md`](../docs/pack_certification.md).
+## Signed Evidence Export (2.0-B1 T4)
+
+A finding — or a whole run's report — can be exported as a **signed, offline
+bundle** for auditors, regulators, and board packs. The bundle carries the
+finding's full provenance trace, the evidence records it references, the
+evidence-pointer spine, and the run + pack versions that produced it.
+
+| | |
+|---|---|
+| Per finding | `GET /api/runs/{run_id}/opportunities/{opp_id}/evidence-export` |
+| Per run report | `GET /api/runs/{run_id}/evidence-export` |
+| Download form | append `?download=1` to receive the canonical bytes as an attachment |
+| Role | `analyst` or above (the underlying trace is viewer-readable; issuing a *signed, distributable attestation* sits above plain viewer) |
+| Envelope | `{bundle, signature, algorithm}` — `algorithm` is `HMAC-SHA256` |
+
+**Signing key.** No new secret is introduced. The bundle is signed with the
+per-installation `report_key` carried in the Ed25519-signed license payload —
+the same key, and the same resolver, as the signed usage report. An installation
+with no `report_key` gets **HTTP 400 naming the reason**; an unsigned bundle is
+never returned. (Asymmetric signing is not possible at runtime: the CloudFulcrum
+Ed25519 *private* key never ships inside the product, so a verifier needs the
+installation's `report_key` — the same trust model as the usage report.)
+
+**Verifying a bundle (third party).** Hand the auditor the bundle file plus the
+installation's `report_key`. They verify **offline**, with no access to the
+deployment and no dependencies beyond the Python standard library:
+
+```bash
+python scripts/verify_evidence_export.py bundle.json --report-key <report_key>
+# or: REPORT_KEY=<report_key> python scripts/verify_evidence_export.py bundle.json
+```
+
+Exit code `0` = verified, `1` = not verified. Any altered byte fails. The script
+is deliberately self-contained and short enough to audit by eye; a unit test pins
+it against the product's own signer so the two cannot drift.
+
+**Two layers of tamper evidence.** The HMAC signature covers the whole canonical
+bundle, so any altered byte anywhere fails. Inside the signed bundle, an
+`integrity` block additionally records a per-record `content_hash` folded into a
+`content_root`, so a verifier can see *which* record changed — and because that
+block is itself signed, editing a record and recomputing its hash still fails the
+signature.
+
+**What is excluded from the export.** Secret redaction runs over exported content
+before signing, and the SecOps aggregation floor is enforced — a bundle that would
+enumerate host × vulnerability pairs is **refused**, not emitted with a caveat.
+The run's decision audit is deliberately outside that sweep: its actor identity is
+the point of an audit trail and an auditor requires it (the audit list has a fixed
+shape and cannot carry a security enumeration).
+
+**Bundle sizing.** A report-scope bundle covers at most `MAX_REPORT_FINDINGS`
+(200) findings; exceeding that sets `truncated: true` on the bundle rather than
+silently shortening an artifact someone will audit.
+
+### Export audit trail (2.0-B1 T6)
+
+**Every export generation is an audit event naming user, scope, and time.** An
+export is the one operation that puts signed content *outside* the deployment, so
+a security review needs to answer "who exported which artifact, when" — not
+merely "was one produced". There is no request-logging middleware for `GET`s in
+this app, so each export surface records explicitly through one shared write
+point (`backend/app/export_audit.py`); no surface can record a different shape,
+or forget to record at all.
+
+| Audit event | Written by | Scope values |
+|---|---|---|
+| `evidence_export_generated` | `GET .../evidence-export` (both paths, JSON **and** `?download=1`) | `finding`, `report` |
+| `usage_report_exported` | `GET /api/usage/report` (the L2 signed usage report) | `usage_report` |
+
+Each row carries:
+
+* **user** — the acting user in `audit_log.user_id`, resolved from the caller's
+  bearer token through the same fail-closed resolver RBAC uses (a JWT's signature
+  is verified before its `sub` claim is trusted, so an export cannot be
+  attributed to a spoofed user). An unresolvable caller is recorded as the
+  explicit `_unattributed` sentinel — never a blank that reads as "no user".
+* **scope** — what was exported, plus the identifiers of the exact artifact
+  (`run_id`, `opportunity_id`, or the reporting period).
+* **time** — the row's `timestamp` column, and an ISO-8601 UTC `timestamp` inside
+  the payload so the event carries its own time when the payload travels alone.
+* **artifact fingerprint** — `content_root`, record/finding counts, and a
+  16-character signature **prefix**. Never artifact content, never the whole MAC,
+  never a credential.
+
+Only a *successful* generation is recorded: a refused export (400 — no license
+`report_key`, or a content-discipline violation) and a denied one (403 — below
+`analyst`) produced no artifact, so recording them as exports would misreport the
+trail. Read the trail with the owner-only `GET /api/audit-log`, or query
+`audit_log` directly; `audit_log` is INSERT-only (no update/delete path).
+
+Adding a new export endpoint? Register it in `export_audit.EXPORT_AUDIT_SURFACES`
+and record through `record_export_generated(...)`. A conformance test fails
+otherwise, so an export surface cannot ship unaudited by omission.
+
+---
+
+## Export Content Guarantees (2.0-B1 T5 / AC5)
+
+Every path by which content leaves the deployment holds two lines, in this
+order, via the single shared guard `backend/app/export_guard.py`
+(discovery-side CLIs reach it through `backend/discovery/export_safety.py`):
+
+1. **Secrets are redacted, non-reversibly.** `secret_redaction` substitutes
+   `[REDACTED:<type>]` and returns only pattern *type* names — the matched value
+   is never stored, returned, or logged, and there is no reverse map or keyed
+   tokenisation. Retrieval-sourced content is already redacted upstream ("redact
+   before index, always"), but detector-built evidence snippets and narrative
+   prose are not, which is why exports redact again.
+2. **The 1.9 SecOps aggregation floor is enforced.** A payload that would name an
+   individual, a host, a CVE, or a host × vulnerability pair **refuses the
+   export** — it is never emitted with a caveat. Redaction runs first, so the
+   floor sweeps the bytes that would actually ship.
+
+**Guarded export paths**
+
+| Surface | Notes |
+|---|---|
+| `GET .../evidence-export` (per finding, per report) | Guarded in the builder, before signing — so the signature covers guarded bytes |
+| `discovery/offline_export.py` | Guards before writing `opportunities.json` / `evidence.json`; `--dry-run` runs the same guard |
+| `discovery/runner.py --output` | Writes the full run payload, so it is guarded before serialising |
+| `calibrator.py` / `live_validator.py` / `integration_verifier.py` `--report-path` | Run-derived reports, guarded before writing |
+| `secops_volume` run artifact | Swept at materialization alongside its four sibling SecOps outputs |
+
+**Deliberately exempt** (recorded so they are not "fixed" by mistake): the static
+partner security-artifact download (a shipped file, no tenant content); the
+owner-only usage report/summary (commercial aggregates, no run content); the
+demo seeder's own `seed_state.json` bookkeeping; and the single audited
+`secops/evidence/resolve` pointer lookup, which returns individual record content
+**by design** and is the one sanctioned route to it.
+
+**One narrow exclusion.** The run's decision audit is excluded from the *floor
+sweep only* (never from the exported payload): its `by` field is the analyst who
+recorded a decision, which is the entire point of an audit trail and which an
+auditor requires — but the floor flags any email as an individual reference.
+The audit list has a fixed shape and cannot carry an enumeration. Secrets are
+still redacted from it.
+
+**Why this is enforced on exports and not on the ordinary API reads.** The floor
+*raises*. Its IPv4 pattern matches any valid dotted quad, so a version string
+like "upgraded to 1.2.3.4" in LLM prose would turn a board-facing page into a
+hard error. Exports are documents a third party keeps, so refusing is the correct
+answer there; the UI reads are protected by the materialization-time sweep
+instead.
+
+**The client-side PDF.** `frontend/src/utils/exportPdf.ts` re-serialises API
+responses (it does not screenshot the DOM) and renders only the executive summary
+and opportunity titles — no evidence snippets, no `aiRationale`. Because it bakes
+titles into a chart raster that no text-based check could audit, enforcement for
+it stays server-side; duplicating the floor's regexes in TypeScript would create
+a second source of truth. `exportPdfAggregationFloor.test.ts` pins the field set
+it consumes so that reasoning cannot silently go stale.
+
+**Adding a new export?** `tests/unit/test_r2_0_b1_t5_export_surface_conformance.py`
+discovers export surfaces by walking the tree, and **default-denies**: a new one
+fails CI until it either routes through the guard or is added to the allow-list
+with a written `PROTECTED:`/`EXEMPT:` justification. A `PROTECTED` claim is
+verified against the code, so it cannot be a rubber stamp.
 
 ---
 

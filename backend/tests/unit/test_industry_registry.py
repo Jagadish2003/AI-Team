@@ -33,9 +33,9 @@ naming engineering-delivery friction as the primary signal category —
 additive (Salesforce variants stay primary too), not a Salesforce removal;
 (3) technology's pack_hints gain github_engineering (the pack that scores the
 already-connectable github default — the honest-pack-list gap the story
-names as its own example). The "1.9 cloud-ops/sec-ops packs" the story also
-names for this sub-goal have no registered pack_id in this codebase and are
-deliberately NOT invented (anchor-on-shipped).
+names as its own example). The 1.9 cloud-ops/security-ops packs the story also
+names for this sub-goal now have registered pack_ids, so technology includes
+them and the tests assert every hint remains registered.
 
 Pure-config module (no DB, no app import) — runs standalone, matching
 the repo's tests/unit/ purpose ("unit tests for individual backend modules").
@@ -311,13 +311,23 @@ def test_all_five_remaining_industries_recommend_the_new_database():
         assert "sqlserver" in config.recommended_systems, industry_id
 
 
-def test_all_eight_industries_now_carry_a_database_default():
-    """T1/T2's three industries plus T3's five equal all eight — AC4's
-    "databases in every industry profile where they are realistically core"
-    is now met across the whole registry, not just a subset."""
-    assert set(_ALL_INDUSTRIES_WITH_DATABASE) == set(INDUSTRY_REGISTRY)
-    for industry_id in INDUSTRY_REGISTRY:
+def test_all_eight_original_industries_carry_a_database_default():
+    """T1/T2's three industries plus T3's five equal the eight industries that
+    existed when AC4 ("databases in every industry profile where they are
+    realistically core") was stated — each still carries a database default.
+
+    2.0-D2 T4 later added a ninth industry, "insurance", which deliberately
+    carries NO database default: it exists to mirror the Insurance TEMPLATE's
+    shape exactly, and that template names no database source. So the AC4
+    invariant is scoped to the eight it was written for, and the ninth is
+    asserted to be present-but-DB-free rather than silently widening the rule.
+    """
+    assert set(_ALL_INDUSTRIES_WITH_DATABASE) <= set(INDUSTRY_REGISTRY)
+    for industry_id in _ALL_INDUSTRIES_WITH_DATABASE:
         assert get_system_defaults(industry_id, "sqlserver") is not None, industry_id
+    # The one industry (insurance) deliberately outside the database-anchor rule.
+    assert set(INDUSTRY_REGISTRY) - set(_ALL_INDUSTRIES_WITH_DATABASE) == {"insurance"}
+    assert get_system_defaults("insurance", "sqlserver") is None
 
 
 def test_energy_utilities_moves_sap_to_roadmap_for_full_ac1():
@@ -435,13 +445,13 @@ def test_technology_pack_hints_include_github_engineering():
     assert "github_engineering" in hints
 
 
-def test_technology_pack_hints_do_not_reference_an_unshipped_cloud_ops_pack():
-    """The story also names '1.9 cloud-ops/sec-ops packs' for technology, but
-    no such pack_id exists in pack_config.PACK_REGISTRY in this codebase —
-    anchor-on-shipped means it must not be invented."""
+def test_technology_pack_hints_include_registered_1_9_ops_packs():
+    """Technology carries the 1.9 ops packs and every hint is registered."""
     from discovery.packs.pack_config import PACK_REGISTRY
 
     hints = get_pack_hints("technology")
+    assert "cloud_ops" in hints
+    assert "security_ops" in hints
     for hint in hints:
         assert hint in PACK_REGISTRY, f"pack_hint '{hint}' has no registered pack"
 
@@ -482,8 +492,10 @@ def test_untouched_industries_have_no_roadmap_systems_and_are_unaffected():
         )
 
 
-def test_all_eight_industries_still_present():
-    assert len(INDUSTRY_REGISTRY) == 8, sorted(INDUSTRY_REGISTRY)
+def test_all_nine_industries_still_present():
+    # Eight original industries + "insurance" (2.0-D2 T4).
+    assert len(INDUSTRY_REGISTRY) == 9, sorted(INDUSTRY_REGISTRY)
+    assert "insurance" in INDUSTRY_REGISTRY
 
 
 # ---------------------------------------------------------------------------

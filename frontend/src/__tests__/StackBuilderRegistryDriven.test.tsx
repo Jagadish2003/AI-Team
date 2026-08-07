@@ -34,6 +34,20 @@ import type {
 const INDUSTRIES: IndustryListItem[] = [
   { industry_id: 'financial_services', label: 'Financial services', pack_hints: ['ncino'], recommended_systems: ['jira'] },
   { industry_id: 'public_sector', label: 'Public sector', pack_hints: ['service_cloud'], recommended_systems: [] },
+  { industry_id: 'logistics_supply_chain', label: 'Logistics & supply chain', pack_hints: ['service_cloud'], recommended_systems: [] },
+  { industry_id: 'technology', label: 'Technology', pack_hints: ['github_engineering'], recommended_systems: [] },
+  {
+    industry_id: 'manufacturing',
+    label: 'Manufacturing',
+    pack_hints: ['service_cloud'],
+    recommended_systems: [],
+    roadmap_systems: [{
+      system_id: 'sap',
+      label: 'SAP',
+      target_release: 'future',
+      reason: 'SAP ingestion is on the roadmap.',
+    }],
+  },
 ];
 
 const LENDING: TemplateListItem = {
@@ -95,6 +109,7 @@ function Harness({
       <div data-testid="focus">{state.focusId ?? ''}</div>
       <div data-testid="template">{state.templateId ?? ''}</div>
       <div data-testid="systems">{state.selectedSystemIds.join(',')}</div>
+      <div data-testid="industry">{state.industryId ?? ''}</div>
       <div data-testid="ncino-role">{state.weightings['salesforce_ncino']?.role ?? ''}</div>
       <div data-testid="ncino-confirmed">
         {String(state.weightings['salesforce_ncino']?.confirmed ?? '')}
@@ -115,6 +130,38 @@ describe('R18-C1 T3 — industries and templates render from the registry API', 
   it('renders a template pill per registry template', () => {
     render(<Harness />);
     expect(screen.getByRole('checkbox', { name: 'Commercial lending' })).toBeInTheDocument();
+  });
+
+  // Every industry whose unshipped anchor moved to `roadmap_systems` still has
+  // real shipped defaults in industry_registry.py (technology: 10,
+  // manufacturing and logistics: 9 each). So selecting one MUST load its
+  // defaults. The earlier version of this test asserted the opposite — that
+  // fetchSystemDefaults was never called — which entrenched a silent
+  // no-pre-population regression and would have made the fix look like the bug.
+  it('loads registry defaults for industries whose unshipped anchors moved to the roadmap', async () => {
+    const fetchSystemDefaults = vi.fn(async () => []);
+    render(<Harness fetchSystemDefaults={fetchSystemDefaults} />);
+
+    for (const name of ['Manufacturing', 'Logistics & supply chain', 'Technology']) {
+      const pill = screen.getByRole('checkbox', { name });
+      expect(pill).toBeEnabled();
+      fireEvent.click(pill);
+      expect(pill).toHaveAttribute('aria-checked', 'true');
+    }
+
+    expect(screen.getByTestId('industry').textContent).toBe('technology');
+    await waitFor(() =>
+      expect(fetchSystemDefaults).toHaveBeenCalledWith('technology'),
+    );
+    for (const id of ['manufacturing', 'logistics_supply_chain', 'technology']) {
+      expect(fetchSystemDefaults).toHaveBeenCalledWith(id);
+    }
+
+    // The roadmap systems themselves still never render as connectable, and no
+    // "coming soon" copy returns — the backend, not a frontend skip list, is
+    // what keeps an unshipped system out.
+    expect(screen.queryByText('SAP')).not.toBeInTheDocument();
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
   });
 });
 

@@ -1,0 +1,71 @@
+{
+  "_meta": {
+    "story": "2.0-B4 T5 (AT-814)",
+    "purpose": "Conformance golden fixture for one shipped connector (AC4). Locks the connector's per-concept conformance declaration (status/reason/mapper/field_gaps) from discovery/concepts/conformance.py. The CI gate (tests/contract/test_r2_0_b4_t5_conformance_fixtures.py) fails if a shipped connector has no fixture here, and pins each fixture to the registry so a conformance change cannot ship without updating its golden.",
+    "note": "Every 'supported' concept's mapper must resolve in T2's mapper registry (discovery.concepts.mappers.resolve_mapper) — the gate checks it. The raw→concept correctness of each mapper is proven by T2's connector-mapping test."
+  },
+  "connector_id": "servicenow",
+  "source_family": "itsm",
+  "concept_set_version": 1,
+  "concepts": {
+    "actor_group": {
+      "status": "supported",
+      "reason": "an assignment group IS a work queue — work is routed to it and drawn from it — so group_type='queue', unlike a chat channel",
+      "mapper": "discovery.concepts.mappers.servicenow:map_assignment_group",
+      "field_gaps": []
+    },
+    "approval": {
+      "status": "declared",
+      "reason": "ServiceNow carries first-class approvals (sysapproval_approver), but this connector does not read that table — the mapping needs a connector read, not just a mapper",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "artifact": {
+      "status": "declared",
+      "reason": "attachments and knowledge articles exist; the connector reads work notes (for the redaction-before-indexing seam) but no artifact surface, so there is nothing to map yet",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "assignment": {
+      "status": "supported",
+      "reason": "",
+      "mapper": "discovery.concepts.mappers.servicenow:map_assignment_history",
+      "field_gaps": [
+        {
+          "field": "assigned_to",
+          "kind": "partial",
+          "reason": "the assignment audit row stores the group's NAME in oldvalue/newvalue, not its sys_id, so this reference is name-keyed by the source's own construction. It resolves to a group but cannot be looked up by id, and two groups sharing a name are indistinguishable."
+        },
+        {
+          "field": "hop_index",
+          "kind": "partial",
+          "reason": "populated only when the caller maps a case's ORDERED assignment history and passes the position in; a mapper handed one audit row cannot know where in the chain it sits and must not invent it"
+        }
+      ]
+    },
+    "entity_reference": {
+      "status": "supported",
+      "reason": "",
+      "mapper": "discovery.concepts.mappers.servicenow:map_cmdb_ci_reference",
+      "field_gaps": []
+    },
+    "state_transition": {
+      "status": "supported",
+      "reason": "",
+      "mapper": "discovery.concepts.mappers.servicenow:map_state_transition",
+      "field_gaps": [
+        {
+          "field": "actor_group",
+          "kind": "absent",
+          "reason": "the sys_audit row records that the state changed, not who changed it. The only mover field available is an individual, which the concept set has nowhere to put and the platform must not surface."
+        }
+      ]
+    },
+    "work_item": {
+      "status": "supported",
+      "reason": "",
+      "mapper": "discovery.concepts.mappers.servicenow:map_incident_work_item",
+      "field_gaps": []
+    }
+  }
+}

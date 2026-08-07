@@ -406,6 +406,16 @@ def build_grounded_opp_prompt(
     """
     observed = graph_context.observed_summary or "No directly observed entities for this finding."
     truncation_note = (graph_context.truncation_note or "").strip()
+    # 2.0-B3 T3 (AC3): when the assembled sources materially disagree, the prompt
+    # names the disagreement and instructs the model not to settle it. Additive in
+    # exactly the way the T3-S16-A causal section is: with no disagreement the
+    # section is absent and the prompt is byte-for-byte what it was before.
+    contradiction_note = (getattr(graph_context, "contradiction_note", "") or "").strip()
+    contradiction_section = (
+        f"=== SOURCE DISAGREEMENTS ===\n{contradiction_note}\n"
+        if contradiction_note
+        else ""
+    )
     output_intro = (
         "Produce JSON with the fields below. No preamble, no markdown - JSON only."
         if causal_context is not None
@@ -426,7 +436,7 @@ Corroboration: {signal_ctx.get("corroboration_label", "Not corroborated across s
 === DIRECTLY OBSERVED ENTITIES AND RELATIONSHIPS ===
 {observed}
 {truncation_note}
-
+{contradiction_section}
 === DOMAIN CONTEXT ===
 {pack_llm_context or "No additional domain context available."}
 
@@ -549,7 +559,11 @@ Write exactly one paragraph (3-5 sentences) for a CRO audience.
 - Use commercial banking language: loan origination, covenant compliance, credit decisions
 - Open with the most significant lending friction detected
 - Reference the number of systems that corroborate the finding
-- Include projected outcome using "could reduce" / "estimated" language
+- Describe the intervention, never an outcome: name what an agent would handle,
+  which recurring cases are in scope, and what still requires banker judgement
+- NEVER state a saving, a percentage improvement, a cost figure, or any
+  guaranteed result — the platform reports a magnitude band computed from
+  evidence, and that band is rendered separately from this paragraph
 - Close with a recommended next step for the commercial lending team
 - NEVER suggest automated credit decisions — humans make all credit decisions
 - Return only the paragraph text, nothing else"""
@@ -567,7 +581,11 @@ Write exactly one paragraph (3-5 sentences) for a pension fund executive audienc
 - Use member services language: retirement applications, benefit elections, disbursements, disability reviews
 - Open with the most significant member-impact finding
 - Reference ORC 3307 if any compliance-override pattern is present in the findings
-- Include projected outcome using "could reduce" / "estimated" language
+- Describe the intervention, never an outcome: name what an agent would handle,
+  which recurring cases are in scope, and what still requires staff judgement
+- NEVER state a saving, a percentage improvement, a cost figure, or any
+  guaranteed result — the platform reports a magnitude band computed from
+  evidence, and that band is rendered separately from this paragraph
 - Close with a recommended first step — always framing the agent as surfacing alerts to staff, never making autonomous decisions
 - Tone: measured, precise, focused on member outcomes and regulatory obligations
 
@@ -584,7 +602,11 @@ Top opportunities:
 ## Instructions
 Write exactly one paragraph (3-5 sentences) for a CXO audience.
 - Open with the most significant automation opportunity
-- Include a projected outcome using "could reduce" / "estimated" language
+- Describe the intervention, never an outcome: name what an agent would handle,
+  which recurring cases are in scope, and what still requires human judgement
+- NEVER state a saving, a percentage improvement, a cost figure, or any
+  guaranteed result — the platform reports a magnitude band computed from
+  evidence, and that band is rendered separately from this paragraph
 - Close with a clear recommended next step
 - Return only the paragraph text, nothing else"""
 
@@ -692,6 +714,70 @@ def _fallback(opp: Dict[str, Any], pack_id: Optional[str] = None) -> Dict[str, A
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 2.0-A1 T5 — projection vocabulary guard on generated text.
+#
+# This closes the note that stood in this module since Sprint 5: "guardrail is
+# prompt-instruction only — not post-validated. Post-generation validation of
+# prohibited phrases is deferred."
+#
+# The prompts now forbid savings and guarantee language, but a prompt is a
+# request, not a control. AC3 requires that NO projection output anywhere —
+# API, UI, report, or export — carries a point-estimate savings claim or
+# guarantee language, so every generated field is scrubbed on the way out.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _scrub_projection_claims(text: Optional[str], where: str) -> str:
+    """Strip guarantee/point-estimate sentences from one generated string.
+
+    Sentence-level: an over-claiming clause loses its sentence, the surrounding
+    analysis survives. A scrub is logged (never the offending text itself at
+    INFO — the phrase is echoed at DEBUG only) so prompt drift is visible in run
+    logs rather than silent.
+    """
+    from discovery.projection.vocabulary import sanitize_text, scan_text
+
+    if not text:
+        return ""
+    violations = scan_text(text)
+    if not violations:
+        return text
+    logger.warning(
+        "Projection vocabulary guard scrubbed %d claim(s) from %s",
+        len(violations),
+        where,
+    )
+    logger.debug("Scrubbed phrases in %s: %s", where, [v.matched_text for v in violations])
+    return sanitize_text(text)
+
+
+def _scrub_enrichment_result(result: Dict[str, Any], opp_id: str) -> Dict[str, Any]:
+    """Apply the vocabulary guard to every generated field of an enrichment.
+
+    Summary text is sanitised sentence-wise; bullet lists drop the offending
+    bullet whole, because a bullet is already a single claim and half of one is
+    a fragment rather than a finding.
+    """
+    from discovery.projection.vocabulary import sanitize_bullets
+
+    result["aiSummary"] = _scrub_projection_claims(
+        result.get("aiSummary"), f"opp {opp_id} aiSummary"
+    )
+    for key in ("aiWhyBullets", "aiRisks", "aiSuggestedNextSteps"):
+        before = result.get(key) or []
+        after = sanitize_bullets(before)
+        if len(after) != len(before):
+            logger.warning(
+                "Projection vocabulary guard dropped %d %s bullet(s) on opp %s",
+                len(before) - len(after),
+                key,
+                opp_id,
+            )
+        result[key] = after
+    return result
+
+
 def _enrich_opportunity(
     opp: Dict[str, Any],
     evidence: List[Dict[str, Any]],
@@ -723,14 +809,14 @@ def _enrich_opportunity(
         "aiSuggestedNextSteps":  [str(b) for b in parsed["aiSuggestedNextSteps"][:2]],
         "llmGenerated":          True,
         "llmModel":              MODEL,
-        # ENG-AIQ-NC-5: Sprint 5 compliance approach.
-        # Guardrail is prompt-instruction only — not post-validated.
-        # Post-generation validation of prohibited phrases is deferred to post-Sprint 5.
+        # ENG-AIQ-NC-5 compliance guardrail remains prompt-instruction only.
+        # The 2.0-A1 T5 PROJECTION vocabulary guard below is separate and IS
+        # post-validated — see _scrub_enrichment_result.
         "complianceGuardrailApplied": pack_id == "ncino",
     }
     if causal_context is not None:
         result["_causal_llm_response"] = parsed
-    return result
+    return _scrub_enrichment_result(result, opp_id)
 
 
 def _enrich_opportunity_grounded(
@@ -831,7 +917,7 @@ def _enrich_opportunity_grounded(
     if causal_context is not None:
         result["_causal_llm_response"] = parsed
     result.update(guard_fields)
-    return result
+    return _scrub_enrichment_result(result, opp_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -852,9 +938,9 @@ def _enrich_executive_summary(
     if raw.strip().startswith("{"):
         parsed = _parse_json(raw)
         if parsed and isinstance(parsed.get("summary"), str):
-            return parsed["summary"]
+            return _scrub_projection_claims(parsed["summary"], "executive summary")
         return ""
-    return raw
+    return _scrub_projection_claims(raw, "executive summary")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1346,6 +1432,23 @@ def run_llm_enrichment(
             pack_id,
             graph_entities,
         )
+        # 2.0-B1 T2: capture this opportunity's assembly decision — which
+        # retrieval candidates were proposed vs. actually used — so the trace
+        # graph can surface both sides later. Routed through graph_context.py
+        # (the sanctioned retrieval bridge — see its module docstring); this
+        # module must never import anything retrieval-named directly (a
+        # structural test in test_retrieval_evidence_source.py pins that).
+        # Advisory and non-blocking: never raises, and a failure here must
+        # never affect enrichment itself.
+        try:
+            from .graph_context import record_opportunity_retrieval_candidates
+
+            record_opportunity_retrieval_candidates(org_id, run_id, opp)
+        except Exception as exc:
+            logger.debug(
+                "retrieval candidate capture failed for opp %s (non-blocking): %s",
+                opp_id, exc,
+            )
         try:
             if grounded:
                 result = _enrich_opportunity_grounded(

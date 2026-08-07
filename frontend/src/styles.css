@@ -326,6 +326,20 @@ body *::-webkit-scrollbar-corner {
   color: rgb(4 120 87);
 }
 
+.integration-not-configured-status-pill {
+  padding: 0.25rem 0.625rem;
+  border-color: rgb(100 116 139 / 0.35);
+  background-color: rgb(100 116 139 / 0.10);
+  color: rgb(148 163 184);
+  font-weight: 600;
+}
+
+:root.theme-light .integration-not-configured-status-pill {
+  border-color: rgb(148 163 184 / 0.55);
+  background-color: rgb(241 245 249 / 0.78);
+  color: rgb(71 85 105);
+}
+
 .integration-coming-soon-status-pill {
   padding: 0.25rem 0.625rem;
   border-color: rgb(245 158 11 / 0.35);

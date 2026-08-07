@@ -59,8 +59,9 @@ _DETECTOR_META: Dict[str, Dict[str, str]] = {
             "{owner_changes} owner changes recorded across {total_cases} Cases in "
             "90 days — an average of {score:.1f} reassignments per case (threshold "
             "{threshold}). Agents are manually re-routing cases that pattern analysis "
-            "could route correctly on first assignment. An intelligent routing agent "
-            "would reduce time-to-resolution and eliminate repetitive escalation cycles."
+            "could route correctly on first assignment. A routing agent would handle "
+            "the recurring reassignment cases; cases whose correct owner is genuinely "
+            "ambiguous still require judgement."
         ),
         "required_permissions": [
             "Salesforce: read CaseHistory",
@@ -135,9 +136,9 @@ _DETECTOR_META: Dict[str, Dict[str, str]] = {
         "rationale_template": (
             "Cross-system echo detected: {sf_count} Salesforce Cases reference external "
             "ticket IDs (SF echo score {sf_score:.2f}){sn_part}{jira_part}. "
-            "Agents are manually duplicating the same issue across systems — a pattern "
-            "that agent-based bidirectional sync would eliminate, reducing manual effort "
-            "and improving resolution continuity across teams."
+            "Agents are manually duplicating the same issue across systems. A sync agent "
+            "would handle the issues duplicated across two systems; records whose two "
+            "sides genuinely disagree still require judgement."
         ),
         "required_permissions": [
             "Salesforce: read Case",
@@ -214,6 +215,27 @@ def get_required_permissions_for_detector(detector_id: str) -> List[str]:
     meta = _DETECTOR_META.get(detector_id, {})
     perms = meta.get("required_permissions", [])
     return list(perms) if isinstance(perms, list) else []
+
+
+def _numeric_signals(raw_evidence: Dict[str, Any]) -> Dict[str, Any]:
+    """Return only the numeric scalar measurements from a detector's raw_evidence.
+
+    2.0-A1 T1: the projection model needs the detector's measured numbers on the
+    STORED opportunity, but not the nested per-instance lists/dicts some
+    detectors attach (those are evidence and are served via evidenceIds).
+    Keeping this to numeric scalars also keeps the stored record small and
+    JSON-stable, so a projection recomputed from it is byte-identical.
+
+    Booleans are excluded — ``degraded_signal`` is a gate, not a measurement.
+    """
+    if not isinstance(raw_evidence, dict):
+        return {}
+    signals: Dict[str, Any] = {}
+    for key, value in raw_evidence.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        signals[str(key)] = value
+    return signals
 
 
 def _format_title(detector_id: str, ev: Dict[str, Any]) -> str:
@@ -359,6 +381,14 @@ def to_track_a_opportunities(
             # have the version history — unreconstructable if not captured now.
             "packId":      opp.get("packId"),
             "packVersion": opp.get("packVersion"),
+            # 2.0-B1 T1 (trace graph engine): packs that build the four-part
+            # finding_contract (cloud_ops, security_ops — see cloud_ops_finding.py)
+            # carry it forward onto the STORED opportunity. Without this the
+            # contract's evidence/confidence/corroboration/source_trace exists
+            # only for the lifetime of the run and cannot be traced afterwards.
+            # None for packs that don't build one (service_cloud, ncino, ...) —
+            # additive, backward compatible.
+            "findingContract": (opp.get("raw_evidence") or {}).get("finding_contract"),
             # Keep calibration fields under a debug namespace (not breaking Track A)
             "_debug": {
                 "detector_id":   did,
@@ -367,6 +397,16 @@ def to_track_a_opportunities(
                 "threshold":     threshold,
                 "roadmap_stage": opp.get("roadmap_stage", ""),
                 "score_debug":   opp.get("score_debug", {}),
+                # 2.0-A1 T1: carry the detector's measured signal numbers onto the
+                # STORED opportunity. The projection model reads its sample size,
+                # affected-instance count, and movement-signal value from these
+                # (see discovery/projection/signal_registry.py) — without them a
+                # projection could only be computed inside the pipeline and could
+                # never be recomputed or audited from the stored record.
+                # Numeric scalars only: the nested instance lists some detectors
+                # put in raw_evidence (e.g. HANDOFF_FRICTION.top_categories) are
+                # evidence, not signal, and are already served via evidenceIds.
+                "raw_evidence":  _numeric_signals(ev),
             },
         }
         result.append(track_a_opp)

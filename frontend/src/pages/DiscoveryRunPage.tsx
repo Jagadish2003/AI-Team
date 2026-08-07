@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Circle, Info, Loader2, XCircle } from "lucide-react";
+import { CheckCircle2, Circle, Info, Loader2, RefreshCw, XCircle } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { InfoPanel } from "../components/common/InfoPanel";
 import LoadingPanel from "../components/common/LoadingPanel";
@@ -71,6 +71,16 @@ const DISCOVERY_STEPS: DiscoveryStep[] = [
     subLabel: "Ingesting issue metrics and project activity",
   },
   {
+    id: "azure_events",
+    label: "Azure Events",
+    subLabel: "Ingesting Azure alerts, activity log, and service health events",
+  },
+  {
+    id: "aws_events",
+    label: "AWS Events",
+    subLabel: "Ingesting CloudWatch alarm, EventBridge, and CloudTrail events",
+  },
+  {
     id: "slack",
     label: "Slack",
     subLabel: "Ingesting channel activity, escalation, and cross-reference signals",
@@ -110,6 +120,16 @@ const DISCOVERY_STEPS: DiscoveryStep[] = [
     label: "nCino Lending",
     subLabel: "Ingesting nCino loan origination signals",
     infoTooltip: SALESFORCE_DUAL_EXTRACTION_TOOLTIP,
+  },
+  // The FSC second Salesforce pass has its own backend step (the runner emits
+  // "sf_fsc" after fsc_ingest()). It exists here only to give that step a
+  // canonical position in STEP_INDEX — the visible row is built by
+  // buildPackSteps() from the declared product, so it is a PACK step and is
+  // never rendered from this canonical list (see PACK_STEP_IDS).
+  {
+    id: "sf_fsc",
+    label: "Financial Services Cloud",
+    subLabel: "Ingesting wealth management and relationship banking signals",
   },
   {
     id: "detect",
@@ -152,6 +172,7 @@ const SOURCE_STEP_IDS = new Set([
   "sn",
   "jira",
   "sf_ncino",
+  "sf_fsc",
   "slack",
   "teams",
   "confluence",
@@ -159,17 +180,20 @@ const SOURCE_STEP_IDS = new Set([
   "github",
   "java_app",
   "dotnet_app",
+  "azure_events",
+  "aws_events",
 ]);
 
 // The pack-specific second Salesforce pass (labelled by the selected pack —
 // Service Cloud / nCino / …). It is a source step, but it is rendered LAST among
 // the source stages — after every connected source — so the progress list reads
 // "all connected sources → the selected pack".
-const PACK_STEP_IDS = new Set(["sf_ncino"]);
+const PACK_STEP_IDS = new Set(["sf_ncino", "sf_fsc"]);
 
 const STEP_SOURCE_TOKENS: Record<string, string[]> = {
   sf_crm: ["salesforce"],
   sf_ncino: ["salesforce"],
+  sf_fsc: ["salesforce"],
   sn: ["servicenow"],
   jira: ["jira"],
   slack: ["slack"],
@@ -179,6 +203,11 @@ const STEP_SOURCE_TOKENS: Record<string, string[]> = {
   github: ["github"],
   java_app: ["java_app"],
   dotnet_app: ["dotnet_app"],
+  // The native cloud event connectors arrive either as the run's system ids
+  // ("azure_events") or as display labels ("Azure Events"); normalizeSource only
+  // lower-cases, so both spellings are listed.
+  azure_events: ["azure_events", "azure events"],
+  aws_events: ["aws_events", "aws events"],
 };
 
 // Normalise a connected-source label/id for matching: lower-cased, trimmed.
@@ -196,6 +225,10 @@ const SOURCE_DISPLAY_NAMES: Record<string, string> = {
   github: "GitHub",
   teams: "Microsoft Teams",
   slack: "Slack",
+  aws_events: "AWS Events",
+  "aws events": "AWS Events",
+  azure_events: "Azure Events",
+  "azure events": "Azure Events",
 };
 
 // Human-friendly label for a connected source: a known brand name, else the raw
@@ -383,6 +416,14 @@ function resolveDiscoverySteps(salesforceProduct?: string): DiscoveryStep[] {
 // Every such row reflects the single backend "sf_ncino" step (progressStepId),
 // but keeps a unique row id. An empty declaration falls back to the nCino default
 // (unchanged single-pack behaviour + existing tests).
+// The backend step each declared product's second Salesforce pass is driven by.
+// Most products are read by the nCino-shaped second pass ("sf_ncino"); Financial
+// Services Cloud has its OWN runner step ("sf_fsc", emitted after fsc_ingest()),
+// so its row must track that step rather than borrowing nCino's.
+const PACK_PROGRESS_STEP_BY_PRODUCT: Record<string, string> = {
+  salesforce_fsc: "sf_fsc",
+};
+
 function buildPackSteps(products: string[]): DiscoveryStep[] {
   const declared = products.length > 0 ? products : ["salesforce_ncino"];
   const seen = new Set<string>();
@@ -403,7 +444,7 @@ function buildPackSteps(products: string[]): DiscoveryStep[] {
       label: meta.label,
       subLabel: meta.subLabel,
       infoTooltip: tooltip,
-      progressStepId: "sf_ncino",
+      progressStepId: PACK_PROGRESS_STEP_BY_PRODUCT[productId] ?? "sf_ncino",
     });
   }
   return out;
@@ -442,21 +483,20 @@ export function StepInfoTooltip({ text }: { text: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// DiscoveryStepList — renders all steps with completed / active / pending state
+// buildDiscoverySteps — the RENDERED progress rows for a run.
+//
+// Extracted out of DiscoveryStepList so the status pill's PERCENTAGE and the
+// checklist derive from the same array. The percentage means "how many of these
+// rows are done", which is only true if both sides agree on what the rows are —
+// previously the percentage divided by the canonical 14-step pipeline while the
+// list rendered a different (connected-source-driven) set, so the number and the
+// green checks disagreed.
 // ---------------------------------------------------------------------------
-export function DiscoveryStepList({
-  currentStep,
-  runComplete = false,
+export function buildDiscoverySteps({
   salesforceProduct,
   salesforceProducts,
-  failedSteps = [],
   connectedSources,
 }: {
-  currentStep: string | null;
-  // True only once the discovery run has truly finished (100%). The backend can
-  // emit the "complete" step while the run is still computing post-processing,
-  // so the terminal step's green tick is gated on this flag, not on currentStep.
-  runComplete?: boolean;
   // Declared Salesforce product id (e.g. "salesforce_sc"). Drives the label of
   // the second Salesforce pass so the run reflects the workspace's declaration.
   salesforceProduct?: string;
@@ -464,24 +504,13 @@ export function DiscoveryStepList({
   // declares several products (a multi-pack run), each gets its own pack step in
   // the progress list. Falls back to `salesforceProduct` (single) when absent.
   salesforceProducts?: string[];
-  // Step ids whose ingest failed (from the run status' failed_steps). A failed
-  // step is rendered with an error icon, never as a completed green check — so
-  // a failed stage is not misrepresented as successful (CS-4 / AT-313).
-  failedSteps?: string[];
   // The sources actually connected for this run (connector ids/names — the same
   // set shown in the Discovery Log / Run Summary). When provided, the progress
   // list shows a stage for each connected source (plus the processing stages)
   // and omits unconnected sources. When omitted (undefined), every known source
   // stage is shown — the legacy fixed-pipeline behaviour.
   connectedSources?: string[];
-}) {
-  const activeIdx =
-    currentStep != null ? (STEP_INDEX[currentStep] ?? -1) : -1;
-  // Processing stages always finish before/at this boundary; a generic source
-  // (one with no dedicated backend step) is considered ingested once the run has
-  // reached detection.
-  const detectIdx = STEP_INDEX["detect"];
-
+}): DiscoveryStep[] {
   // The declared Salesforce products driving the per-pack progress steps: the
   // full list when provided, else the single legacy prop.
   const declaredProducts =
@@ -553,54 +582,167 @@ export function DiscoveryStepList({
   // 3. Processing stages — always shown, in canonical order.
   const processingSteps = canonical.filter((s) => !SOURCE_STEP_IDS.has(s.id));
 
-  const steps = [...sourceSteps, ...packSteps, ...processingSteps];
+  return [...sourceSteps, ...packSteps, ...processingSteps];
+}
+
+// ---------------------------------------------------------------------------
+// computeStepStates — the SEQUENTIAL state machine for the rendered rows.
+//
+// Invariant (the reason this is one pass over the whole list rather than a
+// per-row calculation): the states always read as a prefix of settled rows
+// (completed / failed), then AT MOST ONE active row (the frontier), then pending
+// rows. Row state used to be computed independently per row, which let several
+// rows spin at once — every generic source row (a connected source with no
+// backend step of its own, e.g. AWS/Azure Events before they had one) shared the
+// single "active until detection starts" rule and so all spun together with
+// whichever known step was genuinely running, and every pack row of a multi-pack
+// run shared one progressStepId and so spun together too.
+//
+// The number of settled rows is the number of pipeline steps the backend has
+// genuinely passed, so the checklist can never show more progress than the run
+// has actually made. Which ROW carries the spinner is positional: when the
+// rendered source order (the Discovery Log CONNECT order) differs from the
+// backend's ingest order, the spinner marks the n-th stage rather than naming the
+// exact connector. A row with no backend step of its own (a generic source)
+// sequences by pipeline position — inferred, but monotone; that inference is the
+// trade for sequencing, and the rule it replaces (settled only once detection
+// starts) is what put every generic row in a spinner simultaneously.
+// ---------------------------------------------------------------------------
+export type DiscoveryStepStateName =
+  | "completed"
+  | "active"
+  | "failed"
+  | "pending";
+
+export interface DiscoveryStepState {
+  step: DiscoveryStep;
+  state: DiscoveryStepStateName;
+}
+
+export function computeStepStates({
+  steps,
+  currentStep,
+  runComplete = false,
+  failedSteps = [],
+}: {
+  steps: DiscoveryStep[];
+  currentStep: string | null;
+  runComplete?: boolean;
+  failedSteps?: string[];
+}): DiscoveryStepState[] {
+  const activeIdx =
+    currentStep != null ? (STEP_INDEX[currentStep] ?? -1) : -1;
+  const failed = new Set(failedSteps);
+  // The backend step id that drives a row — pack rows point at their product's
+  // pass (sf_ncino / sf_fsc) via progressStepId, other rows use their own id.
+  const stateIdOf = (step: DiscoveryStep) => step.progressStepId ?? step.id;
+
+  // Per-row gate: the canonical step index the run must pass for that row to be
+  // settled. A row with no backend step of its own (a generic source) inherits
+  // the highest gate before it, so it settles when the pipeline passes the
+  // previous known source.
+  let prevGate = 0;
+  const gates = steps.map((step) => {
+    const ownIdx = STEP_INDEX[stateIdOf(step)];
+    if (ownIdx === undefined) return prevGate;
+    prevGate = Math.max(ownIdx, prevGate);
+    return ownIdx;
+  });
+
+  // The frontier is derived from HOW MANY rows the run has passed, not from where
+  // they sit in the list. Counting matters because the rendered source order is
+  // the Discovery Log CONNECT order, which need not match the backend's ingest
+  // order: painting "the first unsettled row" would then leave two consecutive
+  // backend steps pointing at the same row, stalling the checklist and the
+  // percentage for a stage. Counting advances the frontier exactly once per step
+  // the backend passes, while the prefix stays contiguous by construction.
+  //
+  // The terminal "complete" row can never be settled by activeIdx (nothing
+  // follows it), so it greens only via runComplete — while the run is still going
+  // it shows the spinner even if the backend already emitted "complete".
+  let frontier = 0;
+  for (let i = 0; i < steps.length; i += 1) {
+    if (failed.has(stateIdOf(steps[i])) || activeIdx > gates[i]) frontier += 1;
+  }
+
+  return steps.map((step, i) => {
+    // A failed ingest takes precedence over every other state: it must never
+    // show the completed green check, even after the run advances past it.
+    if (failed.has(stateIdOf(step))) return { step, state: "failed" };
+    // The run has finished (materialised): every non-failed stage is done.
+    // Authoritative over activeIdx — the backend's last-seen current_step can be
+    // stale or point at an early stage for an already-finished run, so a
+    // finished run must never show a spinner or a pending circle.
+    if (runComplete) return { step, state: "completed" };
+    if (i < frontier) return { step, state: "completed" };
+    // Nothing has been emitted yet (no current_step): the whole list is pending
+    // rather than showing a spinner on a stage that has not started.
+    if (i === frontier) {
+      return { step, state: activeIdx >= 0 ? "active" : "pending" };
+    }
+    return { step, state: "pending" };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// stepProgressPercent — the run percentage, divided EQUALLY across the rendered
+// rows: each row is worth 100/N. The in-progress row counts as half a row so a
+// run that has just started does not sit at "Running (0%)" for the whole of its
+// first stage. Clamped to 99 while the run is still going — 100 belongs to a
+// finished run only.
+// ---------------------------------------------------------------------------
+export function stepProgressPercent(states: DiscoveryStepState[]): number {
+  if (states.length === 0) return 0;
+  let credit = 0;
+  for (const { state } of states) {
+    if (state === "completed" || state === "failed") credit += 1;
+    else if (state === "active") credit += 0.5;
+  }
+  return Math.min(Math.round((credit / states.length) * 100), 99);
+}
+
+// ---------------------------------------------------------------------------
+// DiscoveryStepList — renders all steps with completed / active / pending state
+// ---------------------------------------------------------------------------
+export function DiscoveryStepList({
+  currentStep,
+  runComplete = false,
+  salesforceProduct,
+  salesforceProducts,
+  failedSteps = [],
+  connectedSources,
+}: {
+  currentStep: string | null;
+  // True only once the discovery run has truly finished (100%). The backend can
+  // emit the "complete" step while the run is still computing post-processing,
+  // so the terminal step's green tick is gated on this flag, not on currentStep.
+  runComplete?: boolean;
+  salesforceProduct?: string;
+  salesforceProducts?: string[];
+  // Step ids whose ingest failed (from the run status' failed_steps). A failed
+  // step is rendered with an error icon, never as a completed green check — so
+  // a failed stage is not misrepresented as successful (CS-4 / AT-313).
+  failedSteps?: string[];
+  connectedSources?: string[];
+}) {
+  const steps = buildDiscoverySteps({
+    salesforceProduct,
+    salesforceProducts,
+    connectedSources,
+  });
+  const states = computeStepStates({
+    steps,
+    currentStep,
+    runComplete,
+    failedSteps,
+  });
 
   return (
     <ol className="space-y-3">
-      {steps.map((step) => {
-        const isGeneric = step.id.startsWith("src:");
-        // The backend step id that drives this row's state — pack rows share the
-        // single "sf_ncino" step via progressStepId (R191-P1), other rows use
-        // their own id.
-        const stateId = step.progressStepId ?? step.id;
-        // Known/processing stages map to a canonical backend index; generic
-        // source stages do not (no backend step), so their state comes from the
-        // detection boundary instead.
-        const canonicalIdx = isGeneric ? -1 : (STEP_INDEX[stateId] ?? -1);
-
-        // A failed ingest takes precedence over every other state: it must never
-        // show the completed green check, even after the run advances past it.
-        const isFailed = failedSteps.includes(stateId);
-        // "complete" is the terminal step. It earns the green check only when the
-        // run has actually finished (runComplete). While the run is still running
-        // — even if the backend already emitted "complete" — it shows the spinner.
-        const isTerminal = step.id === "complete";
-
-        let isCompleted: boolean;
-        let isActive: boolean;
-        if (isFailed) {
-          // A failed ingest shows only the error icon — never completed/active.
-          isCompleted = false;
-          isActive = false;
-        } else if (runComplete) {
-          // The run has finished (materialised): every non-failed stage is done.
-          // Authoritative over activeIdx — the backend's last-seen current_step
-          // can be stale or point at an early stage for an already-finished run
-          // (it isn't always advanced to "complete"), so a finished run must
-          // never show a spinner or a pending circle.
-          isCompleted = true;
-          isActive = false;
-        } else if (isGeneric) {
-          // Ingested once the pipeline reaches detection (all sources read);
-          // shows the spinner while source ingestion is still in progress.
-          isCompleted = activeIdx >= detectIdx;
-          isActive = !isCompleted && activeIdx >= 0 && activeIdx < detectIdx;
-        } else {
-          // Still running: the terminal step greens only via runComplete (above);
-          // other steps green once the run has advanced past their index.
-          isCompleted = isTerminal ? false : activeIdx > canonicalIdx;
-          isActive = !isCompleted && activeIdx === canonicalIdx;
-        }
+      {states.map(({ step, state }) => {
+        const isFailed = state === "failed";
+        const isCompleted = state === "completed";
+        const isActive = state === "active";
 
         return (
           <li key={step.id} className="flex items-start gap-3">
@@ -766,6 +908,8 @@ export default function DiscoveryRunPage() {
     failedSteps,
     startRun,
     refetch,
+    refresh,
+    refreshing,
   } = useDiscoveryRunContext();
 
   // current_step / failed_steps now come from DiscoveryRunContext's single
@@ -807,25 +951,16 @@ export default function DiscoveryRunPage() {
   const runScopedPath = (path: string) =>
     runId ? `${path}?runId=${runId}` : path;
 
-  // Percentage is derived directly from the run's current_step (the SAME signal
-  // that drives the Discovery Progress checklist, so the number and the green-
-  // checked steps always agree). Previously this was animated one integer at a
-  // time via a requestAnimationFrame chain — up to ~99 whole-page re-renders to
-  // count 0→99. The step signal only changes a handful of times per run, so
-  // deriving it straight from currentStep updates just as often with none of the
-  // re-render churn.
-  const displayPct = useMemo(() => {
-    if (isComplete) return 100;
-    if (!computing) return 0;
-    const idx = currentStep != null ? (STEP_INDEX[currentStep] ?? -1) : -1;
-    if (idx < 0) return 0;
-    const lastIdx = DISCOVERY_STEPS.length - 1; // index of the terminal "complete" step
-    return Math.min(Math.round((idx / lastIdx) * 100), 99);
-  }, [isComplete, computing, currentStep]);
-
   // The connectors this run will actually ingest from. Kept as the connector
   // OBJECTS (not just names) because the expiry guard below needs their ids, while
   // the run inputs and the toast need their display names.
+  //
+  // Merge note: this block also carried a `displayPct` derived from
+  // `currentStep / DISCOVERY_STEPS.length`. That is the implementation `dev`
+  // deliberately replaced — see `stepProgressPercent` below, which divides the
+  // percentage across the ROWS ACTUALLY RENDERED rather than the canonical
+  // 14-step pipeline. Keeping both would have shadowed the newer one and been a
+  // duplicate declaration, so only the connector memo survives here.
   const discoveryReadyConnectors = useMemo(
     () => connectors.filter(isDiscoveryReadyConnector),
     [connectors],
@@ -898,6 +1033,41 @@ export default function DiscoveryRunPage() {
       ),
     [summaryInputs.connectedSources, connectLogOrder]
   );
+
+  // The rendered progress rows — built ONCE here and shared with the checklist
+  // below, so the percentage counts exactly the rows the user can see.
+  const progressSteps = useMemo(
+    () =>
+      buildDiscoverySteps({
+        salesforceProduct,
+        salesforceProducts,
+        connectedSources: progressConnectedSources,
+      }),
+    [salesforceProduct, salesforceProducts, progressConnectedSources]
+  );
+
+  // Percentage is derived from the run's current_step (the SAME signal that
+  // drives the Discovery Progress checklist, so the number and the green-checked
+  // steps always agree) divided EQUALLY across the rendered rows — each row is
+  // worth 100/N. It previously divided by the canonical 14-step pipeline instead,
+  // which bore no relation to the rows actually on screen.
+  //
+  // Note this is a step-count, not an animation: the step signal changes a
+  // handful of times per run, so the number updates only when progress really
+  // moves (an earlier version animated 0→99 one integer at a time through a
+  // requestAnimationFrame chain — ~99 whole-page re-renders).
+  const displayPct = useMemo(() => {
+    if (isComplete) return 100;
+    if (!computing) return 0;
+    return stepProgressPercent(
+      computeStepStates({
+        steps: progressSteps,
+        currentStep,
+        runComplete: false,
+        failedSteps,
+      })
+    );
+  }, [isComplete, computing, progressSteps, currentStep, failedSteps]);
 
   const hasAtLeastOneSource =
     inputs.connectedSources.length > 0 ||
@@ -1135,11 +1305,21 @@ export default function DiscoveryRunPage() {
                   </label>
                 )}
               </div>
+              {/* Matches the Run Health dashboard's Refresh button (icon that
+                  spins, busy label, disabled + aria-busy while in flight) so the
+                  same action reads the same way on both pages. The busy state is
+                  the context's `refreshing` — `loading` is deliberately suppressed
+                  for a run already on screen, so it cannot report this. */}
               <button
-                className="rounded-md border border-accent/20 bg-accent/5 px-3 py-2 text-sm font-semibold text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
-                onClick={() => refetch()}
+                type="button"
+                data-testid="refresh-run"
+                onClick={() => refresh()}
+                disabled={refreshing}
+                aria-busy={refreshing}
+                className="inline-flex items-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 text-sm font-semibold text-muted shadow-sm hover:bg-bg/40 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Refresh
+                <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} aria-hidden="true" />
+                {refreshing ? "Refreshing…" : "Refresh"}
               </button>
             </div>
 

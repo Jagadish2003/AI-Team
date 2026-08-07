@@ -14,7 +14,11 @@
  */
 
 import '@testing-library/jest-dom/vitest';
-import { render, screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react';
+// The picker reads schema discovery + the saved scope through the shared data
+// cache (see usePickerResource), which the app provides at its root — so these
+// tests mount a provider too. A fresh one per render keeps each cache isolated.
+import { renderWithCache as render } from '../test-utils/renderWithCache';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // ── Mock API client before importing the component ────────────────────────────

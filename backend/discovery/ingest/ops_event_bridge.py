@@ -109,6 +109,10 @@ class OpsEventBridgeIngestor(ChangeBasedIngestor):
 
     connector_id = "ops_event_bridge"
     reports_deletes = False
+    #: A bridged cloud event is an observation, not an indexed retrieval artifact —
+    #: the change runner must not emit per-event artifact_changed/freshness work for
+    #: it (see ChangeBasedIngestor.produces_retrieval_content).
+    produces_retrieval_content = False
 
     def __init__(
         self,
@@ -155,7 +159,12 @@ class OpsEventBridgeIngestor(ChangeBasedIngestor):
 
             records: List[Dict[str, Any]] = []
             for row in rows:
-                after = row.row_id or after  # advance past every row we consume
+                # Advance past every row we consume. Tested against None, not
+                # truthiness: row_id 0 is a legitimate position, and treating it as
+                # "no id" would leave the checkpoint pinned and reprocess the same
+                # staging row on every run.
+                if row.row_id is not None:
+                    after = row.row_id
                 dedupe_key = (row.provider, row.provider_event_id)
                 if dedupe_key in seen:
                     logger.debug(

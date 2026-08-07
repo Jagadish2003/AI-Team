@@ -1,0 +1,54 @@
+{
+  "_meta": {
+    "story": "2.0-B4 T5 (AT-814)",
+    "purpose": "Conformance golden fixture for one shipped connector (AC4). Locks the connector's per-concept conformance declaration (status/reason/mapper/field_gaps) from discovery/concepts/conformance.py. The CI gate (tests/contract/test_r2_0_b4_t5_conformance_fixtures.py) fails if a shipped connector has no fixture here, and pins each fixture to the registry so a conformance change cannot ship without updating its golden.",
+    "note": "Every 'supported' concept's mapper must resolve in T2's mapper registry (discovery.concepts.mappers.resolve_mapper) — the gate checks it. The raw→concept correctness of each mapper is proven by T2's connector-mapping test."
+  },
+  "connector_id": "confluence",
+  "source_family": "documentation",
+  "concept_set_version": 1,
+  "concepts": {
+    "actor_group": {
+      "status": "gap",
+      "reason": "the source exposes individual actors only, and synthesising a group from a person's name is exactly the inference the contract forbids",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "approval": {
+      "status": "not_applicable",
+      "reason": "the source has no approval concept — it records content/activity, not gated decisions",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "artifact": {
+      "status": "supported",
+      "reason": "content_type='prose' — the value the retrieval substrate chunks these under, so an artifact is classified once rather than twice",
+      "mapper": "discovery.concepts.mappers.content:map_confluence_page",
+      "field_gaps": []
+    },
+    "assignment": {
+      "status": "not_applicable",
+      "reason": "the source has no unit-of-work record; its signal is content or events, not tracked work",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "entity_reference": {
+      "status": "supported",
+      "reason": "",
+      "mapper": "discovery.concepts.mappers.content:map_confluence_reference",
+      "field_gaps": []
+    },
+    "state_transition": {
+      "status": "gap",
+      "reason": "page status (current/archived/trashed) is read for deletion propagation but is not modelled as a transition stream",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "work_item": {
+      "status": "not_applicable",
+      "reason": "the source has no unit-of-work record; its signal is content or events, not tracked work",
+      "mapper": null,
+      "field_gaps": []
+    }
+  }
+}

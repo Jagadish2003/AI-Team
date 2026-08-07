@@ -53,6 +53,24 @@ from typing import Any, Dict, List, Optional
 
 from .operational_event import OperationalEvent, ResourceRef, normalize_resource_type
 
+# 2.0-D3 T2 — the shared Application Insights signal vocabulary. The SAME rules
+# the ingest-side bounded read scope uses (``ingest/azure_app_insights.py``
+# re-exports them), so the mapper and the read path can never disagree about what
+# an App Insights signal is. Aliased on import so the App Insights helpers are
+# visibly distinct from this module's own generic ones.
+from .app_insights_signal import (
+    FAILURE_SIGNAL_KINDS,
+    SIGNAL_HEALTH_TRANSITION,
+    SURFACE_AZURE_MONITOR,
+    alert_context as ai_alert_context,
+    app_insights_event_type as ai_event_type,
+    app_insights_scope as ai_scope,
+    detect_surface as ai_detect_surface,
+    essentials as ai_essentials,
+    is_alert_condition_active,
+    value_of as ai_value_of,
+)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Source-system ids (each resolves to a provider family in event_signature.py)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -62,6 +80,12 @@ SOURCE_AWS_CLOUDTRAIL = "aws_cloudtrail"
 SOURCE_AZURE_MONITOR = "azure_monitor"
 SOURCE_AZURE_ACTIVITY = "azure_activity"
 SOURCE_AZURE_SERVICE_HEALTH = "azure_service_health"
+#: 2.0-D3 T2 — Application Insights operational signals. A distinct source system
+#: (so a report can say where the signal came from) that resolves to the SAME
+#: ``azure`` provider family as every other Azure surface, which is what keeps its
+#: signature comparable with them. Registered in
+#: ``event_signature._SOURCE_SYSTEM_FAMILY``.
+SOURCE_AZURE_APP_INSIGHTS = "azure_app_insights"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -472,6 +496,194 @@ def map_service_health(payload: Dict[str, Any], *, org_id: str) -> OperationalEv
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Application Insights mapper (2.0-D3 T2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _app_insights_event_class(scope, raw: Dict[str, Any]) -> str:
+    """The B0 event class for an App Insights signal.
+
+    The story talks about "alarm/health" events, but B0's ``EVENT_CLASSES`` is a
+    CLOSED vocabulary with no such tokens, so D3's rule maps onto it as follows:
+
+      * a **health transition** is a ``state_change`` — that is precisely what a
+        health-state move is;
+      * an **ACTIVE** availability / application / dependency failure is an
+        ``error`` — the application or something it depends on is failing right
+        now;
+      * anything else — a RESOLVED failure alert, or an in-scope alert whose kind
+        could not be established — is a ``state_change``, because what the record
+        reports is a transition rather than a live fault.
+
+    The distinction between the last two branches is read from Azure's own
+    ``monitorCondition``, never inferred (see ``is_alert_condition_active``).
+
+    Consequence worth stating plainly: a failure alert firing and the same alert
+    resolving carry DIFFERENT classes and therefore different signatures. That is
+    intended — they are different operational facts — and it is what lets
+    recurrence detection count firings without a resolution diluting the count.
+    Repeated FIRINGS of the same condition on the same application still fold to
+    one signature, which is the property D3 requires.
+    """
+    kind = getattr(scope, "signal_kind", None)
+    if kind == SIGNAL_HEALTH_TRANSITION:
+        return "state_change"
+    if kind in FAILURE_SIGNAL_KINDS and is_alert_condition_active(raw):
+        return "error"
+    return "state_change"
+
+
+def _app_insights_payload(scope, raw: Dict[str, Any]) -> Dict[str, Any]:
+    """The BOUNDED, curated payload for an App Insights event.
+
+    Curated, never the raw record: the complete Azure payload lives only in the
+    MSP-B0 raw-event evidence store (AT-638), reachable through the event's
+    OBSERVED pointer. What is kept here is the provider-native detail that explains
+    the signal — the alert rule that fired, the condition type, the metric, the
+    monitoring service, the health-status transition — plus the App Insights signal
+    kind as a machine token.
+
+    Deliberately excludes any key the signature's principal lookup consults
+    (``principal``/``actor``/``user``/``caller``): these are ``state_change`` and
+    ``error`` events, whose recipe has no principal, and introducing one of those
+    keys would silently change what the fingerprint keys on.
+
+    Empty values are dropped, so the payload never carries a field the provider did
+    not state.
+    """
+    ess = ai_essentials(raw)
+    ctx = ai_alert_context(raw)
+    props = (raw or {}).get("properties") or {}
+
+    metric_names: List[str] = []
+    condition = ctx.get("condition") or {}
+    all_of = condition.get("allOf") if isinstance(condition, dict) else None
+    if isinstance(all_of, list):
+        for criterion in all_of:
+            if isinstance(criterion, dict) and criterion.get("metricName"):
+                metric_names.append(str(criterion["metricName"]))
+
+    candidate: Dict[str, Any] = {
+        # The App Insights identity of the signal — the field that keeps
+        # availability / application-failure / dependency-failure / health
+        # distinguishable after event_class has collapsed to the B0 vocabulary.
+        "app_insights_signal_kind": scope.signal_kind,
+        "app_insights_component_id": scope.component_id,
+        "app_insights_component_name": scope.component_name,
+        # Alert-surface detail.
+        "alert_rule": ai_value_of(ess.get("alertRule")) or None,
+        "monitor_condition": ai_value_of(ess.get("monitorCondition")) or None,
+        "signal_type": ai_value_of(ess.get("signalType")) or None,
+        "monitoring_service": ai_value_of(ess.get("monitoringService")) or None,
+        "condition_type": ai_value_of(ctx.get("conditionType")) or None,
+        "metric_name": metric_names[0] if metric_names else None,
+        "severity_raw": ai_value_of(ess.get("severity")) or None,
+        # Health-surface detail.
+        "current_health_status": ai_value_of(props.get("currentHealthStatus")) or None,
+        "previous_health_status": ai_value_of(props.get("previousHealthStatus")) or None,
+        "health_status": ai_value_of(raw.get("status")) or None,
+        "incident_type": ai_value_of(props.get("incidentType")) or None,
+    }
+    return {k: v for k, v in candidate.items() if v not in (None, "")}
+
+
+def map_app_insights(payload: Dict[str, Any], *, org_id: str) -> OperationalEvent:
+    """Map an Application Insights operational signal to an OperationalEvent (2.0-D3 T2).
+
+    Accepts a record from EITHER surface D3 draws on — an Azure Monitor alert or an
+    Azure health event — and resolves the surface from the record's own shape, so
+    the mapper is invocable standalone exactly like every other reference mapper.
+
+    The four things D3 requires of this mapping:
+
+    * **Resource = the monitored application, never the alert rule.** The resource
+      id is the explicitly-supplied monitored-application reference when Azure gave
+      one, otherwise the Application Insights component itself — both explicit
+      references, never inferred. ``resource_type`` is derived by the SAME shared
+      ``azure_resource_type_from_id`` every other Azure mapper uses (a
+      ``microsoft.insights/components`` id resolves to ``monitoring``); D3 does not
+      override that table, because inventing a per-surface resource-type rule would
+      be a provider-specific carve-out in shared code, and nothing downstream
+      branches on ``resource_type``.
+    * **Event class** per :func:`_app_insights_event_class`.
+    * **The original App Insights event type is retained** — ``event_type`` is the
+      provider-native ``ApplicationInsights/<Signal>`` token, so availability,
+      application-failure, dependency-failure and health signals stay
+      distinguishable after the class has collapsed to B0's closed vocabulary. The
+      alert rule, condition type and metric name are carried as bounded payload.
+    * **Signature via the existing deterministic service.** ``build`` derives it
+      through ``compute_event_signature``; nothing is computed here. Because that
+      service keys on ``(family, class, resource_type, event_type, resource_id)``,
+      repeated occurrences of the same condition on the same application fold to
+      one signature, while timestamp, severity, free-form description and the
+      per-occurrence alert id are structurally excluded from it.
+
+    Raises ``ValueError`` when the record is not an App Insights operational signal
+    (out of scope, or excluded telemetry). The connector's stream engine treats a
+    mapper failure as a loud per-record skip, so an out-of-scope record can never
+    be silently normalised into something it is not.
+    """
+    surface = ai_detect_surface(payload)
+    if surface is None:
+        raise ValueError(
+            "map_app_insights: record matches neither the Azure Monitor alert nor "
+            "the Azure health event shape"
+        )
+    scope = ai_scope(payload, surface=surface)
+    if scope is None:
+        raise ValueError(
+            "map_app_insights: record is not an Application Insights operational "
+            "signal (no explicit component reference, or excluded telemetry)"
+        )
+
+    ess = ai_essentials(payload)
+    props = (payload or {}).get("properties") or {}
+
+    # The monitored application: an explicitly-supplied reference when Azure gave
+    # one, otherwise the App Insights component. Never the alert rule.
+    application_id = scope.application_id
+    resource = ResourceRef(
+        provider="azure",
+        resource_type=azure_resource_type_from_id(application_id),
+        resource_id=application_id,
+    )
+    event_type = ai_event_type(scope, payload)
+
+    if surface == SURFACE_AZURE_MONITOR:
+        signal_id = str(ess.get("alertId") or "") or f"azure_app_insights:{event_type}"
+        observed_at = ai_value_of(ess.get("firedDateTime")) or None
+        severity = ess.get("severity")
+        message = ai_value_of(ess.get("description")) or None
+    else:
+        signal_id = str(
+            props.get("trackingId")
+            or payload.get("eventDataId")
+            or payload.get("correlationId")
+            or f"azure_app_insights:{event_type}"
+        )
+        observed_at = (
+            ai_value_of(payload.get("eventTimestamp"))
+            or ai_value_of(props.get("impactStartTime"))
+            or None
+        )
+        severity = payload.get("level")
+        message = ai_value_of(props.get("title")) or None
+
+    return OperationalEvent.build(
+        org_id=org_id,
+        source_system=SOURCE_AZURE_APP_INSIGHTS,
+        signal_id=signal_id,
+        observed_at=observed_at,
+        event_type=event_type,
+        event_class=_app_insights_event_class(scope, payload),
+        severity=severity,          # Sev0..4 / Warning / Error → normalised by build()
+        resource=resource,
+        message=message,
+        payload=_app_insights_payload(scope, payload),
+    )
+
+
 #: Registry of reference mappers by name — used by the golden-fixture harness and
 #: available to connector implementers as the canonical mapper lookup.
 MAPPERS = {
@@ -481,4 +693,5 @@ MAPPERS = {
     "map_azure_monitor": map_azure_monitor,
     "map_azure_activity_log": map_azure_activity_log,
     "map_service_health": map_service_health,
+    "map_app_insights": map_app_insights,
 }

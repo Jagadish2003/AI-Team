@@ -42,6 +42,7 @@ from discovery.packs.pack_certification import (  # noqa: E402
     REVIEW_DUE_REVIEW_AGED,
     REVIEW_DUE_UNDECLARED,
     REVIEW_INTERVAL_ENV_VAR,
+    SIGNATURE_REQUIRED_LEVELS,
     certification_badge,
     certification_summary,
     get_pack_certification,
@@ -331,20 +332,33 @@ def test_the_summary_reports_when_each_pack_falls_due():
 # ── The shipped packs ─────────────────────────────────────────────────────────
 
 
-def test_every_shipped_pack_has_a_computable_due_date():
+def test_every_shipped_pack_that_holds_a_badge_has_a_computable_due_date():
     """Not "is it due" — that would be a time bomb in CI on a date nobody chose.
 
     What must hold is that every shipped certification carries a READABLE review
     date, so its expiry is knowable at all. When one does fall due, the badge says
     so at runtime and `sign_pack_certifications.py --check` reports it.
+
+    Scoped to packs that actually HOLD a badge. A Community pack was never certified
+    against anything, and a DOWNGRADED one is Community now — `_review_due_reasons`
+    returns nothing for either, and `review_due_on` is None by the same rule, so
+    asserting a due date for them would contradict the module's own contract
+    (see pack_certification._review_due_reasons: "Only meaningful for a level that
+    was actually reviewed"). Before the `dev` merge every shipped pack happened to
+    be certified, which is the only reason this loop could assert it unconditionally.
     """
+    checked = 0
     for pack_id in list_packs():
         certification = get_pack_certification(pack_id, as_of=REVIEWED_ON)
+        if certification.effective_level not in SIGNATURE_REQUIRED_LEVELS:
+            continue
+        checked += 1
         assert certification.review_due_on, (
             f"pack '{pack_id}' has no computable review-due date — check its "
             f"reviewDate is a parseable ISO date"
         )
         assert parse_review_date(certification.review_date) is not None
+    assert checked, "no shipped pack holds a verified badge — the loop asserted nothing"
 
 
 def test_no_shipped_pack_is_due_on_its_own_review_date():

@@ -374,6 +374,16 @@ _INGEST_ALLOWLIST: Dict[Tuple[str, str], str] = {
         "Health-probe base-URL fallback; connection URL only, credential "
         "resolves via the vault regardless."
     ),
+    ("fsc.py", "FSC_INSTANCE_URL"): (
+        "2.0-D1 T2 FSC ingest: CLI/standalone instance-URL fallback mirroring "
+        "ncino.py's; non-credential — the FSC access token is vault-only and has "
+        "no env fallback, and _get_client() returns None before any credential "
+        "lookup when not live."
+    ),
+    ("fsc.py", "SF_INSTANCE_URL"): (
+        "FSC runs on the connected Salesforce org and reuses its instance URL as "
+        "a documented CLI/standalone fallback; connection URL only."
+    ),
     ("live_validator.py", "SF_INSTANCE_URL"): (
         "Standalone live-ingest validator CLI fallback; connection URL only, "
         "out of T2 scope per CLAUDE.md."
@@ -431,6 +441,18 @@ _INGEST_ALLOWLIST: Dict[Tuple[str, str], str] = {
         "Reads JAVA_APP_TARGETS (a JSON array of configured per-deployment "
         "targets); configuration discovery, not a credential — the "
         "credential itself resolves via the vault only (resolve_secret)."
+    ),
+    ("app_insights_association.py", "<dynamic:_raw_entries>"): (
+        "2.0-D3 T3: reads APP_INSIGHTS_ASSOCIATIONS (a JSON map of App "
+        "Insights component id -> .NET app_id / CMDB sys_id); identifiers "
+        "only, never a credential — an entry carrying a credential-shaped "
+        "field is rejected outright by find_inline_secret_keys."
+    ),
+    ("app_insights_association.py", "DATABASE_URL"): (
+        "2.0-D3 T3: presence check only, so the CMDB association lookup is a "
+        "no-op when no database is configured (the same guard "
+        "conversation_content.build_author_resolver uses). The value is never "
+        "read for connecting — the org-scoped lookup owns that."
     ),
     ("git_content.py", "<dynamic:_path_defaults>"): (
         "Reads GIT_CONTENT_PATH_DEFAULTS (an org-level path-filter config "

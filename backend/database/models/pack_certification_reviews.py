@@ -11,7 +11,7 @@ Design notes
 ------------
 * **Append-only.** ``app/pack_certification_review.py`` exposes no update and no
   delete; re-reviewing writes the next revision. The table is listed in
-  ``app.history_retention.PROTECTED_TABLES``, so migration 0034 also REVOKEs
+  ``app.history_retention.PROTECTED_TABLES``, so migration 0045 also REVOKEs
   DELETE/TRUNCATE on it — the audit trail is enforced at the data layer, not just
   by convention (2.0-C1 AC4's mechanism, reused).
 * **Org-scoped.** Every key and query includes ``org_id``.

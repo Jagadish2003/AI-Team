@@ -25,7 +25,7 @@ Design notes
 * ``status`` and ``requested_level`` are validated in ``app/pack_installation.py``
   rather than by CHECK constraints — the vocabulary lives in one place, and a DB
   constraint would have to be migrated in lockstep with it.
-* ``fixtures`` and ``validation`` (2.0-C3 T6 / AT-841, migration 0037) are the
+* ``fixtures`` and ``validation`` (2.0-C3 T6 / AT-841, migration 0048) are the
   author's own test cases and the most recent sandbox verdict. The fixtures are
   stored because **activation re-runs them**: a pack installed months ago was
   judged by a platform that has since moved, and one that cannot be re-validated
