@@ -94,6 +94,13 @@ class GraphContext(BaseModel):
     # only and this finding must not be presented above MEDIUM.
     confidence_ceiling: str = ""
     ceiling_assessment: Dict[str, Any] = Field(default_factory=dict)
+    # 2.0-B3 T6 (AC6): assembly steps the ACTIVE AI mode cannot support, each with a
+    # visible label. Populated from app/mode_parity.py — today the one structural
+    # case is evidence retrieval on the hosted embedding provider (no embeddings
+    # endpoint), which would otherwise be a silent empty-evidence package. Empty in
+    # a mode that supports every step, so a finding composed in-boundary /
+    # customer-tenant is byte-identical here to before T6.
+    mode_degradations: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 def _entity_get(entity: Any, key: str, default: Any = None) -> Any:
@@ -331,6 +338,23 @@ def build_graph_context(
             "there being none", run_id, exc,
         )
 
+    # 2.0-B3 T6 (AC6): stamp the active AI mode's unsupported-step labels onto the
+    # context, so a finding composed in a mode that cannot embed (hosted) carries a
+    # VISIBLE "retrieval unavailable" label rather than a silently empty evidence
+    # list. Pure (reads provider names only) and guarded — a resolution failure must
+    # never cost a run its findings; the worst case is an unlabelled degradation.
+    mode_degradations: List[Dict[str, Any]] = []
+    try:
+        from app.mode_parity import mode_degradations as _mode_degradations
+
+        mode_degradations = _mode_degradations()
+    except Exception as exc:  # noqa: BLE001 — enrichment must not fail the run.
+        logger.error(
+            "graph_context: AI-mode degradation labels unavailable for run %s (%s) — "
+            "a mode that cannot support a step will NOT be labelled, which is not the "
+            "same as every step being supported", run_id, exc,
+        )
+
     return GraphContext(
         entity_count=total,
         entity_count_shown=shown,
@@ -346,4 +370,5 @@ def build_graph_context(
         contradiction_note=contradiction_note,
         confidence_ceiling=package.confidence_ceiling or "",
         ceiling_assessment=package.ceiling_assessment or {},
+        mode_degradations=mode_degradations,
     )
