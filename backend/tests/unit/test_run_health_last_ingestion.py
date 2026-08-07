@@ -1,19 +1,19 @@
 """Run Health "Last ingestion" — the connector-agnostic completion channel.
 
 The connectors panel previously read only ``db.ingestor_completed`` (native DB
-ingestors) with a fallback to the ``lastSynced`` display string that
-``app/connector_metrics.py`` writes for three hardcoded ids. Every change-based
+ingestors) plus a few legacy connector-metric overlay values. Every change-based
 connector ingested successfully and reported "Not available".
 
 ``connectors_view`` now also reads ``ingestion.completed`` — emitted by the shared
 change-based ingestion runner for EVERY ``ChangeBasedIngestor`` — and takes the
-newest timestamp across both channels. These tests pin that merge and prove the
-pre-existing behaviour (DB ingestors, the lastSynced fallback, ``last_error``) is
+newest timestamp across both channels. For legacy connector-metric overlays it
+accepts only real timestamps, never display labels such as ``"Just now"``. These
+tests pin that merge and prove DB-ingestor and ``last_error`` behaviour is
 unchanged.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -39,6 +39,7 @@ def panel(monkeypatch):
 
     def _run(records, events_by_type):
         monkeypatch.setattr(health.db, "org_connectors_list", lambda _org: list(records))
+        monkeypatch.setattr(health.db, "tenancy_get_runs", lambda _org: [])
         monkeypatch.setattr(health, "_read_checkpoint", lambda _o, _c: None)
         monkeypatch.setattr(health, "_auth_mode", lambda _o, _c: "oauth")
         monkeypatch.setattr(
@@ -130,11 +131,98 @@ def test_db_ingestor_alone_is_unchanged(panel):
     assert view["oracle"]["last_successful_ingestion"] == "2026-07-30T06:00:00+00:00"
 
 
-def test_last_synced_fallback_is_unchanged(panel):
-    # Salesforce/ServiceNow/Jira are not on the change-based path; they still rely
-    # on the connector_metrics overlay.
+def test_connector_metrics_timestamp_fallback_is_used(panel):
+    # Salesforce/ServiceNow/Jira store their completed-run time on the connector
+    # metrics overlay rather than the change-based completion channel.
+    view = panel(
+        [
+            _connected(
+                "salesforce",
+                lastSynced="Just now",
+                lastSuccessfulIngestionAt="2026-08-07T08:15:00Z",
+            )
+        ],
+        {},
+    )
+    assert (
+        view["salesforce"]["last_successful_ingestion"]
+        == "2026-08-07T08:15:00+00:00"
+    )
+
+
+def test_run_level_ingestion_time_supplies_checkpoint_age_without_cursor(panel, monkeypatch):
+    monkeypatch.setattr(
+        health,
+        "_now",
+        lambda: datetime(2026, 8, 7, 10, 15, tzinfo=timezone.utc),
+    )
+
+    view = panel(
+        [
+            _connected(
+                "salesforce",
+                lastSynced="Just now",
+                lastSuccessfulIngestionAt="2026-08-07T08:15:00Z",
+            )
+        ],
+        {},
+    )
+
+    assert view["salesforce"]["checkpoint_position"] is None
+    assert view["salesforce"]["checkpoint_captured_at"] is None
+    assert view["salesforce"]["checkpoint_age_seconds"] == 2 * 60 * 60
+
+
+def test_last_synced_display_label_is_not_ingestion_time(panel):
     view = panel([_connected("salesforce", lastSynced="Just now")], {})
-    assert view["salesforce"]["last_successful_ingestion"] == "Just now"
+    assert view["salesforce"]["last_successful_ingestion"] is None
+
+
+def test_completed_run_status_backfills_legacy_connector_timestamp(monkeypatch):
+    monkeypatch.setattr(
+        health.db,
+        "tenancy_get_runs",
+        lambda _org: [
+            {
+                "id": "run-newer-failed",
+                "status": "partial",
+                "updatedAt": "2026-08-07T10:00:00Z",
+            },
+            {
+                "id": "run-older-succeeded",
+                "status": "complete",
+                "updatedAt": "2026-08-06T18:30:00Z",
+            },
+        ],
+    )
+
+    def _status(_key, run_id, _default):
+        if run_id == "run-newer-failed":
+            return {
+                "status": "partial",
+                "updatedAt": "2026-08-07T10:00:00Z",
+                "perSystem": {"servicenow": "failed"},
+            }
+        return {
+            "status": "complete",
+            "updatedAt": "2026-08-06T18:30:00Z",
+            "perSystem": {"servicenow": "ok", "salesforce_ncino": "ok"},
+        }
+
+    monkeypatch.setattr(health.db, "run_kv_get", _status)
+
+    backfill = health._run_connector_ingestion_times("org-1")
+
+    assert backfill["servicenow"] == "2026-08-06T18:30:00+00:00"
+    assert backfill["salesforce"] == "2026-08-06T18:30:00+00:00"
+
+
+def test_legacy_last_synced_timestamp_is_still_accepted(panel):
+    view = panel([_connected("salesforce", lastSynced="2026-08-06T10:30:00Z")], {})
+    assert (
+        view["salesforce"]["last_successful_ingestion"]
+        == "2026-08-06T10:30:00+00:00"
+    )
 
 
 def test_em_dash_last_synced_still_reads_as_absent(panel):

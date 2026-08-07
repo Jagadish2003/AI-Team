@@ -1,6 +1,20 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.24
-Date: 2026-08-06
+Version: v1.25
+Date: 2026-08-07
+
+> v1.25 - Run Health last-ingestion timestamp honesty.
+> `GET /api/run-health/connectors` keeps the same
+> `last_successful_ingestion` (`string | null`, optional) field, but the value
+> is now timestamp-only: telemetry timestamps, the connector metrics overlay's
+> `lastSuccessfulIngestionAt`, or a historical completed/partial run status whose
+> `perSystem`/`succeeded` data proves that connector ingested successfully. Human
+> display labels from connector `lastSynced` such as `"Just now"` are ignored
+> unless they are parseable timestamps, so the dashboard cannot show a stale
+> "Just now" after OAuth/configuration only. When no concrete checkpoint row
+> exists but such a successful ingestion timestamp exists, `checkpoint_age_seconds`
+> is derived from that timestamp while `checkpoint_position` and
+> `checkpoint_captured_at` remain null; this gives the UI a freshness age without
+> inventing a resettable cursor. No schema change.
 
 > v1.24 - PR-fix pass (capped zero-displacement ranking adjustments).
 > `_ranking.adjusted` means the learned ranking layer applied to that finding,

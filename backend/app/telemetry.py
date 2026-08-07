@@ -606,8 +606,10 @@ class IngestionCompletedPayload(TypedDict, total=False):
         payload is DB-shaped (query_count / signal_count / degraded_count) and the
         panel derives ``last_error`` from its ``degraded_count``, so a non-DB
         connector borrowing it would inject false meaning into the error column.
-      * the ``lastSynced`` display string — written by ``app/connector_metrics.py``
-        for the three hardcoded ids salesforce / servicenow / jira_confluence.
+      * the legacy connector-metrics overlay — written by
+        ``app/connector_metrics.py`` for the three hardcoded ids salesforce /
+        servicenow / jira_confluence, and separate from connector-agnostic
+        ingestion telemetry.
 
     The other candidates were checked and rejected: ``ingestion.artifact_changed``
     is per-RECORD and suppressed entirely for a transport-only connector
