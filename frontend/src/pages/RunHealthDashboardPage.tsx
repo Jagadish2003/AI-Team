@@ -907,11 +907,9 @@ function RunDetails({ run }: { run: RunHealthItem }) {
 function RunsPanel({
   resource,
   retry,
-  highlighted,
 }: {
   resource: ResourceState<RunHealthResponse>;
   retry: () => void;
-  highlighted: boolean;
 }) {
   const hasIncompleteSummary = resource.status === "success" && resource.data.runs.some(
     (run) =>
@@ -947,7 +945,7 @@ function RunsPanel({
       description="Understand which recent discovery runs succeeded, degraded, failed, or are still in progress."
       icon={<Clock3 className="h-5 w-5" aria-hidden="true" />}
       state={state}
-      highlighted={highlighted}
+      highlighted={false}
     >
       {resource.status === "loading" ? <PanelLoading label="Run health" /> : null}
       {resource.status === "error" ? <PanelError label="Run health" message={resource.error} onRetry={retry} /> : null}
@@ -1318,7 +1316,7 @@ function RunHealthDashboard({ role }: { role: "owner" | "analyst" }) {
             hiding a card must not make a degraded tenant read as healthy. */}
         <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <ConnectorsPanel resource={connectors.state} retry={connectors.refresh} refresh={connectors.refresh} role={role} highlighted={selectedPanel === "connectors"} />
-          <RunsPanel resource={runs.state} retry={runs.refresh} highlighted={selectedPanel === "runs"} />
+          <RunsPanel resource={runs.state} retry={runs.refresh} />
         </div>
       </div>
     </PageShell>
