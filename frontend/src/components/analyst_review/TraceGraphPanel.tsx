@@ -15,8 +15,15 @@
 // endpoint built in T1/T2, styled to match the existing EntityTracePanel /
 // RelationshipTracePanel sections in OpportunityDetail.tsx.
 import React, { useMemo, useState } from 'react';
-import { ChevronDown, ExternalLink } from 'lucide-react';
+import { ChevronDown, Download, ExternalLink, FileText } from 'lucide-react';
 import { fetchTraceGraph } from '../../api/traceGraphApi';
+import {
+  downloadEvidenceReportForFinding,
+  downloadFindingEvidenceBundle,
+} from '../../api/evidenceExportApi';
+import { ApiError } from '../../lib/apiClient';
+import { useAuthOptional } from '../../context/AuthContext';
+import { isViewerRole } from '../../utils/roles';
 import { cacheKeys } from '../../lib/cacheKeys';
 import { useResource } from '../../lib/dataCache';
 import { hopDeepLink } from '../../types/traceGraph';
@@ -104,6 +111,23 @@ function HopNode({
                     <span>{hop.timestamp}</span>
                   </>
                 )}
+                {/* AC1 names four things every hop must carry — origin, connector,
+                    run id, timestamp. The first three were rendered and the run id
+                    was not, even though the API has always returned it. It matters
+                    once a chain spans runs (an entity first seen in an earlier run):
+                    without it a reviewer cannot tell which run observed which hop. */}
+                {hop.run_id && (
+                  <>
+                    <span aria-hidden="true">/</span>
+                    <span
+                      data-testid={`trace-hop-run-${hop.hop_id}`}
+                      title={`Observed by run ${hop.run_id}`}
+                      className="font-mono text-[10px]"
+                    >
+                      run {hop.run_id}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -167,7 +191,24 @@ function RetrievalCandidatesSection({
   unusedCount: number;
 }) {
   const [expanded, setExpanded] = useState(false);
-  if (candidates.length === 0) return null;
+
+  // AC3 is "the trace shows retrieval candidates both used AND not used". An
+  // empty list used to render nothing at all, which left a reviewer unable to
+  // distinguish "retrieval never ran for this finding" from "retrieval ran and
+  // proposed nothing" — the same ambiguity the incomplete-chain notice below
+  // exists to remove, left unfixed one component down. So the section always
+  // renders and says which case it is.
+  if (candidates.length === 0) {
+    return (
+      <div
+        className="mt-3 rounded-md border border-border/70 bg-panel/50 px-2 py-2 text-[11px] leading-relaxed text-muted"
+        data-testid="trace-retrieval-empty"
+      >
+        No retrieval candidates were proposed for this finding — its context was
+        composed from the knowledge graph alone, not from indexed content.
+      </div>
+    );
+  }
 
   return (
     <div className="mt-3 rounded-md border border-border/70 bg-panel/50 p-2">
@@ -213,6 +254,120 @@ function RetrievalCandidatesSection({
   );
 }
 
+/**
+ * 2.0-B1 T4 (AC4/AC6) — download this finding's signed evidence bundle.
+ *
+ * The bundle is built and signed on demand and streamed; nothing is stored
+ * server-side except the audit record of the disclosure (AC6), so there is no
+ * "previous exports" list to offer.
+ *
+ * Two things this button is deliberately careful about:
+ *
+ *   * it does NOT hide itself when the chain is incomplete. An auditor is
+ *     entitled to the bundle for a finding whose provenance stops at the
+ *     evidence layer — but the bundle then attests to a partial chain, so the
+ *     button says so BEFORE the download rather than letting a signed artifact
+ *     reach a third party looking more authoritative than it is;
+ *   * the failure message is specific. A 403 (not analyst), a 400 (the
+ *     installation has no license report_key, or a content-discipline
+ *     violation blocked the export) and a network fault are different problems
+ *     with different fixes, and "export failed" sends the reader nowhere.
+ */
+function ExportEvidenceButton({
+  runId,
+  oppId,
+  complete,
+}: {
+  runId: string;
+  oppId: string;
+  complete: boolean;
+}) {
+  const [busy, setBusy] = useState<'report' | 'bundle' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run(kind: 'report' | 'bundle', action: () => Promise<void>) {
+    if (busy) return;
+    setBusy(kind);
+    setError(null);
+    try {
+      await action();
+    } catch (err) {
+      setError(exportErrorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const partial = complete
+    ? ''
+    : ' This chain stops short of its source records, and the export records that.';
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex items-center gap-1.5">
+        {/* Primary: what a person reads. Listed first because that is what
+            almost every click wants — the verifiable artifact is for the auditor
+            who asks for it, not the default. */}
+        <button
+          type="button"
+          onClick={() =>
+            run('report', () => downloadEvidenceReportForFinding(runId, oppId))
+          }
+          disabled={busy !== null}
+          data-testid="trace-export-report"
+          title={`Download a readable PDF of this finding's evidence and provenance chain.${partial}`}
+          className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-0.5 text-xs font-medium text-text hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <FileText size={11} />
+          {busy === 'report' ? 'Preparing…' : 'Evidence report (PDF)'}
+        </button>
+        {/* Secondary: the artifact that actually verifies. */}
+        <button
+          type="button"
+          onClick={() =>
+            run('bundle', () => downloadFindingEvidenceBundle(runId, oppId))
+          }
+          disabled={busy !== null}
+          data-testid="trace-export-bundle"
+          title="Download the signed bundle (.json) an auditor verifies offline with scripts/verify_evidence_export.py. Do not edit or reformat it — any altered byte fails verification."
+          className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-0.5 text-xs font-medium text-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <Download size={11} />
+          {busy === 'bundle' ? 'Preparing…' : 'Signed bundle'}
+        </button>
+      </div>
+      {error && (
+        <span
+          data-testid="trace-export-error"
+          role="alert"
+          className="max-w-[18rem] text-right text-[10px] leading-tight text-red-500"
+        >
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** Turn an export failure into something the reader can act on. */
+function exportErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 403) {
+      return 'Signed exports are analyst-only.';
+    }
+    if (err.status === 404) {
+      return 'This run is no longer available.';
+    }
+    const body = err.body;
+    if (body && typeof body === 'object' && 'detail' in body) {
+      const detail = (body as { detail?: unknown }).detail;
+      if (typeof detail === 'string' && detail.trim()) return detail;
+    }
+    return `Export failed (${err.status}).`;
+  }
+  return 'Export failed — could not reach the server.';
+}
+
 export default function TraceGraphPanel({
   runId,
   oppId,
@@ -220,6 +375,8 @@ export default function TraceGraphPanel({
   runId: string | null | undefined;
   oppId: string | null | undefined;
 }) {
+  const auth = useAuthOptional();
+  const viewer = isViewerRole(auth?.user?.role);
   const key = runId && oppId ? cacheKeys.runTraceGraph(runId, oppId) : null;
   const { data, loading, error } = useResource(key, () =>
     fetchTraceGraph(runId as string, oppId as string)
@@ -255,11 +412,23 @@ export default function TraceGraphPanel({
     <div>
       <div className="mb-2 flex items-center justify-between gap-3">
         <span className="text-xs font-semibold text-text">Source Trace</span>
-        {data && data.available && (
-          <span className="shrink-0 rounded border border-bg px-1.5 py-0.5 text-xs text-text">
-            {data.hops.length} hop{data.hops.length === 1 ? '' : 's'}
-          </span>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {/* Analyst+ only, mirroring the endpoint. The trace itself is viewer-
+              readable; issuing a SIGNED artifact that leaves the deployment is a
+              disclosure, and is gated one level higher. */}
+          {data && data.available && !viewer && (
+            <ExportEvidenceButton
+              runId={runId}
+              oppId={oppId}
+              complete={data.complete}
+            />
+          )}
+          {data && data.available && (
+            <span className="shrink-0 rounded border border-bg px-1.5 py-0.5 text-xs text-text">
+              {data.hops.length} hop{data.hops.length === 1 ? '' : 's'}
+            </span>
+          )}
+        </div>
       </div>
       <div className="rounded-lg border border-border bg-bg/30 p-3" data-testid="trace-graph-panel">
         {loading && (
