@@ -102,16 +102,12 @@ def register_cloud_ops_signature_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
 
         run_org = _run_org_id(run)
-        # The org comes from the tenancy context, never from the request, and a
-        # run this org does not own is simply not found rather than confirming its
-        # existence.
-        #
-        # A run with NO recorded org is also not found. Ownership that cannot be
-        # established is not ownership: treating a missing `orgId`/`org_id` as
-        # "belongs to whoever is asking" would let any tenant read the signature
-        # rows of any run written before the field existed, or by a path that
-        # failed to stamp it. Refusing costs a legacy run its diagnostics; the
-        # alternative costs a tenant its isolation.
+        # Same posture as the graph/retrieval routes: the org comes from the
+        # tenancy context, never from the request, and a cross-org run is simply
+        # not found rather than confirming its existence. A MISSING org stamp is
+        # treated the same as a cross-org one — ownership that cannot be
+        # established is not ownership, so an unconfirmable owner must fail closed
+        # rather than let any tenant read a pre-stamp run's signature rows.
         if not run_org or run_org != get_current_org_id():
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
 

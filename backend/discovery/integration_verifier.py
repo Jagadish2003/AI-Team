@@ -607,6 +607,9 @@ def main():
             print(f"         ❌ {issue[:80]}")
 
     if args.report_path:
+        # 2.0-B1 T5 (AC5): guard the verification report before writing.
+        from .export_safety import guard_exported_payload
+        report = guard_exported_payload(report, where="integration verification report export")
         Path(args.report_path).parent.mkdir(parents=True, exist_ok=True)
         Path(args.report_path).write_text(
             json.dumps(report, indent=2), encoding="utf-8"

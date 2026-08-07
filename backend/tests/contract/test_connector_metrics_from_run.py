@@ -64,6 +64,7 @@ def test_update_connector_metrics_from_completed_run(monkeypatch) -> None:
     org_id = "org_metrics"
 
     payload = {
+        "completedAt": "2026-08-07T08:15:00+00:00",
         "inputs": {
             "sn_total_incidents_90d": 130,
             "sn_lending_signal_count": 5,
@@ -119,6 +120,18 @@ def test_update_connector_metrics_from_completed_run(monkeypatch) -> None:
     assert records[f"{org_id}{_SEP}salesforce"]["lastSynced"] == "Just now"
     assert records[f"{org_id}{_SEP}servicenow"]["lastSynced"] == "Just now"
     assert records[f"{org_id}{_SEP}jira_confluence"]["lastSynced"] == "Just now"
+    assert (
+        records[f"{org_id}{_SEP}salesforce"]["lastSuccessfulIngestionAt"]
+        == "2026-08-07T08:15:00+00:00"
+    )
+    assert (
+        records[f"{org_id}{_SEP}servicenow"]["lastSuccessfulIngestionAt"]
+        == "2026-08-07T08:15:00+00:00"
+    )
+    assert (
+        records[f"{org_id}{_SEP}jira_confluence"]["lastSuccessfulIngestionAt"]
+        == "2026-08-07T08:15:00+00:00"
+    )
 
     # The shared catalog rows are never mutated — another org reading the catalog
     # default must not see this org's run metrics or its "Just now" sync time.
@@ -132,6 +145,9 @@ def test_metrics_are_isolated_between_orgs(monkeypatch) -> None:
     """A run in org A must not change the connector metrics org B sees."""
     records = _connector_records()
     _install_fake_store(monkeypatch, records)
+    monkeypatch.setattr(
+        connector_metrics.db, "now_iso", lambda: "2026-08-07T09:00:00+00:00"
+    )
 
     connector_metrics.update_connector_metrics_from_run(
         {"opportunities": [{"evidence": [{"id": "ev_1", "source": "Jira"}]}]},
@@ -141,6 +157,10 @@ def test_metrics_are_isolated_between_orgs(monkeypatch) -> None:
 
     # org_A has its own overlay row with refreshed metrics.
     assert records[f"org_A{_SEP}jira_confluence"]["lastSynced"] == "Just now"
+    assert (
+        records[f"org_A{_SEP}jira_confluence"]["lastSuccessfulIngestionAt"]
+        == "2026-08-07T09:00:00+00:00"
+    )
     # org_B never got an overlay row — it still resolves to the catalog default.
     assert f"org_B{_SEP}jira_confluence" not in records
     assert records["jira_confluence"]["lastSynced"] == "—"
@@ -159,6 +179,26 @@ def test_connector_metrics_update_accepts_jira_connector_alias(monkeypatch) -> N
     assert records[f"default{_SEP}jira_confluence"]["metrics"][0]["value"] == "1"
     # The salesforce overlay was never created by a jira-only run.
     assert f"default{_SEP}salesforce" not in records
+
+
+def test_connector_metrics_update_accepts_salesforce_product_alias(monkeypatch) -> None:
+    records = _connector_records()
+    _install_fake_store(monkeypatch, records)
+    monkeypatch.setattr(
+        connector_metrics.db, "now_iso", lambda: "2026-08-07T09:30:00+00:00"
+    )
+
+    connector_metrics.update_connector_metrics_from_run(
+        {"opportunities": [{"raw_evidence": {"total_loans": 4}}]},
+        ["salesforce_ncino"],
+        "default",
+    )
+
+    assert records[f"default{_SEP}salesforce"]["metrics"][0]["value"] == "4"
+    assert (
+        records[f"default{_SEP}salesforce"]["lastSuccessfulIngestionAt"]
+        == "2026-08-07T09:30:00+00:00"
+    )
 
 
 def test_connector_metrics_update_is_non_blocking(monkeypatch, caplog) -> None:

@@ -606,8 +606,10 @@ class IngestionCompletedPayload(TypedDict, total=False):
         payload is DB-shaped (query_count / signal_count / degraded_count) and the
         panel derives ``last_error`` from its ``degraded_count``, so a non-DB
         connector borrowing it would inject false meaning into the error column.
-      * the ``lastSynced`` display string — written by ``app/connector_metrics.py``
-        for the three hardcoded ids salesforce / servicenow / jira_confluence.
+      * the legacy connector-metrics overlay — written by
+        ``app/connector_metrics.py`` for the three hardcoded ids salesforce /
+        servicenow / jira_confluence, and separate from connector-agnostic
+        ingestion telemetry.
 
     The other candidates were checked and rejected: ``ingestion.artifact_changed``
     is per-RECORD and suppressed entirely for a transport-only connector
@@ -966,6 +968,32 @@ class BillingSystemLedgerPayload(TypedDict, total=False):
     seq: NotRequired[Optional[int]]
 
 
+class EvidenceExportGeneratedPayload(TypedDict):
+    """Payload for ``export.evidence_generated`` (2.0-B1 T4).
+
+    Emitted once per signed evidence-export bundle. The bundle is a distributable
+    attestation, so its generation is recorded for run-health/observability
+    alongside the organisation-wide audit event.
+
+    scope is ``finding`` or ``report``; record_count/content_root/signature_prefix
+    identify WHICH artifact was issued so a later dispute can be tied to a
+    specific bundle.
+
+    PII/secret guard: identifiers, counts, and content HASHES only — never bundle
+    content, never the full signature (a prefix identifies, it does not
+    reproduce the MAC), never a credential.
+    """
+    scope: NotRequired[str]
+    run_id: NotRequired[Optional[str]]
+    opportunity_id: NotRequired[Optional[str]]
+    finding_count: NotRequired[Optional[int]]
+    record_count: NotRequired[Optional[int]]
+    content_root: NotRequired[Optional[str]]
+    signature_prefix: NotRequired[Optional[str]]
+    generated_at: NotRequired[Optional[str]]
+    org_id: NotRequired[str]
+
+
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
@@ -1123,6 +1151,10 @@ register_event_type("billing.run_completed", BillingRunCompletedPayload)
 # unregistered type, so registration must precede the first emission.
 register_event_type("billing.system_connected", BillingSystemLedgerPayload)
 register_event_type("billing.system_disconnected", BillingSystemLedgerPayload)
+# 2.0-B1 / T4 (AC4) — a signed evidence-export bundle was generated. Emitted by
+# app.routes_evidence_export once per issued bundle; record_event() raises
+# ValueError for an unregistered type, so registration must precede emission.
+register_event_type("export.evidence_generated", EvidenceExportGeneratedPayload)
 # 2.0-A2 T1 — opportunity lifecycle transitions. Registered before the first
 # emission site exists: record_event() raises for an unregistered event_type.
 register_event_type(
@@ -1309,6 +1341,7 @@ __all__ = [
     "ModelGenerationCompletedPayload",      # R16-D1 / AT-366 (T5)
     "ModelEmbeddingCompletedPayload",       # R16-D1 / AT-366 (T5)
     "RetrievalQueryCompletedPayload",       # R18-B1 T4
+    "EvidenceExportGeneratedPayload",       # 2.0-B1 T4 (AC4)
     "EVENT_PAYLOAD_TYPES",          # AT-211 alias: event_type → TypedDict schema
     "EVENT_REGISTRY",
     "EVENT_TYPE_REGISTRY",          # alias for T1-S10-C unit tests

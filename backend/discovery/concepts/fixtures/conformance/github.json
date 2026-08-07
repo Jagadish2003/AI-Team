@@ -1,0 +1,54 @@
+{
+  "_meta": {
+    "story": "2.0-B4 T5 (AT-814)",
+    "purpose": "Conformance golden fixture for one shipped connector (AC4). Locks the connector's per-concept conformance declaration (status/reason/mapper/field_gaps) from discovery/concepts/conformance.py. The CI gate (tests/contract/test_r2_0_b4_t5_conformance_fixtures.py) fails if a shipped connector has no fixture here, and pins each fixture to the registry so a conformance change cannot ship without updating its golden.",
+    "note": "Every 'supported' concept's mapper must resolve in T2's mapper registry (discovery.concepts.mappers.resolve_mapper) — the gate checks it. The raw→concept correctness of each mapper is proven by T2's connector-mapping test."
+  },
+  "connector_id": "github",
+  "source_family": "code",
+  "concept_set_version": 1,
+  "concepts": {
+    "actor_group": {
+      "status": "gap",
+      "reason": "teams exist in GitHub but the ingest surface reads repository and PR activity, not org team membership",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "approval": {
+      "status": "declared",
+      "reason": "a PR review approval is a genuine approval record; the connector does not read the reviews endpoint yet",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "artifact": {
+      "status": "supported",
+      "reason": "commits and code files, the two surfaces R18-A2's git content path reads. content_type follows the retrieval substrate: 'code' for a file, 'conversation' for a commit message.",
+      "mapper": "discovery.concepts.mappers.content:map_git_artifact",
+      "field_gaps": []
+    },
+    "assignment": {
+      "status": "gap",
+      "reason": "PR review requests are per-person; there is no group work queue to assign to",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "entity_reference": {
+      "status": "supported",
+      "reason": "",
+      "mapper": "discovery.concepts.mappers.content:map_repo_reference",
+      "field_gaps": []
+    },
+    "state_transition": {
+      "status": "declared",
+      "reason": "PR open/review/merge/close is a real transition stream on the same unread per-record surface as work_item",
+      "mapper": null,
+      "field_gaps": []
+    },
+    "work_item": {
+      "status": "declared",
+      "reason": "pull requests are tracked work and the connector reads PR activity, but as aggregate metrics rather than per-PR records — the mapping needs a per-record read",
+      "mapper": null,
+      "field_gaps": []
+    }
+  }
+}

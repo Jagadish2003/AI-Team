@@ -65,12 +65,18 @@ try:  # Repo-root import style (tests add both roots to sys.path).
         GRAPH_CONTEXT_MAX_RELATIONSHIPS,
     )
     from backend.app.provenance import INFERRED, OBSERVED
+    from backend.app.assembly_policy_config import SOURCE_TYPE_STRUCTURED
+    from backend.app import context_contradictions as _contradictions
+    from backend.app import conversation_ceiling as _ceiling
 except ModuleNotFoundError:  # Runtime inside backend/ where app is top-level.
     from app.graph_constants import (
         GRAPH_CONTEXT_MAX_ENTITIES,
         GRAPH_CONTEXT_MAX_RELATIONSHIPS,
     )
     from app.provenance import INFERRED, OBSERVED
+    from app.assembly_policy_config import SOURCE_TYPE_STRUCTURED
+    from app import context_contradictions as _contradictions
+    from app import conversation_ceiling as _ceiling
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +102,17 @@ REASON_RANKED_OUT = "ranked_out"
 # 'excluded: stale' so freshness exclusions are visible, never silent (AC6).
 REASON_STALE = "stale"
 
+# 2.0-B3 T1 — declared-dimension names, mirrored from app.assembly_policy_config so
+# this module can build a rank key without importing the loader on every call (the
+# loader imports nothing from here, and keeping the direction one-way avoids a
+# cycle). The loader's KNOWN_DIMENSIONS is the authority; a contract test pins the
+# two lists together so they cannot drift.
+_ORIGIN_DIM = "origin"
+_SOURCE_TYPE_DIM = "source_type"
+_CONFIDENCE_DIM = "confidence"
+_FRESHNESS_DIM = "freshness"
+_CANDIDATE_ID_DIM = "candidate_id"
+
 
 def _reason_included(position: int) -> str:
     """The Section-3 inclusion reason, carrying the 1-based rank position."""
@@ -116,6 +133,12 @@ __all__ = [
     "REASON_BUDGET_EXHAUSTED",
     "REASON_RANKED_OUT",
     "REASON_STALE",
+    "REASON_TOTAL_BUDGET",
+    "SOURCE_TYPE_STRUCTURED",
+    "KindBudget",
+    "AssemblyBudgetReport",
+    "SelectionOutcome",
+    "run_selection",
 ]
 
 
@@ -140,6 +163,58 @@ class AssemblyPolicy:
     observed_first: bool = True            # observed strictly before inferred
     freshness_halflife_days: float = 30.0  # older context weighed down
     include_stale: bool = False            # R18-B2 T4: admit stale candidates?
+    # 2.0-B3 T2: the per-finding budget across ALL kinds. None leaves the per-kind
+    # caps as the only bound, which is the shipped default — the value is
+    # uncalibrated, and a guessed number here would trim every finding silently.
+    max_total_items: Optional[int] = None
+
+    # ── 2.0-B3 T1: precedence as DECLARED configuration (AC1) ──────────────
+    #
+    # ``declaration`` is the loaded ``config/assembly_policy.json``. When present
+    # it OWNS precedence: which dimensions form hard budget tiers, the soft
+    # ranking order within a tier, and the rank tables for origin and source type.
+    # Reordering ``ranking`` in that file changes composition with no code change.
+    #
+    # None keeps the R16-B2 behaviour exactly — the fields above, ranked
+    # confidence -> freshness -> id with observed as a hard tier — so every
+    # existing caller and test is unaffected and this stays additive. Prefer
+    # :meth:`declared` over constructing with a declaration by hand.
+    declaration: Optional[Any] = None
+
+    @classmethod
+    def declared(
+        cls, declaration: Optional[Any] = None, **overrides: Any
+    ) -> "AssemblyPolicy":
+        """Build a policy from the declared configuration (2.0-B3 T1 / AC1).
+
+        Loads ``config/assembly_policy.json`` unless a parsed declaration is
+        supplied. The caps, floor and freshness half-life come from the declaration
+        too, so there is ONE place a deployment states them; ``overrides`` remains
+        available for a caller with a legitimate per-call bound (a narrower budget
+        for a small prompt, say) without editing the shared file.
+
+        Raises ``AssemblyPolicyConfigError`` when the declaration is missing or
+        invalid — never silently falls back to the in-code defaults, because a
+        deployment that believes it configured precedence and did not would compose
+        findings differently from what its operators think.
+        """
+        if declaration is None:
+            from .assembly_policy_config import load_declared_policy
+
+            declaration = load_declared_policy()
+        base = dict(
+            max_entities=declaration.max_entities,
+            max_relationships=declaration.max_relationships,
+            max_evidence_chunks=declaration.max_evidence_chunks,
+            confidence_floor=declaration.confidence_floor,
+            freshness_halflife_days=declaration.freshness_halflife_days,
+            include_stale=not declaration.exclude_stale,
+            max_total_items=declaration.max_total_items,
+            observed_first=_ORIGIN_DIM in declaration.budget_partitions,
+            declaration=declaration,
+        )
+        base.update(overrides)
+        return cls(**base)
 
 
 @dataclass(frozen=True)
@@ -162,6 +237,13 @@ class Candidate:
     payload: Any = None
     freshness_days: Optional[float] = None  # precomputed age in days, if known
     is_stale: bool = False                  # R18-B2 T4: source changed, not refreshed
+    # 2.0-B3 T1: what KIND OF SOURCE this came from — structured | prose | code |
+    # conversation. The dimension that makes "structured records outrank
+    # conversational content" enforceable rather than merely stated; before this
+    # there was nothing to rank a Slack thread against a ServiceNow incident by
+    # except confidence. Empty means undeclared, which sorts LAST among declared
+    # source types (an item earns precedence by declaring what it is).
+    source_type: str = ""
 
 
 @dataclass
@@ -173,6 +255,216 @@ class ContextPackage:
     evidence: List[Any] = field(default_factory=list)        # empty until retrieval (1.8)
     policy_used: AssemblyPolicy = field(default_factory=AssemblyPolicy)
     selection_log: List[dict] = field(default_factory=list)  # why each item was in/out
+    # 2.0-B3 T1: the DECLARATION that produced this package, serialised. A
+    # selection_log read six months later has to be interpretable against the
+    # precedence in force when it was written — and since that precedence is now
+    # editable configuration, the log alone is no longer self-explaining. None when
+    # no declaration was used (the R16-B2 in-code defaults).
+    policy_declaration: Optional[dict] = None
+    # 2.0-B3 T2 (AC2): what the per-finding budgets cost this package, in one
+    # serialisable object. The selection_log always held the per-candidate decisions,
+    # but answering "did I lose context, and to which budget?" meant parsing every
+    # entry — so in practice nobody asked. Shaped for 2.0-B1's trace to render.
+    budget_report: Optional[dict] = None
+    # 2.0-B3 T3 (AC3): material disagreements between the sources this package is
+    # composed from. Assembly names them and carries BOTH sides; it never chooses
+    # between them. Empty when no source disagrees. See app/context_contradictions.py.
+    contradictions: List[dict] = field(default_factory=list)
+    contradiction_report: Optional[dict] = None
+    # 2.0-B3 T5 (AC5): the standing conversation ceiling, computed where the evidence
+    # is actually composed. Non-null means the supporting evidence is conversation
+    # content only and this finding may not be presented above MEDIUM, whatever a
+    # scorer or a reordered precedence declaration would otherwise allow.
+    confidence_ceiling: Optional[str] = None
+    ceiling_assessment: Optional[dict] = None
+
+
+# ---------------------------------------------------------------------------
+# 2.0-B3 T2 — budgeted composition: the drop record (AC2)
+# ---------------------------------------------------------------------------
+
+#: A candidate trimmed to satisfy the per-finding TOTAL budget, after it had
+#: already won its per-kind competition. Distinct from ``budget_exhausted``
+#: (crowded out within its own kind) because the remedy differs: this one says the
+#: finding as a whole was too big, not that this kind was oversubscribed.
+REASON_TOTAL_BUDGET = "total_budget"
+
+
+@dataclass(frozen=True)
+class KindBudget:
+    """One kind's budget outcome — budget, what fit, what did not, and why.
+
+    Mirrors MSP-B7's ``BudgetReport`` deliberately: that module established the
+    repo's loud-degradation shape (budget / processed / deferred / breached /
+    reason), and a reader who has seen one should recognise the other.
+    """
+
+    kind: str
+    budget: int
+    considered: int          # candidates that reached the ranking (post floor/stale)
+    selected: int
+    dropped_by_budget: int   # ranked below the cut, or crowded out by a better tier
+    dropped_below_floor: int
+    dropped_stale: int
+    dropped_by_total_budget: int = 0  # trimmed afterwards by the per-finding total
+
+    @property
+    def offered(self) -> int:
+        """Every candidate this kind was handed, including those excluded pre-ranking."""
+        return self.considered + self.dropped_below_floor + self.dropped_stale
+
+    @property
+    def dropped(self) -> int:
+        return (
+            self.dropped_by_budget
+            + self.dropped_below_floor
+            + self.dropped_stale
+            + self.dropped_by_total_budget
+        )
+
+    @property
+    def breached(self) -> bool:
+        """True iff the BUDGET is what cost this kind context.
+
+        Deliberately not "anything was dropped": a below-floor or stale exclusion is
+        a quality decision that would have happened with unlimited budget, and
+        reporting those as a budget breach would send a reader to widen a budget that
+        was never the constraint.
+        """
+        return (self.dropped_by_budget + self.dropped_by_total_budget) > 0
+
+    @property
+    def reason(self) -> Optional[str]:
+        if not self.breached:
+            return None
+        parts = []
+        if self.dropped_by_budget:
+            parts.append(
+                f"{self.dropped_by_budget} dropped against the {self.kind} budget of "
+                f"{self.budget}"
+            )
+        if self.dropped_by_total_budget:
+            parts.append(
+                f"{self.dropped_by_total_budget} trimmed by the per-finding total budget"
+            )
+        return "; ".join(parts)
+
+    def _replace_trimmed(self, trimmed: int) -> "KindBudget":
+        """This kind's outcome with the total-budget trim recorded.
+
+        No arithmetic on ``dropped_by_budget``: the trim RE-LABELS its log entries to
+        ``total_budget`` before the report is derived, so they have already left that
+        count. Subtracting here as well double-corrected it — a per-kind budget that
+        genuinely dropped 5 reported 2, which made ``offered`` stop reconciling with
+        ``selected + dropped``. A report that does not add up is worse than none.
+        """
+        if not trimmed:
+            return self
+        return KindBudget(
+            kind=self.kind,
+            budget=self.budget,
+            considered=self.considered,
+            selected=self.selected,
+            dropped_by_budget=self.dropped_by_budget,
+            dropped_below_floor=self.dropped_below_floor,
+            dropped_stale=self.dropped_stale,
+            dropped_by_total_budget=trimmed,
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": self.kind,
+            "budget": self.budget,
+            "offered": self.offered,
+            "considered": self.considered,
+            "selected": self.selected,
+            "dropped": self.dropped,
+            "dropped_by_budget": self.dropped_by_budget,
+            "dropped_by_total_budget": self.dropped_by_total_budget,
+            "dropped_below_floor": self.dropped_below_floor,
+            "dropped_stale": self.dropped_stale,
+            "breached": self.breached,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True)
+class AssemblyBudgetReport:
+    """What the per-finding budgets cost this package (2.0-B3 T2 / AC2).
+
+    The point is that a truncated context is never SILENT. The selection_log has
+    always carried per-candidate decisions, but reading it required parsing every
+    entry to answer "did I lose context, and to which budget?" — so in practice
+    nobody asked. This is that answer, in one object, JSON-serialisable for the
+    run record and shaped for 2.0-B1's trace to render.
+    """
+
+    per_kind: Tuple[KindBudget, ...] = ()
+    total_budget: Optional[int] = None
+    total_selected: int = 0
+
+    @property
+    def total_dropped(self) -> int:
+        return sum(k.dropped for k in self.per_kind)
+
+    @property
+    def breached(self) -> bool:
+        """True iff a budget — per-kind or total — cost this finding context."""
+        return any(k.breached for k in self.per_kind)
+
+    @property
+    def reason(self) -> Optional[str]:
+        if not self.breached:
+            return None
+        return "; ".join(k.reason for k in self.per_kind if k.reason)
+
+    def to_dict(self) -> dict:
+        return {
+            "total_budget": self.total_budget,
+            "total_selected": self.total_selected,
+            "total_dropped": self.total_dropped,
+            "breached": self.breached,
+            "reason": self.reason,
+            "per_kind": [k.to_dict() for k in self.per_kind],
+        }
+
+
+def _relabel_dropped(log: List[dict], candidate_id: str) -> None:
+    """Mark an already-included log entry as dropped by the total budget.
+
+    Mutates the entry in place rather than appending a second one: two entries for
+    one candidate would make the log self-contradictory ("included" AND "excluded"),
+    and every reader would then need to know which wins.
+    """
+    for entry in log:
+        if entry.get("candidate_id") == candidate_id:
+            entry["decision"] = DECISION_EXCLUDED
+            entry["reason"] = REASON_TOTAL_BUDGET
+            return
+
+
+def _kind_budget(kind: str, budget: int, log: List[dict], selected: int) -> KindBudget:
+    """Derive one kind's budget outcome from its own selection log.
+
+    Derived from the log rather than counted alongside it, so the report and the
+    log can never disagree about what happened — a report that drifted from the
+    log would be worse than no report.
+    """
+    below = sum(1 for e in log if e.get("reason") == REASON_BELOW_FLOOR)
+    stale = sum(1 for e in log if e.get("reason") == REASON_STALE)
+    by_budget = sum(
+        1 for e in log
+        if e.get("reason") in (REASON_BUDGET_EXHAUSTED, REASON_RANKED_OUT)
+    )
+    return KindBudget(
+        kind=kind,
+        budget=budget,
+        considered=len(log) - below - stale,
+        selected=selected,
+        dropped_by_budget=by_budget,
+        dropped_below_floor=below,
+        dropped_stale=stale,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -280,11 +572,86 @@ def _rank_key(candidate: Candidate, reference: Optional[datetime], halflife_days
     Sorted ASCENDING this yields confidence DESC, freshness DESC, then
     ``candidate_id`` ASC. The id is the stable tiebreaker (AC5): two candidates
     with equal confidence and equal freshness always order identically.
+
+    This is the R16-B2 key, retained verbatim as the behaviour used when no policy
+    declaration is present. When one IS present, :func:`_declared_rank_key` builds
+    the key from the declared ``ranking`` order instead (2.0-B3 T1 / AC1).
     """
     return (
         -_confidence(candidate),
         -_freshness_score(candidate, reference, halflife_days),
         candidate.candidate_id,
+    )
+
+
+def _dimension_value(
+    candidate: Candidate,
+    dimension: str,
+    declaration: Any,
+    reference: Optional[datetime],
+    halflife_days: float,
+):
+    """One dimension's sort value for a candidate — ascending means "better first".
+
+    The single place a declared dimension name becomes a comparable value. Adding a
+    dimension means adding a branch here and a name to ``KNOWN_DIMENSIONS``; the
+    loader refuses an unknown name, so a config typo fails at load rather than
+    silently dropping a precedence rule.
+    """
+    if dimension == _CONFIDENCE_DIM:
+        return -_confidence(candidate)
+    if dimension == _FRESHNESS_DIM:
+        return -_freshness_score(candidate, reference, halflife_days)
+    if dimension == _CANDIDATE_ID_DIM:
+        return candidate.candidate_id
+    if dimension == _ORIGIN_DIM:
+        value = OBSERVED if _is_observed(candidate) else INFERRED
+        table = declaration.rank_table(_ORIGIN_DIM)
+        return table.get(value, declaration.unknown_rank(_ORIGIN_DIM))
+    if dimension == _SOURCE_TYPE_DIM:
+        table = declaration.rank_table(_SOURCE_TYPE_DIM)
+        return table.get(
+            (candidate.source_type or "").strip().lower(),
+            declaration.unknown_rank(_SOURCE_TYPE_DIM),
+        )
+    # Unreachable via the loader (it validates names), so this is a guard against a
+    # declaration constructed in code that bypassed validation.
+    raise ValueError(f"unknown assembly-policy dimension {dimension!r}")
+
+
+def _declared_rank_key(
+    candidate: Candidate,
+    declaration: Any,
+    reference: Optional[datetime],
+    halflife_days: float,
+):
+    """Ranking key built from the DECLARED ``ranking`` order (2.0-B3 T1 / AC1).
+
+    Lexicographic over the declared dimensions, so the first entry dominates and
+    reordering the declaration reorders composition — with no code change. The
+    loader guarantees the sequence ends in ``candidate_id``, which is what keeps the
+    key a total order and the package byte-identical run to run.
+    """
+    return tuple(
+        _dimension_value(candidate, dim, declaration, reference, halflife_days)
+        for dim in declaration.ranking
+    )
+
+
+def _partition_key(
+    candidate: Candidate, declaration: Any, reference: Optional[datetime], halflife: float
+):
+    """The HARD tier a candidate belongs to, best tier first.
+
+    Everything in a better tier fills the budget before anything in a worse tier is
+    considered, so a worse-tier candidate can never displace a better-tier one that
+    fit. This is R16-B2 AC3 ("an inferred item can never displace an observed item")
+    generalised: which dimensions are hard is now declared rather than implied by a
+    single ``observed_first`` boolean.
+    """
+    return tuple(
+        _dimension_value(candidate, dim, declaration, reference, halflife)
+        for dim in declaration.budget_partitions
     )
 
 
@@ -299,11 +666,33 @@ def _log_entry(
         "candidate_id": candidate.candidate_id,
         "kind": candidate.kind,
         "origin": OBSERVED if _is_observed(candidate) else INFERRED,
+        # 2.0-B3 T1: recorded because source type is now a precedence dimension.
+        # A log that showed confidence and freshness but not the source type could
+        # not explain why a high-confidence conversation ranked below a weaker
+        # structured record — the decision would look arbitrary.
+        "source_type": candidate.source_type or "",
         "decision": decision,
         "reason": reason,
         "confidence": _confidence(candidate),
         "freshness_days": _freshness_days(candidate, reference),
     }
+
+
+@dataclass(frozen=True)
+class SelectionOutcome:
+    """One kind's full selection result (2.0-B3 T3).
+
+    ``selected`` and ``log`` are what :func:`select_candidates` has always returned.
+    ``eligible`` is the set that cleared the stale and confidence gates — everything
+    that was a legitimate candidate for this finding, whether or not the budget had
+    room for it. T3's contradiction detection reads it: were it to see only the
+    selected items, a budget that trimmed one side of a disagreement would silently
+    settle it, which is the failure that story exists to prevent.
+    """
+
+    selected: List[Candidate]
+    log: List[dict]
+    eligible: List[Candidate]
 
 
 def select_candidates(
@@ -320,7 +709,21 @@ def select_candidates(
 
     The reference timestamp may be supplied so several kinds share one freshness
     frame; when omitted it is derived from ``candidates`` alone.
+
+    Signature unchanged since R16-B2. Callers needing the eligible set as well (T3)
+    use :func:`run_selection`, which this delegates to.
     """
+    outcome = run_selection(candidates, cap, policy, reference)
+    return outcome.selected, outcome.log
+
+
+def run_selection(
+    candidates: List[Candidate],
+    cap: int,
+    policy: Optional[AssemblyPolicy] = None,
+    reference: Optional[datetime] = None,
+) -> SelectionOutcome:
+    """:func:`select_candidates`, additionally returning the eligible set."""
     policy = policy or AssemblyPolicy()
     if reference is None:
         reference = _reference_timestamp(candidates)
@@ -350,23 +753,47 @@ def select_candidates(
         else:
             eligible.append(candidate)
 
-    # Rule 2 — partition into observed and inferred.
-    observed = [c for c in eligible if _is_observed(c)]
-    inferred = [c for c in eligible if not _is_observed(c)]
-
-    # Rule 4 — rank deterministically within each partition.
-    keyf = lambda c: _rank_key(c, reference, halflife)  # noqa: E731
-    observed.sort(key=keyf)
-    inferred.sort(key=keyf)
-
-    # Rule 3 — observed fills the budget first; inferred only fills what's left.
-    # Concatenating observed ahead of inferred makes "observed beats inferred"
-    # structural: an inferred item can never displace an observed item that fit
-    # (AC3). With observed_first off, the two partitions compete on rank alone.
-    if policy.observed_first:
-        ordered = observed + inferred
-    else:
+    # Rules 2–4 — tier, then rank within tier.
+    #
+    # 2.0-B3 T1: when a policy DECLARATION is present it owns both steps — which
+    # dimensions form hard budget tiers (``budget_partitions``) and the soft order
+    # within a tier (``ranking``). Sorting by (tier, rank) as one lexicographic key
+    # is exactly equivalent to grouping into tiers and concatenating them best-first,
+    # so a worse-tier candidate still cannot displace a better-tier one that fit
+    # (R16-B2 AC3, generalised). With no declaration the original R16-B2 path runs
+    # unchanged.
+    declaration = getattr(policy, "declaration", None)
+    if declaration is not None:
+        keyf = lambda c: (  # noqa: E731
+            _partition_key(c, declaration, reference, halflife)
+            + _declared_rank_key(c, declaration, reference, halflife)
+        )
         ordered = sorted(eligible, key=keyf)
+        # The best tier, used only to describe WHY a candidate past the cap missed
+        # out (budget_exhausted vs ranked_out) on the selection log.
+        observed = (
+            [c for c in eligible if _is_observed(c)]
+            if _ORIGIN_DIM in declaration.budget_partitions
+            else []
+        )
+    else:
+        # Rule 2 — partition into observed and inferred.
+        observed = [c for c in eligible if _is_observed(c)]
+        inferred = [c for c in eligible if not _is_observed(c)]
+
+        # Rule 4 — rank deterministically within each partition.
+        keyf = lambda c: _rank_key(c, reference, halflife)  # noqa: E731
+        observed.sort(key=keyf)
+        inferred.sort(key=keyf)
+
+        # Rule 3 — observed fills the budget first; inferred only fills what's left.
+        # Concatenating observed ahead of inferred makes "observed beats inferred"
+        # structural: an inferred item can never displace an observed item that fit
+        # (AC3). With observed_first off, the two partitions compete on rank alone.
+        if policy.observed_first:
+            ordered = observed + inferred
+        else:
+            ordered = sorted(eligible, key=keyf)
 
     # Rule 5 — apply the hard cap.
     cap = max(0, cap)
@@ -397,7 +824,7 @@ def select_candidates(
             reason = REASON_RANKED_OUT
         log.append(_log_entry(candidate, DECISION_EXCLUDED, reason, reference))
 
-    return selected, log
+    return SelectionOutcome(selected=selected, log=log, eligible=list(ordered))
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +887,11 @@ def _entities_to_candidates(graph: Any) -> List[Candidate]:
                 ),
                 source_timestamp=_get(ent, "source_timestamp"),
                 freshness_days=_coerce_float(_get(ent, "freshness_days")),
+                # 2.0-B3 T1: the graph IS the structured record — it is resolved
+                # from source-system records, never from prose or chat. An explicit
+                # source_type on the item still wins, so a producer that knows
+                # better can say so.
+                source_type=_get_first(ent, ("source_type",), SOURCE_TYPE_STRUCTURED),
                 payload=ent,
             )
         )
@@ -503,6 +935,7 @@ def _relationships_to_candidates(graph: Any) -> List[Candidate]:
                 confidence=float(_get(rel, "confidence", 0.0) or 0.0),
                 source_timestamp=_get(rel, "source_timestamp"),
                 freshness_days=_coerce_float(_get(rel, "freshness_days")),
+                source_type=_get_first(rel, ("source_type",), SOURCE_TYPE_STRUCTURED),
                 payload=rel,
             )
         )
@@ -571,6 +1004,15 @@ def _evidence_to_candidates(
                 source_timestamp=_get(chunk, "source_timestamp"),
                 freshness_days=_coerce_float(_get(chunk, "freshness_days")),
                 is_stale=bool(_get(chunk, "is_stale", False)),
+                # 2.0-B3 T1: the retrieval substrate already labels every chunk
+                # prose / code / conversation — the same vocabulary the declared
+                # source_type_ranks table is keyed on, so the precedence rule reads
+                # the producer's own classification rather than guessing from the
+                # source system. Left empty when the chunk does not say, which sorts
+                # last among declared types.
+                source_type=str(
+                    _get_first(chunk, ("source_type", "content_type"), "") or ""
+                ),
                 payload=chunk,
             )
         )
@@ -580,6 +1022,51 @@ def _evidence_to_candidates(
 def _unwrap(candidate: Candidate) -> Any:
     """Return the underlying payload when present, else the candidate itself."""
     return candidate.payload if candidate.payload is not None else candidate
+
+
+def _detect_contradictions(
+    policy: AssemblyPolicy, eligible: List[Candidate], selected_ids: set
+):
+    """Run T3's detection over the eligible candidates (AC3).
+
+    Degrades rather than raises. Assembly's job is to compose a finding; a fault in
+    the disagreement detector must cost the finding its disagreement REPORT, loudly,
+    never its context — the same non-blocking posture ``graph_context`` takes toward
+    a broken policy declaration. It is logged at error level naming the consequence,
+    because a silently absent report reads exactly like "the sources agree".
+    """
+    declaration = getattr(policy, "declaration", None)
+    contradiction_policy = getattr(declaration, "contradictions", None)
+    try:
+        return _contradictions.detect_contradictions(
+            eligible, contradiction_policy, selected_ids
+        )
+    except Exception as exc:  # noqa: BLE001 — a detector fault must not fail assembly.
+        logger.error(
+            "context_assembly: contradiction detection failed (%s) — this package "
+            "reports NO source disagreements, which is not the same as there being "
+            "none", exc,
+        )
+        return _contradictions.ContradictionReport()
+
+
+def _assess_conversation_ceiling(selected_evidence: List[Candidate]):
+    """Assess T5's conversation ceiling over the selected evidence (AC5).
+
+    Degrades to "no ceiling assessed" on failure — and says so at error level. Note
+    the honest asymmetry with the corroboration-layer clamp: that one still stands
+    independently (COR-05 plus the R16-C1 T3 guard), so a fault here removes a second
+    line of defence rather than the rule itself.
+    """
+    try:
+        return _ceiling.assess_candidates(selected_evidence)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "context_assembly: conversation-ceiling assessment failed (%s) — the "
+            "assembly-layer ceiling is NOT applied to this package; the "
+            "corroboration-layer ceiling (COR-05) still stands", exc,
+        )
+        return _ceiling.CeilingAssessment(applies=False)
 
 
 # ---------------------------------------------------------------------------
@@ -614,15 +1101,117 @@ def assemble_context(
         entity_candidates + relationship_candidates + evidence_candidates
     )
 
-    selected_entities, log_entities = select_candidates(
+    entity_outcome = run_selection(
         entity_candidates, policy.max_entities, policy, reference
     )
-    selected_relationships, log_relationships = select_candidates(
+    relationship_outcome = run_selection(
         relationship_candidates, policy.max_relationships, policy, reference
     )
-    selected_evidence, log_evidence = select_candidates(
+    evidence_outcome = run_selection(
         evidence_candidates, policy.max_evidence_chunks, policy, reference
     )
+    selected_entities, log_entities = entity_outcome.selected, entity_outcome.log
+    selected_relationships, log_relationships = (
+        relationship_outcome.selected,
+        relationship_outcome.log,
+    )
+    selected_evidence, log_evidence = evidence_outcome.selected, evidence_outcome.log
+
+    # 2.0-B3 T2 (AC2) — the per-finding TOTAL budget, applied after each kind has
+    # won its own competition. The per-kind caps sum to more than a prompt should
+    # carry, so this is the bound that reflects what a finding can actually afford.
+    #
+    # Deterministic by construction: kinds yield in the DECLARED reverse
+    # ``kind_precedence`` order, and within a kind the already-ranked tail is trimmed
+    # first — so the item dropped is always the lowest-ranked item of the most
+    # substitutable kind. No arbitrary choice anywhere.
+    by_kind = {
+        KIND_ENTITY: list(selected_entities),
+        KIND_RELATIONSHIP: list(selected_relationships),
+        KIND_EVIDENCE: list(selected_evidence),
+    }
+    logs_by_kind = {
+        KIND_ENTITY: log_entities,
+        KIND_RELATIONSHIP: log_relationships,
+        KIND_EVIDENCE: log_evidence,
+    }
+    trimmed_by_kind = {k: 0 for k in by_kind}
+    total_budget = getattr(policy, "max_total_items", None)
+    if total_budget is not None:
+        precedence = (
+            policy.declaration.kind_precedence
+            if policy.declaration is not None
+            else (KIND_ENTITY, KIND_RELATIONSHIP, KIND_EVIDENCE)
+        )
+        overflow = sum(len(v) for v in by_kind.values()) - int(total_budget)
+        for kind in reversed(precedence):
+            if overflow <= 0:
+                break
+            items = by_kind.get(kind) or []
+            give = min(overflow, len(items))
+            if not give:
+                continue
+            # Re-log the trimmed tail so the drop is recorded, never silent (AC2).
+            for candidate in items[len(items) - give:]:
+                _relabel_dropped(logs_by_kind[kind], candidate.candidate_id)
+            by_kind[kind] = items[: len(items) - give]
+            trimmed_by_kind[kind] += give
+            overflow -= give
+        if overflow > 0:
+            # Every kind emptied and still over: only reachable with a budget of 0,
+            # which the loader refuses. Logged rather than ignored.
+            logger.warning(
+                "context_assembly: total budget %s could not be satisfied — %d item(s) "
+                "still over after trimming every kind", total_budget, overflow,
+            )
+
+    selected_entities = by_kind[KIND_ENTITY]
+    selected_relationships = by_kind[KIND_RELATIONSHIP]
+    selected_evidence = by_kind[KIND_EVIDENCE]
+
+    budget_report = AssemblyBudgetReport(
+        per_kind=tuple(
+            _kind_budget(kind, budget, logs_by_kind[kind], len(by_kind[kind]))._replace_trimmed(
+                trimmed_by_kind[kind]
+            )
+            for kind, budget in (
+                (KIND_ENTITY, policy.max_entities),
+                (KIND_RELATIONSHIP, policy.max_relationships),
+                (KIND_EVIDENCE, policy.max_evidence_chunks),
+            )
+        ),
+        total_budget=total_budget,
+        total_selected=sum(len(v) for v in by_kind.values()),
+    )
+    if budget_report.breached:
+        # Loud, at info: a truncated context is a fact an operator may need when a
+        # narrative looks thin, and it must not require log-level archaeology.
+        logger.info(
+            "context_assembly: budget shaped this package — %s", budget_report.reason
+        )
+
+    # 2.0-B3 T3 (AC3) — name the disagreements. Run over the ELIGIBLE candidates of
+    # every kind, not the selected ones, so a budget trim can never quietly settle an
+    # argument: a position whose candidate did not make the cut is still reported,
+    # flagged ``in_context=False``.
+    #
+    # Ordered after selection and deliberately non-destructive: this reads the
+    # candidate sets and returns a record. It does not re-rank, re-weight, drop or
+    # promote anything, which is what makes "surfaced, never resolved" structural
+    # rather than a promise in a docstring.
+    eligible = (
+        entity_outcome.eligible + relationship_outcome.eligible + evidence_outcome.eligible
+    )
+    selected_ids = {
+        c.candidate_id
+        for c in (selected_entities + selected_relationships + selected_evidence)
+    }
+    contradiction_report = _detect_contradictions(policy, eligible, selected_ids)
+
+    # 2.0-B3 T5 (AC5) — the conversation ceiling, derived from the composed EVIDENCE
+    # itself rather than from any editable policy, so neither a reordered
+    # ``source_type_ranks`` nor a scorer can route around it.
+    ceiling = _assess_conversation_ceiling(selected_evidence)
 
     return ContextPackage(
         entities=[_unwrap(c) for c in selected_entities],
@@ -630,4 +1219,12 @@ def assemble_context(
         evidence=[_unwrap(c) for c in selected_evidence],
         policy_used=policy,
         selection_log=log_entities + log_relationships + log_evidence,
+        policy_declaration=(
+            policy.declaration.to_dict() if policy.declaration is not None else None
+        ),
+        budget_report=budget_report.to_dict(),
+        contradictions=[c.to_dict() for c in contradiction_report.contradictions],
+        contradiction_report=contradiction_report.to_dict(),
+        confidence_ceiling=ceiling.ceiling,
+        ceiling_assessment=ceiling.to_dict(),
     )

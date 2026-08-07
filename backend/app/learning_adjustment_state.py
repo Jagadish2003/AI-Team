@@ -182,21 +182,33 @@ def get_adjustments(
 
 
 def list_adjustment_state(org_id: str) -> List[Dict[str, Any]]:
-    """The inspectable state, including inactive rows. T4's read model."""
+    """The inspectable state, including inactive rows. T4's read model.
+
+    Never raises, matching :func:`get_adjustments`: a transient DB error on a
+    read-only governance surface degrades to an empty list rather than a 500,
+    because the state panel is an inspection view and an unavailable one must not
+    take the whole response down with it. The failure is logged rather than
+    swallowed silently — an empty list here means "nothing readable", and the log
+    line is what distinguishes that from "no state stored".
+    """
     org = _clean(org_id)
-    with closing(db.connect()) as con:
-        with con.cursor() as cur:
-            cur.execute(
-                "SELECT detector_id, pack_id, signal_concept, net_weight,"
-                "       outcome_weight, decision_weight, has_outcome_evidence,"
-                "       signal_count, learning_active, contributing_refs,"
-                "       config_version, revision, computed_at, updated_at"
-                "  FROM ranking_adjustments"
-                " WHERE org_id = %s"
-                " ORDER BY ABS(net_weight) DESC, detector_id ASC, pack_id ASC",
-                (org,),
-            )
-            rows = cur.fetchall()
+    try:
+        with closing(db.connect()) as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    "SELECT detector_id, pack_id, signal_concept, net_weight,"
+                    "       outcome_weight, decision_weight, has_outcome_evidence,"
+                    "       signal_count, learning_active, contributing_refs,"
+                    "       config_version, revision, computed_at, updated_at"
+                    "  FROM ranking_adjustments"
+                    " WHERE org_id = %s"
+                    " ORDER BY ABS(net_weight) DESC, detector_id ASC, pack_id ASC",
+                    (org,),
+                )
+                rows = cur.fetchall()
+    except Exception as exc:  # noqa: BLE001 - an inspection view must still serve
+        logger.warning("Could not read ranking adjustment state for %s: %s", org, exc)
+        return []
     return [
         {
             "detectorId": _from_key_part(r[0]),
@@ -221,16 +233,26 @@ def list_adjustment_state(org_id: str) -> List[Dict[str, Any]]:
 def get_adjustment_history(
     org_id: str, *, limit: int = 200
 ) -> List[Dict[str, Any]]:
-    """Every value this org's adjustments have held, newest first."""
-    with closing(db.connect()) as con:
-        with con.cursor() as cur:
-            cur.execute(
-                "SELECT record FROM ranking_adjustment_history"
-                " WHERE org_id = %s ORDER BY recorded_at DESC, history_id DESC"
-                " LIMIT %s",
-                (_clean(org_id), max(1, min(int(limit), 1000))),
-            )
-            rows = cur.fetchall()
+    """Every value this org's adjustments have held, newest first.
+
+    Never raises, for the same reason as :func:`list_adjustment_state`: the audit
+    history is a read-only governance view, so a transient DB error degrades to an
+    empty list with a logged warning rather than a 500.
+    """
+    org = _clean(org_id)
+    try:
+        with closing(db.connect()) as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    "SELECT record FROM ranking_adjustment_history"
+                    " WHERE org_id = %s ORDER BY recorded_at DESC, history_id DESC"
+                    " LIMIT %s",
+                    (org, max(1, min(int(limit), 1000))),
+                )
+                rows = cur.fetchall()
+    except Exception as exc:  # noqa: BLE001 - an audit view must still serve
+        logger.warning("Could not read ranking adjustment history for %s: %s", org, exc)
+        return []
     out: List[Dict[str, Any]] = []
     for row in rows:
         raw = row[0]

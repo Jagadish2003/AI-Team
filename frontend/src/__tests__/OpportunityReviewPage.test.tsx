@@ -89,6 +89,8 @@ const mockRefetch = vi.fn();
 const mockNavigate = vi.fn();
 const mockPush = vi.hoisted(() => vi.fn());
 const mockFetchLearningSignals = vi.hoisted(() => vi.fn());
+const mockFetchOpportunityOutcome = vi.hoisted(() => vi.fn());
+const mockFetchOutcomePortfolio = vi.hoisted(() => vi.fn());
 
 function learningSignals(active = true) {
   return {
@@ -170,6 +172,12 @@ vi.mock('../api/learningApi', () => ({
   fetchLearningSignals: () => mockFetchLearningSignals(),
 }));
 
+vi.mock('../api/outcomeApi', () => ({
+  fetchOpportunityOutcome: (opportunityIdentity: string) =>
+    mockFetchOpportunityOutcome(opportunityIdentity),
+  fetchOutcomePortfolio: (...args: unknown[]) => mockFetchOutcomePortfolio(...args),
+}));
+
 vi.mock('../components/common/TopNav', () => ({
   default: () => <nav data-testid="top-nav" />,
 }));
@@ -231,6 +239,22 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     mockSelectedId = OPP_1.id;
     mockSalesforceConnected = false;
     mockFetchLearningSignals.mockResolvedValue(learningSignals(true));
+    mockFetchOpportunityOutcome.mockResolvedValue({
+      schemaVersion: '1.0.0',
+      opportunityIdentity: 'opp_identity',
+      lifecycle: null,
+      measurements: [],
+      latestMeasurement: null,
+      caveatedMeasurementCount: 0,
+      emptyState: { reason: 'no_measurements', message: 'No stored movement measurement exists yet.' },
+    });
+    mockFetchOutcomePortfolio.mockResolvedValue({
+      schemaVersion: '1.0.0',
+      generatedAt: '2026-08-06T00:00:00Z',
+      filters: {},
+      aggregates: { numberRefs: [], actionedOpportunityCount: 0, measuredOpportunityCount: 0, measurementCount: 0, caveatedMeasurementCount: 0 },
+      items: [],
+    });
   });
 
   // ── Route and redirect tests ────────────────────────────────────────────────
@@ -297,11 +321,142 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
 
   // ── Decision / optimistic update tests ─────────────────────────────────────
 
-  it('AC6: renders the approve/reject panel without the Release 2 demo flag', () => {
+  it('AC6: renders the approve/reject panel with Arc A UI visible', () => {
     renderPage();
     expect(screen.getByText('Reasoning Override')).toBeTruthy();
     expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
     expect(screen.getByRole('button', { name: /reject/i })).toBeEnabled();
+  });
+
+  it('A3 AC2: renders ranking adjustment reason and contributing links', () => {
+    mockSelectedId = OPP_2.id;
+    mockOpportunities = [
+      OPP_1,
+      {
+        ...OPP_2,
+        _ranking: {
+          schemaVersion: '1.0.0',
+          baseRank: 4,
+          baseImpact: 5,
+          adjustedRank: 2,
+          moved: -2,
+          adjusted: true,
+          caps: {
+            maxScoreFraction: 0.15,
+            maxRankMove: 2,
+          },
+          effectiveImpact: 5.6,
+          appliedDelta: 0.6,
+          requestedDelta: 0.9,
+          wasCapped: true,
+          cappedBy: 'rank_move',
+          hasOutcomeEvidence: true,
+          signalCount: 3,
+          reason: {
+            schemaVersion: '1.0.0',
+            direction: 'up',
+            ranksMoved: 2,
+            baseRank: 4,
+            adjustedRank: 2,
+            decisionCount: 1,
+            decisionsByAction: { accept: 1 },
+            outcomeCount: 1,
+            outcomesByVerdict: { within_band: 1 },
+            hasOutcomeEvidence: true,
+            wasCapped: true,
+            cappedBy: 'rank_move',
+            evidenceStrength: 'moderate',
+            totalSignals: 2,
+            contributingDecisions: [
+              {
+                kind: 'decision',
+                feedbackId: 'fb_001',
+                action: 'accept',
+                opportunityIdentity: 'opp_identity_002',
+                reasonCode: 'valuable',
+                actorId: 'user_001',
+                recordedAt: '2026-08-06T00:00:00Z',
+                href: '/api/learning/feedback/entry/fb_001',
+              },
+            ],
+            contributingOutcomes: [
+              {
+                kind: 'outcome',
+                opportunityIdentity: 'opp_identity_002',
+                verdict: 'within_band',
+                currentRunId: 'run_current',
+                baselineRunId: 'run_baseline',
+                measuredDirection: 'improves',
+                comparabilityVerdict: 'comparable',
+                measuredAt: '2026-08-06T00:00:00Z',
+                href: '/api/opportunity-movement/opp_identity_002',
+              },
+            ],
+            summary: 'Ranked higher: your team accepted similar findings and one recorded movement within band.',
+          },
+        },
+      },
+    ];
+
+    renderPage();
+
+    expect(screen.getByTestId('ranking-adjustment-panel')).toHaveTextContent(
+      /Ranked higher/i,
+    );
+    expect(screen.getByTestId('ranking-adjustment-panel')).toHaveTextContent(
+      /Ordering only/i,
+    );
+    expect(screen.getByRole('link', { name: /Decision: accept/i })).toHaveAttribute(
+      'href',
+      '/api/learning/feedback/entry/fb_001',
+    );
+    expect(screen.getByRole('link', { name: /Outcome: within_band/i })).toHaveAttribute(
+      'href',
+      '/api/opportunity-movement/opp_identity_002',
+    );
+  });
+
+  it('A3 PR fix: ranked opportunities sort ahead of unranked fallback scoring', () => {
+    mockOpportunities = [
+      {
+        ...OPP_1,
+        title: 'High impact unranked fallback',
+        impact: 10,
+        effort: 1,
+      },
+      {
+        ...OPP_2,
+        title: 'Learned rank one',
+        impact: 1,
+        effort: 1,
+        _ranking: {
+          schemaVersion: '1.0.0',
+          baseRank: 4,
+          baseImpact: 1,
+          adjustedRank: 1,
+          moved: -3,
+          adjusted: true,
+          caps: { maxScoreFraction: 0.15, maxRankMove: 3 },
+        },
+      },
+    ];
+
+    renderPage();
+
+    const list = screen.getByText('Opportunity List').closest('.flex.h-full') as HTMLElement;
+    expect(list).toBeTruthy();
+    const listText = list.textContent ?? '';
+    expect(listText.indexOf('Learned rank one')).toBeLessThan(
+      listText.indexOf('High impact unranked fallback'),
+    );
+  });
+
+  it('A2 PR fix: does not fetch an outcome with a run-scoped legacy opportunity id', () => {
+    renderPage();
+
+    expect(mockFetchOpportunityOutcome).not.toHaveBeenCalled();
+    expect(mockFetchOutcomePortfolio).not.toHaveBeenCalled();
+    expect(screen.queryByText('Opportunity Outcome')).toBeNull();
   });
 
   it('AC6: Approve button calls setDecision with APPROVED', async () => {

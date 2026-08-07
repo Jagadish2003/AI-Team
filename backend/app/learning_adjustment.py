@@ -76,6 +76,16 @@ CAPPED_BY_RANK_MOVE = "rank_move"
 #: existing field is touched.
 RANKING_FIELD = "_ranking"
 
+#: What an emitted rank is RELATIVE TO. A rank is an index into the list this
+#: function was handed, so the SAME finding legitimately holds different
+#: ``baseRank`` values depending on the caller: the roadmap adjusts each stage
+#: separately (stage-local ranks) while the run-scoped surfaces adjust one flat
+#: list (run-global ranks). Both are correct; comparing them is not. Serving the
+#: scope beside the rank is what stops "moved N places" being read against the
+#: wrong denominator.
+RANK_SCOPE_RUN = "run"
+RANK_SCOPE_ROADMAP_STAGE = "roadmap_stage"
+
 
 # --------------------------------------------------------------------------
 # What the layer learned about one finding type
@@ -334,6 +344,7 @@ def adjust_ranking(
     inactive_reason: Optional[str] = None,
     policy: Optional[AdjustmentPolicy] = None,
     config: Optional[LearningSignalConfig] = None,
+    rank_scope: str = RANK_SCOPE_RUN,
 ) -> AdjustedRanking:
     """Reorder one list of findings within the configured cap.
 
@@ -350,6 +361,13 @@ def adjust_ranking(
         is_active: T1's cold-start gate (``SignalSet.is_active``). False applies
             nothing — "no pretending to personalise from three data points".
         inactive_reason: the plain-language reason, carried through for the UI.
+        rank_scope: what the emitted ranks are RELATIVE TO. A rank is an index
+            into the list it was given, so a caller adjusting one roadmap stage
+            gets stage-local ranks while a caller adjusting a whole run gets
+            run-global ones — the same finding legitimately holds two different
+            ``baseRank`` values. Recording the scope means "moved N places" is
+            never read against the wrong denominator; comparing ranks across
+            differing scopes is meaningless. See ``RANK_SCOPE_*``.
     """
     cfg = config or load_config()
     active_policy = policy or cfg.adjustment
@@ -357,7 +375,10 @@ def adjust_ranking(
 
     def unchanged(reason: Optional[str]) -> AdjustedRanking:
         return AdjustedRanking(
-            ordered=tuple(_annotate(o, index, None, active_policy) for index, o in enumerate(items)),
+            ordered=tuple(
+                _annotate(o, index, None, active_policy, rank_scope)
+                for index, o in enumerate(items)
+            ),
             adjustments=(),
             applied=False,
             reason=reason,
@@ -438,7 +459,9 @@ def adjust_ranking(
         if record is not None:
             record = replace(record, adjusted_rank=slot)
             final_records.append(record)
-        ordered.append(_annotate(items[base_index], base_index, record, active_policy))
+        ordered.append(
+            _annotate(items[base_index], base_index, record, active_policy, rank_scope)
+        )
 
     return AdjustedRanking(
         ordered=tuple(ordered),
@@ -454,6 +477,7 @@ def _annotate(
     base_rank: int,
     record: Optional[OpportunityAdjustment],
     policy: AdjustmentPolicy,
+    rank_scope: str = RANK_SCOPE_RUN,
 ) -> Mapping[str, Any]:
     """A COPY carrying its base position. Nothing existing is overwritten.
 
@@ -461,13 +485,20 @@ def _annotate(
     "what would this have ranked without learning?" is answerable from the
     response itself rather than from a second request against a different code
     path that might disagree.
+
+    ``rankScope`` travels with them because a rank is only meaningful against the
+    list it indexes: the roadmap adjusts per stage and this run's surfaces adjust
+    one flat list, so the same finding carries a stage-local rank in one payload
+    and a run-global one in the other. Both are right; silently comparing them is
+    not, and the scope is what makes the difference legible.
     """
     annotated = dict(opp)
     ranking: Dict[str, Any] = {
         "schemaVersion": ADJUSTMENT_SCHEMA_VERSION,
+        "rankScope": rank_scope,
         "baseRank": base_rank,
         "baseImpact": round(_base_impact_of(opp), 4),
-        "adjusted": record is not None and record.moved != 0,
+        "adjusted": record is not None,
         "caps": {
             "maxScoreFraction": policy.max_score_fraction,
             "maxRankMove": policy.max_rank_move,
@@ -532,6 +563,8 @@ __all__ = [
     "NOT_APPLIED_EMPTY",
     "NOT_APPLIED_NO_STATE",
     "RANKING_FIELD",
+    "RANK_SCOPE_ROADMAP_STAGE",
+    "RANK_SCOPE_RUN",
     "AdjustedRanking",
     "GroupAdjustment",
     "OpportunityAdjustment",

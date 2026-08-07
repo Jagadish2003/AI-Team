@@ -42,6 +42,7 @@ import { ProjectionBandCompact } from '../components/projection/ProjectionBand';
 import { ProjectionRecommendationCompact } from '../components/projection/ProjectionRecommendation';
 import { ProjectionBasisCompact } from '../components/projection/ProjectionBasis';
 import { showRelease2ArcAUi } from '../config/releaseFlags';
+import { RankingAdjustmentCompact } from '../components/learning/RankingAdjustment';
 
 function TierBadge({ tier }: { tier?: string }) {
   const t = tier ?? 'Unknown';
@@ -211,6 +212,7 @@ function OpportunitySelectorPanel({
                   <span>{opp.category ?? 'Uncategorized'}</span>
                   <ChevronRight size={14} className={active ? 'text-accent' : 'text-muted'} />
                 </div>
+                <RankingAdjustmentCompact ranking={opp._ranking} />
               </button>
             );
           })

@@ -1,0 +1,61 @@
+# Frontend checks — typecheck, build, unit tests.
+#
+# Why this exists: until now CI ran backend contract tests only, so nothing
+# verified the frontend at all. 2.0-B1 shipped `OpportunityDetail.tsx` rendering
+# `<TraceGraphPanel />` without importing it — React received `undefined` as an
+# element type, the Opportunity Review detail surface could not mount, and 40
+# frontend tests were failing. `tsc --noEmit` reports that error in seconds; no
+# check was running it.
+#
+# The typecheck step is therefore the point of this workflow, not an extra: it is
+# the step that would have caught the defect. Build and test follow because a
+# green typecheck says nothing about whether the bundle assembles or the
+# components behave.
+name: Frontend Checks
+
+on:
+  pull_request:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-checks.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-checks.yml"
+
+jobs:
+  frontend-checks:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # `npm ci` rather than `npm install`: it installs exactly the lockfile and
+      # fails if package.json and the lock have drifted, so a dependency change
+      # that was never locked cannot pass here and then break someone's checkout.
+      - name: Install dependencies
+        run: npm ci
+
+      # The step that catches an unresolved identifier, a wrong prop type, or a
+      # response shape the frontend types disagree with. Runs FIRST because it is
+      # the fastest and the most likely to fail on a real mistake.
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npx vitest run --reporter=default

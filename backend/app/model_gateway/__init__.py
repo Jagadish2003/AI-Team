@@ -147,6 +147,30 @@ def get_embedding_provider() -> ModelProvider:
     return _resolve_provider(name, _ENV_EMBEDDING)
 
 
+def resolve_provider_names() -> tuple[str, str]:
+    """The configured ``(generation, embedding)`` provider NAMES.
+
+    Added for 2.0-D4 T3's run-reproducibility record, which needs to record WHICH
+    providers served a run without instantiating them. It lives here rather than in
+    the caller because this package owns the provider configuration — the module
+    docstring's rule is that no calling code reads these env vars — and a second
+    reader would be free to drift from the resolution above.
+
+    Returns the names as configured (falling back to the default), NOT a single
+    collapsed "AI mode": the two resolve independently and the shipped configuration
+    deliberately mixes them (embeddings via ``customer_tenant``, generation via
+    ``hosted``), so one field would be wrong for the default deployment.
+
+    Unlike :func:`get_generation_provider` this never raises for an unregistered
+    name — it reports what is configured, and reporting an invalid configuration is
+    more useful to a reproducibility record than refusing to describe the run.
+    """
+    return (
+        os.getenv(_ENV_GENERATION, _DEFAULT_PROVIDER),
+        os.getenv(_ENV_EMBEDDING, _DEFAULT_PROVIDER),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Provider telemetry  (T5 — AT-366)
 #

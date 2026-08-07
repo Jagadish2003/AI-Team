@@ -44,7 +44,8 @@ from pydantic import BaseModel
 from .db import org_connector_get, org_connector_set
 from .middleware.tenancy import get_current_org_id
 from .security import require_auth
-from .rbac import require_role
+from .connector_scope_audit import audit_scope_selection
+from .rbac import _get_user_id_from_token, require_role
 
 # ── Known Salesforce product IDs ──────────────────────────────────────────────
 
@@ -109,6 +110,7 @@ def register_salesforce_products_routes(app: FastAPI) -> None:
     )
     def set_salesforce_products(
         body: SalesforceProductsBody,
+        token: str = Depends(require_auth),
     ) -> SalesforceProductsResponse:
         """
         Persist the Salesforce cloud product declaration for this workspace.
@@ -152,8 +154,20 @@ def register_salesforce_products_routes(app: FastAPI) -> None:
         labels    = [SALESFORCE_PRODUCT_LABELS[p] for p in validated]
 
         # Persist to THIS org's connector record (never the shared catalog).
+        previous_scope = connector.get("products")
         connector["products"] = validated
         org_connector_set(org_id, "salesforce", connector)
+        # 2.0-D4 T1 (AC1): the product declaration selects which packs run for
+        # every future run, so it is a scope grant with unusually long reach.
+        audit_scope_selection(
+            connector_id="salesforce",
+            scope_key="products",
+            previous=previous_scope,
+            selected=validated,
+            actor_id=_get_user_id_from_token(token),
+            first_selection=not isinstance(previous_scope, list),
+            detail={"labels": labels},
+        )
 
         return SalesforceProductsResponse(
             products=validated,

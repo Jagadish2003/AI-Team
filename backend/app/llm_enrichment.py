@@ -406,6 +406,16 @@ def build_grounded_opp_prompt(
     """
     observed = graph_context.observed_summary or "No directly observed entities for this finding."
     truncation_note = (graph_context.truncation_note or "").strip()
+    # 2.0-B3 T3 (AC3): when the assembled sources materially disagree, the prompt
+    # names the disagreement and instructs the model not to settle it. Additive in
+    # exactly the way the T3-S16-A causal section is: with no disagreement the
+    # section is absent and the prompt is byte-for-byte what it was before.
+    contradiction_note = (getattr(graph_context, "contradiction_note", "") or "").strip()
+    contradiction_section = (
+        f"=== SOURCE DISAGREEMENTS ===\n{contradiction_note}\n"
+        if contradiction_note
+        else ""
+    )
     output_intro = (
         "Produce JSON with the fields below. No preamble, no markdown - JSON only."
         if causal_context is not None
@@ -426,7 +436,7 @@ Corroboration: {signal_ctx.get("corroboration_label", "Not corroborated across s
 === DIRECTLY OBSERVED ENTITIES AND RELATIONSHIPS ===
 {observed}
 {truncation_note}
-
+{contradiction_section}
 === DOMAIN CONTEXT ===
 {pack_llm_context or "No additional domain context available."}
 
@@ -1422,6 +1432,23 @@ def run_llm_enrichment(
             pack_id,
             graph_entities,
         )
+        # 2.0-B1 T2: capture this opportunity's assembly decision — which
+        # retrieval candidates were proposed vs. actually used — so the trace
+        # graph can surface both sides later. Routed through graph_context.py
+        # (the sanctioned retrieval bridge — see its module docstring); this
+        # module must never import anything retrieval-named directly (a
+        # structural test in test_retrieval_evidence_source.py pins that).
+        # Advisory and non-blocking: never raises, and a failure here must
+        # never affect enrichment itself.
+        try:
+            from .graph_context import record_opportunity_retrieval_candidates
+
+            record_opportunity_retrieval_candidates(org_id, run_id, opp)
+        except Exception as exc:
+            logger.debug(
+                "retrieval candidate capture failed for opp %s (non-blocking): %s",
+                opp_id, exc,
+            )
         try:
             if grounded:
                 result = _enrich_opportunity_grounded(

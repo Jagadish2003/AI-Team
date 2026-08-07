@@ -196,11 +196,26 @@ function checkpointReadTime(values: unknown[]): string | null {
   return null;
 }
 
+/**
+ * The ONE place a raw checkpoint position is decoded.
+ *
+ * A checkpoint value is opaque to the frontend by design — it is a plain ISO
+ * string for a single-cursor connector and a nested per-scope map for the cloud
+ * ones. Decoding it in exactly one function means a serialisation change (a key
+ * rename, a new nesting level) has a single site to update; when two callers
+ * each parsed it independently, one could be updated and the other would
+ * silently render nothing.
+ */
+function parseCheckpointPosition(raw: string | null | undefined): unknown | null {
+  if (!raw || !raw.trim()) return null;
+  // A bare ISO timestamp is not JSON, so a parse failure is expected, not an
+  // error: fall back to the raw string and let the caller read a time off it.
+  return parseJson(raw) ?? raw;
+}
+
 function checkpointProgressRows(item: ConnectorHealthItem): Array<{ label: string; value: string; readTime?: string }> {
-  const position = item.checkpoint_position;
-  if (!position || !position.trim()) return [];
-  const parsed = parseJson(position);
-  const source = parsed ?? position;
+  const source = parseCheckpointPosition(item.checkpoint_position);
+  if (source === null) return [];
 
   if (isPlainRecord(source)) {
     return Object.entries(source).flatMap(([key, value]) => {
@@ -222,13 +237,14 @@ function checkpointProgressRows(item: ConnectorHealthItem): Array<{ label: strin
   return readTime ? [{ label: "Data checkpoint", value: `Continues after ${readTime}`, readTime }] : [];
 }
 
+/**
+ * The supporting-details view of the same rows, minus the readTime the progress
+ * view uses for ordering. Derived from `checkpointProgressRows` rather than
+ * re-parsing the position, so the two views cannot disagree about what a
+ * checkpoint says.
+ */
 function checkpointSupportingRows(item: ConnectorHealthItem): Array<{ label: string; value: string }> {
-  const progressRows = checkpointProgressRows(item);
-  const rows: Array<{ label: string; value: string }> = progressRows.map(({ label, value }) => ({ label, value }));
-  if (item.checkpoint_streams && item.checkpoint_streams > 1) {
-    rows.push({ label: "Streams tracked", value: `${item.checkpoint_streams} streams; newest checkpoint shown` });
-  }
-  return rows;
+  return checkpointProgressRows(item).map(({ label, value }) => ({ label, value }));
 }
 
 function sentenceCase(value: string): string {
@@ -891,11 +907,9 @@ function RunDetails({ run }: { run: RunHealthItem }) {
 function RunsPanel({
   resource,
   retry,
-  highlighted,
 }: {
   resource: ResourceState<RunHealthResponse>;
   retry: () => void;
-  highlighted: boolean;
 }) {
   const hasIncompleteSummary = resource.status === "success" && resource.data.runs.some(
     (run) =>
@@ -931,7 +945,7 @@ function RunsPanel({
       description="Understand which recent discovery runs succeeded, degraded, failed, or are still in progress."
       icon={<Clock3 className="h-5 w-5" aria-hidden="true" />}
       state={state}
-      highlighted={highlighted}
+      highlighted={false}
     >
       {resource.status === "loading" ? <PanelLoading label="Run health" /> : null}
       {resource.status === "error" ? <PanelError label="Run health" message={resource.error} onRetry={retry} /> : null}
@@ -1302,7 +1316,7 @@ function RunHealthDashboard({ role }: { role: "owner" | "analyst" }) {
             hiding a card must not make a degraded tenant read as healthy. */}
         <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <ConnectorsPanel resource={connectors.state} retry={connectors.refresh} refresh={connectors.refresh} role={role} highlighted={selectedPanel === "connectors"} />
-          <RunsPanel resource={runs.state} retry={runs.refresh} highlighted={selectedPanel === "runs"} />
+          <RunsPanel resource={runs.state} retry={runs.refresh} />
         </div>
       </div>
     </PageShell>

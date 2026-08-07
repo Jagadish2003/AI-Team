@@ -132,16 +132,6 @@ function SkeletonPills({ label }: { label: string }) {
   );
 }
 
-const UNWIRED_INDUSTRY_IDS = new Set([
-  'manufacturing',
-  'logistics_supply_chain',
-  'technology',
-]);
-
-function isUnwiredIndustry(industry: IndustryListItem): boolean {
-  return UNWIRED_INDUSTRY_IDS.has(industry.industry_id);
-}
-
 export default function DiscoveryFocusPage({
   setupState,
   industries,
@@ -170,13 +160,18 @@ export default function DiscoveryFocusPage({
   );
 
   async function handleIndustrySelect(industryId: string) {
-    const industry = industries.find(ind => ind.industry_id === industryId);
-
     const next = state.industryId === industryId ? null : industryId;
     setIndustry(next);
     if (!next) return;
-    if (industry && isUnwiredIndustry(industry)) return;
 
+    // Every industry fetches its defaults. There is deliberately no "unwired
+    // industry" skip list here: the anchor-on-shipped rule moved unshipped
+    // anchors (SAP/D365 for manufacturing and logistics, GitLab for technology)
+    // into `roadmap_systems`, and it left every one of those industries with
+    // real shipped defaults — so skipping the fetch suppressed pre-population
+    // that the registry genuinely had, with no visible reason. The backend is
+    // the authority on what is connectable, so a roadmap system can never
+    // arrive through this path.
     // AC9: choosing an industry applies its registry-calibrated system defaults
     // through the API path (editable, never confirmed here). Failure to fetch
     // them is non-blocking — the industry stays selected.

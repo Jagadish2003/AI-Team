@@ -444,70 +444,10 @@ def test_invalid_table_override_is_rejected(bad):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# The event-signature link column — a MULTI-VALUE field under display_value=all
-#
-# Third instance of the same live-only defect. `_sn_scalar` unwraps an envelope
-# by preferring the DISPLAY value, which is right for a name or a state; a
-# multi-value column is the case it cannot serve, because the list lives under
-# `value` while the display form is a rendered string. Copying the envelope
-# through left the shared reader looking at a Mapping, which matches neither
-# `list` nor `tuple`, so every multi-value link was dropped in silence. Offline
-# fixtures store a plain list, so nothing caught it.
-
-
-_SIGNATURE_A = "1:" + "a" * 32
-_SIGNATURE_B = "1:" + "b" * 32
-
-
-def test_multi_value_envelope_yields_the_raw_list():
-    envelope = {
-        "value": [_SIGNATURE_A, _SIGNATURE_B],
-        "display_value": f"{_SIGNATURE_A}, {_SIGNATURE_B}",
-    }
-    assert sn._sn_multi_value(envelope) == [_SIGNATURE_A, _SIGNATURE_B]
-
-
-def test_a_single_value_envelope_still_yields_its_scalar():
-    assert sn._sn_multi_value({"value": _SIGNATURE_A, "display_value": _SIGNATURE_A}) == (
-        _SIGNATURE_A
-    )
-
-
-@pytest.mark.parametrize(
-    "offline",
-    [
-        [_SIGNATURE_A],                     # the offline fixture shape
-        _SIGNATURE_A,                       # a plain scalar
-        None,
-        {"display_value": "no value key"},  # not an envelope: passed through
-    ],
-)
-def test_anything_that_is_not_an_envelope_is_returned_unchanged(offline):
-    """Offline behaviour must be untouched by a live-shape fix."""
-    assert sn._sn_multi_value(offline) == offline
-
-
-def test_the_carried_value_is_one_the_shared_reader_can_actually_read():
-    """The two halves have to compose. Ingest unwraps; the reader parses. Asserting
-    the helper alone would pass even if the reader still could not use the result."""
-    from discovery.detectors.ops_recurrence_joins import extract_event_signatures
-
-    envelope = {"value": [_SIGNATURE_A, _SIGNATURE_B], "display_value": "…"}
-    incident = {
-        "x_1212781_github_0_event_signatures": sn._sn_multi_value(envelope)
-    }
-    assert extract_event_signatures(incident) == (_SIGNATURE_A, _SIGNATURE_B)
-
-
-def test_the_reader_also_tolerates_an_unwrapped_envelope():
-    """Defence in depth: a producer that has not unwrapped (or a stored payload
-    written before this fix) must not silently lose its link either."""
-    from discovery.detectors.ops_recurrence_joins import extract_event_signatures
-
-    incident = {
-        "x_1212781_github_0_event_signatures": {
-            "value": [_SIGNATURE_A],
-            "display_value": _SIGNATURE_A,
-        }
-    }
-    assert extract_event_signatures(incident) == (_SIGNATURE_A,)
+# The event-signature link column is the THIRD instance of this same live-only
+# defect: read under `sysparm_display_value=all`, a multi-value field arrives as
+# {"value": …, "display_value": …} and was skipped by a reader matching only
+# list/tuple. It is fixed in the single shared reader rather than here — the
+# ingestor carries the column verbatim on purpose — so its shape coverage lives
+# in `test_event_signature_display_value_shapes.py`, and the end-to-end path is
+# covered by `test_msp_b4_recurrence_joins.py`.

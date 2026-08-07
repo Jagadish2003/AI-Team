@@ -2775,6 +2775,42 @@ def run(
                 e,
             )
 
+        # 2.0-B2 T4 (AC3): refresh the cross-source match proposals for this org.
+        # Placed AFTER relationship mapping because the ranked engine's tier-3
+        # corroboration reads the observed edges written above — scanning earlier
+        # would judge the graph as it was before this run.
+        #
+        # Writes nothing to the graph: the engine only decides (T1), and a pair a
+        # human has already confirmed or rejected is never re-proposed (the store
+        # keys decisions on a stable source identity, so a decision survives entity
+        # row ids changing between runs). Non-blocking for the same reason entity
+        # extraction is: a review queue is not worth failing a run over.
+        try:
+            from app.entity_match_proposals import scan_for_proposals
+
+            _proposal_outcome = scan_for_proposals(org_id)
+            if (
+                _proposal_outcome.created
+                or _proposal_outcome.skipped_already_decided
+            ):
+                logger.info(
+                    "2.0-B2 cross-source match proposals: run_id=%s org_id=%s "
+                    "created=%d refreshed=%d already_decided=%d",
+                    run_id,
+                    org_id,
+                    _proposal_outcome.created,
+                    _proposal_outcome.refreshed,
+                    _proposal_outcome.skipped_already_decided,
+                )
+        except Exception as e:
+            logger.warning(
+                "Cross-source match proposal scan failed (non-blocking): "
+                "run_id=%s org_id=%s error=%s",
+                run_id,
+                org_id,
+                e,
+            )
+
         # Issue 3 fix: collect Jira/SN lending correlation by detector for ncino pack.
         # Wave 2 (ENG-AIQ-NC-2/NC-3) built lending_correlation — wire it into evidence here.
         jira_by_detector: Dict[str, List[str]] = {}
@@ -3199,6 +3235,12 @@ def main():
 
     if args.output_format == "track_a_seed":
         payload = export_track_a_seed(payload)
+
+    # 2.0-B1 T5 (AC5): this CLI writes the FULL run payload (opportunities +
+    # evidence) to disk, so it is an export path — redact secrets and enforce
+    # the 1.9 aggregation floor before anything is serialised.
+    from .export_safety import guard_exported_payload
+    payload = guard_exported_payload(payload, where="runner CLI payload export")
 
     out = json.dumps(payload, indent=2)
     if args.output:
