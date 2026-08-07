@@ -279,6 +279,24 @@ def _empty_trace(opportunity: Any, run_id: Any) -> FindingTrace:
     )
 
 
+def _as_used_flag(value: Any) -> bool:
+    """Coerce a persisted/JSON-round-tripped ``used`` flag to a strict boolean.
+
+    Fail CLOSED, exactly as ``_within_window_joins`` does for ``within_window``: an
+    EXCLUDED candidate can arrive with ``used`` as the string ``"false"`` after a
+    JSON round trip (or a hand-written fixture), and ``bool("false")`` is ``True`` —
+    which would surface a candidate the assembler DROPPED as ``used: true`` /
+    ``decision: "included"``, fabricating evidence of retrieval that never happened.
+    Only genuinely-true values read as used. Every real producer already emits a
+    bool; this guards the value that survives a round trip.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return bool(value)
+
+
 def _retrieval_candidate_traces(
     candidates: Optional[Sequence[Mapping[str, Any]]],
 ) -> List[RetrievalCandidateTrace]:
@@ -293,12 +311,14 @@ def _retrieval_candidate_traces(
         if not chunk_id:
             continue
         decision = candidate.get("decision")
-        used = candidate.get("used")
-        if used is None:
+        raw_used = candidate.get("used")
+        if raw_used is None:
             used = decision == "included"
+        else:
+            used = _as_used_flag(raw_used)
         result.append(RetrievalCandidateTrace(
             chunk_id=str(chunk_id),
-            used=bool(used),
+            used=used,
             decision=str(decision or ("included" if used else "excluded")),
             reason=candidate.get("reason"),
             confidence=candidate.get("confidence"),

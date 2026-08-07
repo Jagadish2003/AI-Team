@@ -79,7 +79,12 @@ def _require_run_in_org(run_id: str, org_id: str) -> Dict[str, Any]:
         or inputs.get("org_id")
         or inputs.get("orgId")
     )
-    if run_org and str(run_org) != org_id:
+    # A MISSING org stamp is treated exactly like a cross-org one — a 404. A signed
+    # export must never attest to a run whose ownership cannot be confirmed: a
+    # pre-stamp run with no org would otherwise let any authenticated caller mint a
+    # bundle carrying THEIR org_id in the signed body, a cryptographically attested
+    # claim that another tenant's evidence is theirs. Fail closed on absence.
+    if not run_org or str(run_org) != org_id:
         raise HTTPException(status_code=404, detail="run not found")
     return run
 

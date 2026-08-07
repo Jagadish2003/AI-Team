@@ -83,7 +83,9 @@ class ReleaseRequest(BaseModel):
 
 @router.post(
     UNMERGE_PATH,
-    dependencies=[Depends(require_role("analyst"))],
+    # Explicit require_auth (see routes_entity_merges.apply_merges): the write
+    # route declares the full signature check itself, matching the read routes.
+    dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
 def unmerge(
     entity_id: str,
@@ -120,7 +122,7 @@ def unmerge(
 
 @router.post(
     UNMERGE_ALL_PATH,
-    dependencies=[Depends(require_role("analyst"))],
+    dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
 def unmerge_everything(
     entity_id: str,
@@ -176,7 +178,7 @@ def get_unmerge_log(
 
 @router.post(
     RELEASE_PATH,
-    dependencies=[Depends(require_role("owner"))],
+    dependencies=[Depends(require_auth), Depends(require_role("owner"))],
 )
 def release(
     unmerge_id: str,

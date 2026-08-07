@@ -266,6 +266,20 @@ def _load_run(run_id: str) -> Mapping[str, Any]:
     return run
 
 
+def _run_org_id(run: Mapping[str, Any]) -> Optional[str]:
+    """The run's own org stamp, or None for a pre-stamp run."""
+    inputs = run.get("inputs") if isinstance(run.get("inputs"), Mapping) else {}
+    for candidate in (
+        run.get("org_id"),
+        run.get("orgId"),
+        inputs.get("org_id"),
+        inputs.get("orgId"),
+    ):
+        if candidate:
+            return str(candidate)
+    return None
+
+
 def _load_opps_and_evidence(
     run_id: str,
 ) -> Tuple[List[Mapping[str, Any]], Dict[str, Mapping[str, Any]]]:
@@ -307,6 +321,13 @@ def build_export_bundle(
         raise EvidenceExportError("a finding-scoped export requires an opportunity id")
 
     run = _load_run(run_id)
+    # Defence in depth for direct programmatic callers (CLI, a future background
+    # job) that do not pass through the API's _require_run_in_org gate: a signed
+    # bundle must never attest that a run belongs to an org it does not. A missing
+    # run org stamp is refused too — an unconfirmable owner must not be signed over.
+    run_org = _run_org_id(run)
+    if not run_org or run_org != org_id:
+        raise EvidenceExportError(f"run '{run_id}' not found")
     opps, evidence_by_id = _load_opps_and_evidence(run_id)
 
     if scope == SCOPE_FINDING:

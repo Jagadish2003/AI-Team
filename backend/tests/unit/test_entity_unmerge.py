@@ -69,12 +69,26 @@ def test_the_identity_pair_key_is_none_when_a_side_cannot_supply_one():
     assert eu.identity_pair_key(_side("a", "servicenow", ""), _side("b", "jira", "p")) is None
 
 
-def test_two_sides_with_one_identity_produce_no_identity_key():
-    """Otherwise the block would suppress every merge of that identity with
-    anything at all."""
+def test_two_distinct_rows_of_one_identity_still_produce_a_key():
+    """Same system + same canonical name across two DISTINCT rows is precisely the
+    pair name-similarity proposes for merge — so it is the pair a human separation
+    most needs to survive row churn. It must therefore yield an identity key
+    (``ident:x|x``), not ``None``: otherwise only the row-id key is recorded and a
+    later row replacement silently re-merges the deliberately-separated pair.
+
+    The key blocks re-merging ONLY two same-identity rows; a merge of this identity
+    with a DIFFERENT one keys as ``ident:x|y`` and is unaffected — precise, not a
+    blanket suppression.
+    """
     same = _side("a", "servicenow", "Payments")
     other = _side("b", "servicenow", "payments")
-    assert eu.identity_pair_key(same, other) is None
+    key = eu.identity_pair_key(same, other)
+    assert key is not None
+    # Normalised + order-independent, and identical after a row churn.
+    assert key == eu.identity_pair_key(other, same)
+    assert key == eu.identity_pair_key(_side("row-99", "ServiceNow", "PAYMENTS"), other)
+    # A different identity on one side keys differently and is not blocked by it.
+    assert eu.identity_pair_key(same, _side("c", "jira", "payments")) != key
 
 
 def test_both_keys_are_recorded_for_a_normal_pair():
