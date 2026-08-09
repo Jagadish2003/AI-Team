@@ -348,22 +348,25 @@ describe('2.0-A1 T4 — Opportunity Review shows the band and its evidence label
     );
   });
 
-  it('explains which evidence inputs set the width without raw calculation details', () => {
+  it('keeps the band explanation high level and leaves evidence inputs to Projection Basis', () => {
     render(<OpportunityDetail opp={opportunity('opp_001', 'Routing friction', CORROBORATED)} audit={AUDIT} />);
 
     const panel = screen.getByTestId('projection-band-panel');
     expect(within(panel).getByTestId('projection-band-rationale')).toHaveTextContent(
-      'strong sample',
+      'See Projection Basis',
     );
-    // All four inputs remain visible, without exposing their internal point
-    // contributions or the calculation model version.
+    expect(panel).not.toHaveTextContent('800 observed');
+    expect(panel).not.toHaveTextContent('strong sample');
+    expect(panel).not.toHaveTextContent('steady recurrence');
+    expect(panel).not.toHaveTextContent('corroborated corroboration');
+    // Evidence inputs are shown once in Projection Basis, not repeated here.
     for (const axis of [
       'sample_size',
       'recurrence_stability',
       'corroboration_status',
       'confidence_cap',
     ]) {
-      expect(within(panel).getByTestId(`band-width-driver-${axis}`)).toBeInTheDocument();
+      expect(within(panel).queryByTestId(`band-width-driver-${axis}`)).not.toBeInTheDocument();
     }
     expect(panel).not.toHaveTextContent('+4.5 pts');
     expect(panel).not.toHaveTextContent('no widening');
@@ -388,7 +391,7 @@ describe('2.0-A1 T4 — Opportunity Review shows the band and its evidence label
       'Capped - single-source confidence',
     );
     expect(within(panel).getByTestId('projection-capped-label')).toHaveTextContent(
-      'not ranked above a corroborated finding',
+      'treat the range as directional until corroborated',
     );
   });
 

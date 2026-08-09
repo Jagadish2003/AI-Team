@@ -2,7 +2,6 @@ import React from 'react';
 import type {
   InterventionProjection,
   ProjectionBandWidth,
-  ProjectionBandWidthDriver,
   ProjectionStrength,
 } from '../../types/enrichment';
 
@@ -22,6 +21,16 @@ import type {
 
 function isPresentNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isLimitedEvidenceProjection(
+  projection: InterventionProjection | null | undefined,
+): boolean {
+  return Boolean(
+    projection?.bandWidth?.thinEvidence ||
+      projection?.basis?.thinEvidence ||
+      projection?.bandWidthInputs?.thinEvidence,
+  );
 }
 
 export function projectionBandWidth(
@@ -164,23 +173,6 @@ export function demoteCappedProjections<T>(
     .map((entry) => entry.item);
 }
 
-function driverRow(driver: ProjectionBandWidthDriver) {
-  return (
-    <div
-      key={driver.axis}
-      data-testid={`band-width-driver-${driver.axis}`}
-      className="border-b border-border/50 py-1.5 last:border-b-0"
-    >
-      <div className="min-w-0">
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-          {driver.label}
-        </div>
-        <div className="mt-0.5 break-words text-xs text-text">{driver.value}</div>
-      </div>
-    </div>
-  );
-}
-
 /**
  * The capped-confidence label. Rendered wherever projection strength is shown,
  * so a reader never sees a strength number without the caveat that qualifies it.
@@ -205,43 +197,32 @@ export function ProjectionCappedNotice({
     >
       <span className="font-semibold">{label}</span>
       {' - '}
-      not ranked above a corroborated finding on projection strength.
+      this finding comes from one source, so treat the range as directional until
+      corroborated.
     </div>
   );
 }
 
-/**
- * Projection strength, with its cap label. Deliberately shows the tier rather
- * than leading with the raw scalar: the number is for ordering, the tier is
- * what a reader should act on.
- */
-export function ProjectionStrengthBadge({
-  projection,
-}: {
-  projection: InterventionProjection | null | undefined;
-}) {
-  const strength = projectionStrength(projection);
-  if (!strength) return null;
-
+function projectionBandCustomerRationale(
+  projection: InterventionProjection | null | undefined,
+): string {
+  const limited = isLimitedEvidenceProjection(projection);
   const capped = isCappedProjection(projection);
-  return (
-    <div data-testid="projection-strength" className="flex flex-wrap items-center gap-2">
-      <span
-        className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-          capped
-            ? 'border-amber-500/50 bg-amber-500/10 text-amber-700'
-            : 'border-border bg-bg/30 text-text'
-        }`}
-      >
-        {strength.label}
-      </span>
-    </div>
-  );
+  if (limited && capped) {
+    return 'Evidence is limited and confidence is capped, so this projection stays in a wider range. See Projection Basis for the observed data and signal.';
+  }
+  if (limited) {
+    return 'Evidence is limited, so this projection stays in a wider range. See Projection Basis for the observed data and signal.';
+  }
+  if (capped) {
+    return 'Confidence is capped because this finding comes from one source. See Projection Basis for the observed data and signal.';
+  }
+  return 'The observed evidence supports this projection range. See Projection Basis for the observed data and signal.';
 }
 
 /**
- * The Opportunity Review surface: the resulting band, its width tier, its
- * evidence label, and the per-axis derivation that produced it.
+ * The Opportunity Review surface: the resulting band and its width tier. The
+ * detailed evidence inputs live in Projection Basis directly below it.
  */
 export default function ProjectionBandPanel({
   projection,
@@ -301,23 +282,12 @@ export default function ProjectionBandPanel({
 
         <ProjectionCappedNotice projection={projection} />
 
-        {bandWidth && (
-          <>
-            <p
-              data-testid="projection-band-rationale"
-              className="text-xs leading-relaxed text-muted"
-            >
-              {bandWidth.rationale}
-            </p>
-            <div className="rounded-md border border-border/70 bg-panel/70 px-3 py-2">
-              <div className="text-[11px] font-semibold uppercase text-muted">
-                What set this width
-              </div>
-              <div className="mt-1">{bandWidth.drivers.map(driverRow)}</div>
-            </div>
-            <ProjectionStrengthBadge projection={projection} />
-          </>
-        )}
+        <p
+          data-testid="projection-band-rationale"
+          className="text-xs leading-relaxed text-muted"
+        >
+          {projectionBandCustomerRationale(projection)}
+        </p>
       </div>
     </div>
   );

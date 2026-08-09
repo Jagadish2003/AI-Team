@@ -174,7 +174,7 @@ describe('2.0-A1 T3 projection computation basis surfaces', () => {
     expect(basis).toHaveTextContent('Strong Evidence');
   });
 
-  it('shows a clear wider-band warning when evidence is thin', () => {
+  it('keeps thin-evidence warning language in Projection Band, not duplicated in Basis', () => {
     render(
       <OpportunityDetail
         opp={{ ...OPPORTUNITY, projection: THIN_PROJECTION }}
@@ -183,8 +183,11 @@ describe('2.0-A1 T3 projection computation basis surfaces', () => {
     );
 
     expect(screen.getByTestId('projection-basis-panel')).toHaveTextContent('Thin Evidence');
-    expect(screen.getByTestId('projection-thin-evidence-warning')).toHaveTextContent(
+    expect(screen.getByTestId('projection-basis-panel')).not.toHaveTextContent(
       'projection band is wider because evidence is limited',
+    );
+    expect(screen.getByTestId('projection-band-rationale')).toHaveTextContent(
+      'Evidence is limited',
     );
   });
 
