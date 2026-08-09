@@ -280,6 +280,7 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
       opportunityIdentity: 'opp_identity',
       state: 'actioned',
       actionDate: '2026-08-01',
+      actionNote: 'Claims triage agent deployed for repetitive intake review.',
       legalNextStates: ['dismissed', 'monitoring', 'open', 'stalled'],
       measurable: true,
     });
@@ -547,6 +548,9 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
       'Action recorded',
     );
     expect(screen.getByTestId('opportunity-action-date')).toHaveTextContent(/Aug.*2026/);
+    expect(screen.getByTestId('opportunity-action-note')).toHaveTextContent(
+      'Claims triage agent deployed for repetitive intake review.',
+    );
   });
 
   it('A2 lifecycle: displays action date and supports dismiss then reopen', async () => {

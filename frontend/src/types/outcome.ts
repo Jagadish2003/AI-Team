@@ -23,6 +23,7 @@ export interface OpportunityLifecycle {
   opportunityIdentity: string;
   state: OpportunityLifecycleState | string;
   actionDate?: string | null;
+  actionNote?: string | null;
   actionedBy?: string | null;
   actionedAt?: string | null;
   revision?: number;

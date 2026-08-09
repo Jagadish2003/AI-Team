@@ -108,14 +108,21 @@ def _iso(value: Any) -> Optional[str]:
     return str(value)
 
 
+def _optional_note(value: Any) -> Optional[str]:
+    """Normalise a UI/internal transition note before every durable write."""
+    text = str(value).strip() if value is not None else ""
+    return text[:2000] or None
+
+
 # --------------------------------------------------------------------------
 # Row shaping
 # --------------------------------------------------------------------------
 
 _STATE_SELECT = (
-    "SELECT org_id, opportunity_identity, state, action_date, actioned_by, "
-    "actioned_at, revision, first_seen_run_id, last_run_id, last_transition_at, "
-    "updated_by, created_at, updated_at FROM opportunity_lifecycle"
+    "SELECT org_id, opportunity_identity, state, action_date, action_note, "
+    "actioned_by, actioned_at, revision, first_seen_run_id, last_run_id, "
+    "last_transition_at, updated_by, created_at, updated_at "
+    "FROM opportunity_lifecycle"
 )
 
 
@@ -132,15 +139,16 @@ def _row_to_state(row: Sequence[Any]) -> Dict[str, Any]:
         "opportunityIdentity": row[1],
         "state": state,
         "actionDate": _iso(row[3]),
-        "actionedBy": row[4],
-        "actionedAt": _iso(row[5]),
-        "revision": row[6],
-        "firstSeenRunId": row[7],
-        "lastRunId": row[8],
-        "lastTransitionAt": _iso(row[9]),
-        "updatedBy": row[10],
-        "createdAt": _iso(row[11]),
-        "updatedAt": _iso(row[12]),
+        "actionNote": row[4],
+        "actionedBy": row[5],
+        "actionedAt": _iso(row[6]),
+        "revision": row[7],
+        "firstSeenRunId": row[8],
+        "lastRunId": row[9],
+        "lastTransitionAt": _iso(row[10]),
+        "updatedBy": row[11],
+        "createdAt": _iso(row[12]),
+        "updatedAt": _iso(row[13]),
         "measurable": is_measurable(state),
         "legalNextStates": sorted({t.to_state for t in legal_transitions_from(state)}),
     }
@@ -339,6 +347,7 @@ def _apply_transition(
     validated = validate_transition(
         current["state"], to_state, actor, action_date=action_date, now=now_date
     )
+    transition_note = _optional_note(note)
 
     now = _now()
     revision = int(current["revision"]) + 1
@@ -352,6 +361,16 @@ def _apply_transition(
         # pivot every later measurement is computed from.
         existing = current.get("actionDate")
         stored_action_date = date.fromisoformat(existing) if existing else None
+
+    # The customer-entered description follows the same lifecycle as its action
+    # date. System transitions carry it forward; reopening clears current state
+    # while append-only history retains the original action transition and note.
+    if validated.to_state == STATE_ACTIONED:
+        stored_action_note = transition_note
+    elif validated.clear_action_date:
+        stored_action_note = None
+    else:
+        stored_action_note = _optional_note(current.get("actionNote"))
 
     # Who/when the action was recorded. Resolved in Python rather than with
     # nested SQL CASE expressions: the three cases are a decision about intent,
@@ -372,7 +391,7 @@ def _apply_transition(
             # cannot both apply — the loser updates 0 rows and is told to retry.
             cur.execute(
                 "UPDATE opportunity_lifecycle SET "
-                "  state = %s, action_date = %s, revision = %s,"
+                "  state = %s, action_date = %s, action_note = %s, revision = %s,"
                 "  actioned_by = %s, actioned_at = %s,"
                 "  last_run_id = COALESCE(%s, last_run_id),"
                 "  last_transition_at = %s, updated_by = %s, updated_at = %s "
@@ -380,6 +399,7 @@ def _apply_transition(
                 (
                     validated.to_state,
                     stored_action_date,
+                    stored_action_note,
                     revision,
                     actioned_by,
                     actioned_at,
@@ -413,7 +433,7 @@ def _apply_transition(
                     who,
                     stored_action_date,
                     validated.reason,
-                    note,
+                    transition_note,
                     run_id,
                     now,
                 ),
@@ -435,6 +455,7 @@ def _apply_transition(
         actor=actor,
         actor_id=who,
         action_date=stored_action_date,
+        action_note=stored_action_note,
         revision=revision,
         run_id=run_id,
     )
@@ -502,6 +523,7 @@ def _audit_and_emit(
     actor: str,
     actor_id: str,
     action_date: Optional[date],
+    action_note: Optional[str],
     revision: int,
     run_id: Optional[str],
 ) -> None:
@@ -529,6 +551,7 @@ def _audit_and_emit(
             to_state=to_state,
             actor=actor,
             action_date=action_date.isoformat() if action_date else None,
+            action_note=action_note,
             revision=revision,
         )
     except Exception as exc:  # noqa: BLE001

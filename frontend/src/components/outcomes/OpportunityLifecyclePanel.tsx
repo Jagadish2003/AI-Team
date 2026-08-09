@@ -283,6 +283,19 @@ export default function OpportunityLifecyclePanel({
                 {formatDate(data.actionDate)}
               </div>
             </div>
+            {data.actionNote ? (
+              <div
+                className="rounded-lg border border-border bg-bg/30 px-3 py-2 sm:col-span-2"
+                data-testid="opportunity-action-note"
+              >
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted">
+                  Recorded agent or process
+                </div>
+                <div className="mt-1 whitespace-pre-wrap text-sm text-text">
+                  {data.actionNote}
+                </div>
+              </div>
+            ) : null}
           </div>
 
           {state === 'open' && legalNextStates.has('actioned') ? (

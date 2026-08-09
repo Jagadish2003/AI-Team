@@ -127,7 +127,7 @@ psql -h <DB_HOST> -p 5432 -U postgres -d <DB_NAME> -v ON_ERROR_STOP=1 -f provisi
 
 ```sql
 SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';  -- 54
-SELECT version_num FROM alembic_version;                                       -- 0049
+SELECT version_num FROM alembic_version;                                       -- 0050
 SELECT count(*) FROM connectors;                                               -- > 0 if seeded
 ```
 

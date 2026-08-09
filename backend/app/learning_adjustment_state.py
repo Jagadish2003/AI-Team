@@ -246,7 +246,7 @@ def get_adjustment_history(
         with closing(db.connect()) as con:
             with con.cursor() as cur:
                 cur.execute(
-                    "SELECT record FROM ranking_adjustment_history"
+                    "SELECT record, reset_reason FROM ranking_adjustment_history"
                     " WHERE org_id = %s ORDER BY recorded_at DESC, history_id DESC"
                     " LIMIT %s",
                     (org, max(1, min(int(limit), 1000))),
@@ -259,13 +259,18 @@ def get_adjustment_history(
     for row in rows:
         raw = row[0]
         if isinstance(raw, Mapping):
-            out.append(dict(raw))
+            parsed_record = dict(raw)
+            if row[1] and not parsed_record.get("resetReason"):
+                parsed_record["resetReason"] = row[1]
+            out.append(parsed_record)
             continue
         try:
             parsed = json.loads(raw) if raw else None
         except (TypeError, ValueError):
             continue
         if isinstance(parsed, dict):
+            if row[1] and not parsed.get("resetReason"):
+                parsed["resetReason"] = row[1]
             out.append(parsed)
     return out
 
@@ -506,7 +511,7 @@ def reset_adjustments(
     org_id: str,
     *,
     actor_id: str,
-    reason: Optional[str] = None,
+    reason: str,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """Neutralise this org's current adjustment state and append reset history.
@@ -528,7 +533,9 @@ def reset_adjustments(
     previous = _safe_state(org)
     groups_reset = len(previous)
     opportunities_affected = _affected_opportunity_count(previous)
-    reset_reason = _clean(reason)[:500] or None
+    reset_reason = _clean(reason)[:500]
+    if not reset_reason:
+        raise ValueError("a reset reason is required for the audit history")
 
     with closing(db.connect()) as con:
         with con.cursor() as cur:
@@ -580,6 +587,7 @@ def reset_adjustments(
                             "resetReason": reset_reason,
                             "previousState": dict(row),
                         },
+                        reset_reason=reset_reason,
                     )
             else:
                 _append_history(
@@ -601,6 +609,7 @@ def reset_adjustments(
                         "resetMarker": True,
                         "previousState": [],
                     },
+                    reset_reason=reset_reason,
                 )
         con.commit()
 
@@ -617,8 +626,7 @@ def reset_adjustments(
         "resetAt": when.isoformat(),
         "actorId": actor,
     }
-    if reset_reason:
-        payload["reason"] = reset_reason
+    payload["reason"] = reset_reason
 
     emit_ranking_adjustment_changed(
         org_id=org,
@@ -659,6 +667,7 @@ def _append_history(
     revision: int,
     when: datetime,
     extra: Optional[Mapping[str, Any]] = None,
+    reset_reason: Optional[str] = None,
 ) -> None:
     history_id = f"radj_{uuid.uuid4().hex[:20]}"
     record = {
@@ -683,8 +692,8 @@ def _append_history(
         "INSERT INTO ranking_adjustment_history ("
         "  history_id, org_id, detector_id, pack_id, change_kind,"
         "  previous_net_weight, net_weight, signal_count, learning_active,"
-        "  actor_id, config_version, revision, record, recorded_at"
-        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        "  actor_id, config_version, revision, reset_reason, record, recorded_at"
+        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             history_id,
             org_id,
@@ -698,6 +707,7 @@ def _append_history(
             actor_id,
             config_version,
             revision,
+            _clean(reset_reason) or None,
             json.dumps(record),
             when,
         ),

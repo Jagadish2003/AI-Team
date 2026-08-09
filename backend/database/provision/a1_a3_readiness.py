@@ -65,10 +65,16 @@ REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
             "opportunity_identity",
             "state",
             "action_date",
+            "action_note",
             "actioned_by",
             "actioned_at",
             "revision",
+            "first_seen_run_id",
+            "last_run_id",
             "last_transition_at",
+            "updated_by",
+            "created_at",
+            "updated_at",
         }
     ),
     "opportunity_lifecycle_history": frozenset(
@@ -79,8 +85,12 @@ REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
             "revision",
             "from_state",
             "to_state",
+            "actor",
+            "actor_id",
             "action_date",
             "reason",
+            "note",
+            "run_id",
             "transitioned_at",
         }
     ),
@@ -92,6 +102,12 @@ REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
             "detector_id",
             "pack_id",
             "pack_version",
+            "opportunity_ref",
+            "window_days",
+            "window_started_at",
+            "window_ended_at",
+            "window_derivation",
+            "schema_version",
             "artifact",
             "captured_at",
         }
@@ -105,7 +121,17 @@ REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
             "detector_id",
             "action_date",
             "comparability_verdict",
+            "baseline_pack_version",
+            "current_pack_version",
+            "primary_signal",
+            "primary_baseline_value",
+            "primary_current_value",
+            "primary_delta",
+            "primary_direction",
             "record",
+            "measured_at",
+            "created_at",
+            "updated_at",
             "confounder_count",
             "confounder_material_count",
             "confounder_types",
@@ -123,9 +149,12 @@ REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
             "opportunity_identity",
             "action",
             "reason_code",
+            "reason_detail",
             "actor_id",
             "detector_id",
             "pack_id",
+            "signal_concept",
+            "run_id",
             "recorded_at",
             "record",
         }
@@ -135,12 +164,15 @@ REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
             "org_id",
             "detector_id",
             "pack_id",
+            "signal_concept",
             "net_weight",
             "outcome_weight",
             "decision_weight",
+            "has_outcome_evidence",
             "signal_count",
             "learning_active",
             "contributing_refs",
+            "config_version",
             "revision",
             "computed_at",
             "updated_at",
@@ -153,16 +185,29 @@ REQUIRED_COLUMNS: Mapping[str, frozenset[str]] = {
             "detector_id",
             "pack_id",
             "change_kind",
+            "previous_net_weight",
             "net_weight",
             "signal_count",
             "learning_active",
             "actor_id",
+            "config_version",
             "revision",
+            "reset_reason",
             "record",
             "recorded_at",
         }
     ),
     "audit_log": frozenset({"id", "org_id", "event_type", "payload", "timestamp"}),
+}
+
+
+REQUIRED_CHECK_CONSTRAINTS: Mapping[str, frozenset[str]] = {
+    "opportunity_lifecycle": frozenset(
+        {"ck_opp_lifecycle_measurable_action_date"}
+    ),
+    "ranking_adjustment_history": frozenset(
+        {"ck_ranking_adjustment_reset_reason"}
+    ),
 }
 
 
@@ -362,6 +407,80 @@ def inspect_connection(con: Any, *, check_privileges: bool = True) -> ReadinessR
             missing = sorted(required - actual_keys.get(table, set()))
             for kind, columns in missing:
                 issues.append(f"{table} missing {kind}: ({', '.join(columns)})")
+
+        cur.execute(
+            "SELECT relation.relname, constraint_row.conname, "
+            "       constraint_row.convalidated "
+            "FROM pg_constraint AS constraint_row "
+            "JOIN pg_class AS relation ON relation.oid = constraint_row.conrelid "
+            "JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace "
+            "WHERE namespace.nspname = 'public' AND constraint_row.contype = 'c'"
+        )
+        actual_checks: dict[str, dict[str, bool]] = {}
+        for table, name, validated in cur.fetchall():
+            actual_checks.setdefault(str(table), {})[str(name)] = bool(validated)
+        for table, required in REQUIRED_CHECK_CONSTRAINTS.items():
+            for name in sorted(required):
+                if name not in actual_checks.get(table, {}):
+                    issues.append(f"{table} missing CHECK constraint: {name}")
+                elif not actual_checks[table][name]:
+                    issues.append(f"{table} CHECK constraint is not validated: {name}")
+
+        # These data-level checks catch a write path that silently discarded a
+        # UI field even though the destination column exists.
+        if "opportunity_lifecycle" in actual_columns:
+            cur.execute(
+                "SELECT COUNT(*) FROM opportunity_lifecycle "
+                "WHERE state IN ('actioned', 'monitoring', 'measured', 'stalled') "
+                "AND action_date IS NULL"
+            )
+            if int(cur.fetchone()[0]):
+                issues.append("measurable lifecycle rows exist without an action date")
+            if "action_note" in actual_columns["opportunity_lifecycle"]:
+                cur.execute(
+                    "SELECT COUNT(*) FROM opportunity_lifecycle AS lifecycle "
+                    "WHERE lifecycle.action_date IS NOT NULL "
+                    "AND EXISTS ("
+                    "  SELECT 1 FROM opportunity_lifecycle_history AS history "
+                    "  WHERE history.org_id = lifecycle.org_id "
+                    "    AND history.opportunity_identity = lifecycle.opportunity_identity "
+                    "    AND history.to_state = 'actioned' "
+                    "    AND NULLIF(BTRIM(history.note), '') IS NOT NULL"
+                    ") AND lifecycle.action_note IS DISTINCT FROM ("
+                    "  SELECT BTRIM(history.note) "
+                    "  FROM opportunity_lifecycle_history AS history "
+                    "  WHERE history.org_id = lifecycle.org_id "
+                    "    AND history.opportunity_identity = lifecycle.opportunity_identity "
+                    "    AND history.to_state = 'actioned' "
+                    "    AND NULLIF(BTRIM(history.note), '') IS NOT NULL "
+                    "  ORDER BY history.revision DESC LIMIT 1"
+                    ")"
+                )
+                if int(cur.fetchone()[0]):
+                    issues.append(
+                        "current lifecycle action descriptions disagree with history"
+                    )
+
+        if "opportunity_feedback" in actual_columns:
+            cur.execute(
+                "SELECT COUNT(*) FROM opportunity_feedback WHERE "
+                "COALESCE(record ->> 'opportunityIdentity', '') <> opportunity_identity "
+                "OR COALESCE(record ->> 'action', '') <> action "
+                "OR COALESCE(record ->> 'reasonCode', '') <> COALESCE(reason_code, '') "
+                "OR COALESCE(record ->> 'reasonDetail', '') <> COALESCE(reason_detail, '') "
+                "OR COALESCE(record ->> 'actorId', '') <> actor_id"
+            )
+            if int(cur.fetchone()[0]):
+                issues.append("feedback UI fields disagree with their stored record")
+
+        if "reset_reason" in actual_columns.get("ranking_adjustment_history", set()):
+            cur.execute(
+                "SELECT COUNT(*) FROM ranking_adjustment_history "
+                "WHERE change_kind = 'reset' "
+                "AND NULLIF(BTRIM(reset_reason), '') IS NULL"
+            )
+            if int(cur.fetchone()[0]):
+                issues.append("ranking reset history contains a reset without a reason")
 
         if check_privileges:
             all_privilege_tables = set(REQUIRED_PRIVILEGES) | set(FORBIDDEN_PRIVILEGES)

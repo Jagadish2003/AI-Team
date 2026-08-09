@@ -120,5 +120,5 @@ export interface LearningAdjustmentResetResponse {
   configVersion: string;
   resetAt: string;
   actorId: string;
-  reason?: string;
+  reason: string;
 }

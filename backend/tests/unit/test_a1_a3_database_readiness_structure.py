@@ -12,6 +12,7 @@ from database.models.closed_loop_immutability import (
     MUTABLE_CLOSED_LOOP_TABLES,
 )
 from database.provision.a1_a3_readiness import (
+    REQUIRED_CHECK_CONSTRAINTS,
     FORBIDDEN_PRIVILEGES,
     REQUIRED_COLUMNS,
     REQUIRED_INDEXES,
@@ -62,28 +63,53 @@ def test_readiness_contract_covers_a1_a2_a3_storage_and_identity_keys():
     assert "idx_opp_movements_org_projection_verdict" in REQUIRED_INDEXES
     assert "idx_opportunity_feedback_similarity" in REQUIRED_INDEXES
     assert "idx_ranking_adjustment_history_group" in REQUIRED_INDEXES
+    assert "action_note" in REQUIRED_COLUMNS["opportunity_lifecycle"]
+    assert "note" in REQUIRED_COLUMNS["opportunity_lifecycle_history"]
+    assert "reason_detail" in REQUIRED_COLUMNS["opportunity_feedback"]
+    assert "reset_reason" in REQUIRED_COLUMNS["ranking_adjustment_history"]
+    assert "ck_opp_lifecycle_measurable_action_date" in REQUIRED_CHECK_CONSTRAINTS[
+        "opportunity_lifecycle"
+    ]
+    assert "ck_ranking_adjustment_reset_reason" in REQUIRED_CHECK_CONSTRAINTS[
+        "ranking_adjustment_history"
+    ]
 
 
-def test_0049_is_the_linear_head_and_repairs_before_restricting():
-    migration = (
+def test_0049_repairs_before_restricting():
+    migration_0049 = (
         BACKEND
         / "migrations"
         / "versions"
         / "0049_repair_a1_a3_database_readiness.py"
     ).read_text(encoding="utf-8")
-    assert 'revision: str = "0049"' in migration
-    assert 'down_revision: Union[str, None] = "0048"' in migration
-    assert migration.index("_schema_repair_ddl()") < migration.index(
+    assert 'revision: str = "0049"' in migration_0049
+    assert 'down_revision: Union[str, None] = "0048"' in migration_0049
+    assert migration_0049.index("_schema_repair_ddl()") < migration_0049.index(
         'ALL_CLOSED_LOOP_IMMUTABILITY_DDL'
     )
-    assert expected_alembic_head() == "0049"
+
+
+def test_0050_is_the_linear_head_and_persists_ui_governance_fields():
+    migration = (
+        BACKEND
+        / "migrations"
+        / "versions"
+        / "0050_persist_a1_a3_ui_governance_fields.py"
+    ).read_text(encoding="utf-8")
+    assert 'revision: str = "0050"' in migration
+    assert 'down_revision: Union[str, None] = "0049"' in migration
+    assert "action_note" in migration
+    assert "reset_reason" in migration
+    assert expected_alembic_head() == "0050"
 
 
 def test_pure_sql_bundle_matches_head_and_applies_revoke_after_grant_all():
     sql = (BACKEND / "database" / "provision" / "provision.sql").read_text(
         encoding="utf-8"
     )
-    assert "VALUES ('0049')" in sql
+    assert "VALUES ('0050')" in sql
+    assert '"action_note" "text"' in sql
+    assert '"reset_reason" "text"' in sql
     grant_at = sql.index("GRANT ALL PRIVILEGES ON ALL TABLES")
     closed_loop_at = sql.index("A1/A2/A3 closed-loop immutability")
     assert closed_loop_at > grant_at
