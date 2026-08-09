@@ -75,7 +75,7 @@ function LifecycleTooltip({
         role="tooltip"
         id={tooltipId}
         data-testid={`${testId}-content`}
-        className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-72 -translate-x-1/2 rounded-md border border-gray-400/70 bg-panel px-3 py-2 text-xs leading-relaxed text-text opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 dark:border-gray-500/70"
+        className="pointer-events-none absolute left-0 top-full z-20 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-lg border border-gray-300 bg-panel px-3 py-2 text-xs leading-relaxed text-text opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 dark:border-gray-600"
       >
         {text}
       </span>

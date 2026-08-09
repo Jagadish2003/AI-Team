@@ -519,7 +519,7 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     expect(screen.getByRole('button', { name: 'Record Your Action' })).toBeDisabled();
     const disabledTooltip = screen.getByTestId('record-action-tooltip-content');
     expect(disabledTooltip).toHaveTextContent('Select an action/deployment date first');
-    expect(disabledTooltip).toHaveClass('border-gray-400/70', 'rounded-md');
+    expect(disabledTooltip).toHaveClass('top-full', 'w-80', 'border-gray-300', 'rounded-lg');
     expect(await screen.findAllByText('No stored movement measurement exists yet.')).toHaveLength(1);
 
     fireEvent.change(dateInput, { target: { value: '2026-08-01' } });
@@ -561,7 +561,7 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     const dismissButton = screen.getByRole('button', { name: 'Dismiss' });
     const dismissTooltip = screen.getByTestId('dismiss-tooltip-content');
     expect(dismissTooltip).toHaveTextContent('stops active outcome tracking');
-    expect(dismissTooltip).toHaveClass('border-gray-400/70', 'rounded-md');
+    expect(dismissTooltip).toHaveClass('top-full', 'w-80', 'border-gray-300', 'rounded-lg');
     fireEvent.click(dismissButton);
     const dismissDialog = screen.getByRole('dialog', { name: 'Dismiss opportunity' });
     fireEvent.click(within(dismissDialog).getByRole('button', { name: 'Dismiss' }));
@@ -576,7 +576,7 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     const reopenButton = screen.getByRole('button', { name: 'Reopen' });
     const reopenTooltip = screen.getByTestId('reopen-tooltip-content');
     expect(reopenTooltip).toHaveTextContent('clears the recorded action date');
-    expect(reopenTooltip).toHaveClass('border-gray-400/70', 'rounded-md');
+    expect(reopenTooltip).toHaveClass('top-full', 'w-80', 'border-gray-300', 'rounded-lg');
     fireEvent.click(reopenButton);
     const reopenDialog = screen.getByRole('dialog', { name: 'Reopen opportunity' });
     fireEvent.click(within(reopenDialog).getByRole('button', { name: 'Reopen' }));
