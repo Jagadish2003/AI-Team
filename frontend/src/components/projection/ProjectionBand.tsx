@@ -323,7 +323,7 @@ export default function ProjectionBandPanel({
   );
 }
 
-/** Compact band + evidence label, for surfaces with no room for the drivers. */
+/** Compact band + evidence label for the Agentforce Blueprint surface. */
 export function ProjectionBandCompact({
   projection,
 }: {
@@ -363,10 +363,6 @@ export function ProjectionBandCompact({
           {evidenceLabel}
         </div>
       )}
-      <div className="mt-2 space-y-2">
-        <ProjectionStrengthBadge projection={projection} />
-        <ProjectionCappedNotice projection={projection} compact />
-      </div>
     </div>
   );
 }

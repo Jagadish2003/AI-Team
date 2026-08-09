@@ -427,11 +427,11 @@ describe('2.0-A1 T4 — Opportunity Review shows the band and its evidence label
 });
 
 // ---------------------------------------------------------------------------
-// Agentforce Blueprint — the band travels with the agent design.
+// Agentforce Blueprint — the customer-facing band travels with the agent design.
 // ---------------------------------------------------------------------------
 
-describe('2.0-A1 T4 — Agentforce Blueprint shows the band and its strength', () => {
-  it('renders the band, evidence label, and projection strength', () => {
+describe('2.0-A1 T4 — Agentforce Blueprint shows the customer-facing band', () => {
+  it('renders the band and evidence label without duplicate strength details', () => {
     render(<BlueprintContent blueprint={blueprint(CORROBORATED)} />);
 
     const compact = screen.getByTestId('projection-band-compact');
@@ -445,19 +445,15 @@ describe('2.0-A1 T4 — Agentforce Blueprint shows the band and its strength', (
     expect(within(compact).getByTestId('projection-evidence-label')).toHaveTextContent(
       'Strong evidence',
     );
-    expect(within(compact).getByTestId('projection-strength')).toHaveTextContent(
-      'Strong projection strength',
-    );
+    expect(within(compact).queryByTestId('projection-strength')).not.toBeInTheDocument();
   });
 
-  it('never shows a capped strength without its cap label', () => {
+  it('leaves capped-confidence details to Opportunity Review', () => {
     render(<BlueprintContent blueprint={blueprint(CAPPED)} />);
 
     const compact = screen.getByTestId('projection-band-compact');
-    expect(within(compact).getByTestId('projection-strength')).toHaveTextContent(
-      'Capped - single-source confidence',
-    );
-    expect(within(compact).getByTestId('projection-capped-label')).toBeInTheDocument();
+    expect(within(compact).queryByTestId('projection-strength')).not.toBeInTheDocument();
+    expect(within(compact).queryByTestId('projection-capped-label')).not.toBeInTheDocument();
   });
 
   it('omits the band section entirely when the finding carries no band', () => {
@@ -486,6 +482,9 @@ describe('2.0-A1 T4 / AC4 — Agent Roadmap ordering', () => {
       'opp-row-opp_corroborated',
       'opp-row-opp_capped',
     ]);
+    expect(within(screen.getByTestId('opp-row-opp_capped')).queryByText(
+      /Capped.*single-source confidence/i,
+    )).not.toBeInTheDocument();
   });
 
   it('preserves every other ordering decision — it demotes, it does not re-rank', () => {
@@ -514,16 +513,14 @@ describe('2.0-A1 T4 / AC4 — Agent Roadmap ordering', () => {
     ]);
   });
 
-  it('shows the band and the strength on each roadmap row', () => {
+  it('shows the band without duplicate strength details on each roadmap row', () => {
     render(<StageCard stage={stage([corroborated])} onOpenReview={vi.fn()} />);
 
     const row = screen.getByTestId('opp-row-opp_corroborated');
     expect(within(row).getByTestId('opp-band-opp_corroborated')).toHaveTextContent(
       'Projected 23-57% of the recurring instances',
     );
-    expect(within(row).getByTestId('projection-strength')).toHaveTextContent(
-      'Strong projection strength',
-    );
+    expect(within(row).queryByTestId('projection-strength')).not.toBeInTheDocument();
   });
 
   it('treats an opportunity with no projection as uncapped and leaves it in place', () => {
