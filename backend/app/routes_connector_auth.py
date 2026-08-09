@@ -45,11 +45,13 @@ from pydantic import BaseModel
 
 from app import db
 from app.auth import (
+    ConnectorNotAuthenticatedError,
     OAuthError,
     build_auth_url,
     exchange_code,
     generate_pkce_pair,
     get_client_credentials_token,
+    get_token,
     revoke_token,
     store_token,
 )
@@ -709,8 +711,20 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         "/api/connectors/{connector_id}/token-status",
         dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
     )
-    async def get_token_status(connector_id: str) -> Dict[str, str]:
-        """Return token status: connected | needs_refresh | needs_auth | refresh_failed (AC14)."""
+    async def get_token_status(
+        connector_id: str,
+        response: Response,
+        ensure_valid: bool = Query(False),
+    ) -> Dict[str, Optional[str]]:
+        """Return the connector's live OAuth status and recorded expiry.
+
+        When an access token has expired, verify its saved refresh token here.
+        Launch guards pass ``ensure_valid=true`` to perform the same verification
+        inside the near-expiry window. A successful refresh keeps the connector
+        live; a rejected refresh becomes ``refresh_failed`` so Integration Hub can
+        show Reconnect and discovery can stop before creating an unhealthy run.
+        """
+        response.headers["Cache-Control"] = "no-store"
         # Scope to the caller's org — the OAuth callback stores the credential under
         # the org carried in the state nonce (the authenticated org), and disconnect
         # reads with get_current_org_id() too. Using a hardcoded "default" here looked
@@ -732,7 +746,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             con.close()
 
         if row is None:
-            return {"status": "needs_auth"}
+            return {"status": "needs_auth", "expires_at": None}
 
         expires_at_str, refresh_failed_flag, refresh_token_enc = row[0], row[1], row[2]
         # A stored refresh token means the vault can silently mint a new access
@@ -749,7 +763,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         # the access token was revoked BEFORE its stored expires_at — so a pure
         # expiry check would still read "connected" while every live call 401s.
         if refresh_failed_flag:
-            return {"status": "refresh_failed"}
+            return {"status": "refresh_failed", "expires_at": str(expires_at_str)}
 
         expires_at = datetime.fromisoformat(expires_at_str)
         if expires_at.tzinfo is None:
@@ -758,17 +772,56 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         now = datetime.now(timezone.utc)
         seconds_left = (expires_at - now).total_seconds()
 
+        # A saved refresh token is only a recovery option, not proof that the
+        # provider will still accept it. The old status check returned
+        # ``needs_refresh`` for an already-expired access token without trying the
+        # refresh. That delayed the real validity check until discovery ingestion,
+        # where the run was then degraded. Verify recovery at the status edge.
+        should_verify_refresh = seconds_left <= 0 or (
+            ensure_valid and seconds_left <= REFRESH_THRESHOLD_SECONDS
+        )
+        if should_verify_refresh and has_refresh_token:
+            try:
+                refreshed = await get_token(
+                    org_id,
+                    connector_id,
+                    min_validity_seconds=(
+                        REFRESH_THRESHOLD_SECONDS if ensure_valid else 0
+                    ),
+                )
+            except ConnectorNotAuthenticatedError:
+                return {
+                    "status": "refresh_failed",
+                    "expires_at": expires_at.isoformat(),
+                }
+
+            refreshed_seconds_left = (refreshed.expires_at - now).total_seconds()
+            return {
+                "status": (
+                    "needs_refresh"
+                    if refreshed_seconds_left <= REFRESH_THRESHOLD_SECONDS
+                    else "connected"
+                ),
+                "expires_at": refreshed.expires_at.isoformat(),
+            }
+
         # Near-expiry OR already expired: refreshable unless the refresh token is
         # gone or a prior refresh failed. 'needs_refresh' keeps the connector shown
         # as connected (the tile only prompts re-auth on needs_auth/refresh_failed).
         if seconds_left <= REFRESH_THRESHOLD_SECONDS:
             if refresh_failed_flag:
-                return {"status": "refresh_failed"}
+                return {
+                    "status": "refresh_failed",
+                    "expires_at": expires_at.isoformat(),
+                }
             if has_refresh_token:
-                return {"status": "needs_refresh"}
+                return {
+                    "status": "needs_refresh",
+                    "expires_at": expires_at.isoformat(),
+                }
             # No refresh token to fall back on — the user must reconnect.
-            return {"status": "needs_auth"}
-        return {"status": "connected"}
+            return {"status": "needs_auth", "expires_at": expires_at.isoformat()}
+        return {"status": "connected", "expires_at": expires_at.isoformat()}
 
     # -----------------------------------------------------------------------
     # Static (non-OAuth) connector credentials — R17-D3 Addendum A, T12 / AC10
