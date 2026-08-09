@@ -201,7 +201,7 @@ describe('2.0-A1 T3 projection computation basis surfaces', () => {
     expect(basis).toHaveTextContent('strong evidence');
   });
 
-  it('renders summary-level projection basis in Executive Report quick wins', () => {
+  it('renders summary-level projection basis without the thin-evidence warning in Executive Report quick wins', () => {
     render(
       <MemoryRouter>
         <TopQuickWins
@@ -216,7 +216,7 @@ describe('2.0-A1 T3 projection computation basis surfaces', () => {
     expect(basis).toHaveTextContent('baseline 201.6');
     expect(basis).toHaveTextContent('signal Reassignment hops');
     expect(basis).toHaveTextContent('thin evidence');
-    expect(screen.getByText(/projection band is wider because evidence is limited/i))
-      .toBeInTheDocument();
+    expect(screen.queryByText(/projection band is wider because evidence is limited/i))
+      .not.toBeInTheDocument();
   });
 });
