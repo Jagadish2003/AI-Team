@@ -164,30 +164,18 @@ export function demoteCappedProjections<T>(
     .map((entry) => entry.item);
 }
 
-function formatSigned(value: number): string {
-  return `+${value.toFixed(1)} pts`;
-}
-
 function driverRow(driver: ProjectionBandWidthDriver) {
-  const contributes = driver.widensByPct > 0;
   return (
     <div
       key={driver.axis}
       data-testid={`band-width-driver-${driver.axis}`}
-      className="flex items-baseline justify-between gap-3 border-b border-border/50 py-1.5 last:border-b-0"
+      className="border-b border-border/50 py-1.5 last:border-b-0"
     >
       <div className="min-w-0">
         <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">
           {driver.label}
         </div>
         <div className="mt-0.5 break-words text-xs text-text">{driver.value}</div>
-      </div>
-      <div
-        className={`shrink-0 font-mono text-[11px] ${
-          contributes ? 'text-amber-600' : 'text-muted'
-        }`}
-      >
-        {contributes ? formatSigned(driver.widensByPct) : 'no widening'}
       </div>
     </div>
   );
@@ -247,14 +235,6 @@ export function ProjectionStrengthBadge({
       >
         {strength.label}
       </span>
-      {isPresentNumber(strength.value) && (
-        <span
-          data-testid="projection-strength-value"
-          className="font-mono text-[11px] text-muted"
-        >
-          {strength.value.toFixed(2)}
-        </span>
-      )}
     </div>
   );
 }
@@ -314,7 +294,7 @@ export default function ProjectionBandPanel({
               data-testid="projection-band-tier"
               className="shrink-0 rounded-full border border-border bg-panel/70 px-2 py-0.5 text-[11px] font-semibold text-muted"
             >
-              {bandWidth.bandLabel} · {bandWidth.widthPct} pts
+              {bandWidth.bandLabel}
             </span>
           )}
         </div>
@@ -335,12 +315,7 @@ export default function ProjectionBandPanel({
               </div>
               <div className="mt-1">{bandWidth.drivers.map(driverRow)}</div>
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <ProjectionStrengthBadge projection={projection} />
-              <span className="font-mono text-[10px] text-muted">
-                band model {bandWidth.modelVersion}
-              </span>
-            </div>
+            <ProjectionStrengthBadge projection={projection} />
           </>
         )}
       </div>

@@ -332,7 +332,7 @@ function stage(opportunities: OpportunityCandidate[]): RoadmapStage {
 // ---------------------------------------------------------------------------
 
 describe('2.0-A1 T4 — Opportunity Review shows the band and its evidence label', () => {
-  it('renders the resulting band, its width tier, and the evidence label', () => {
+  it('renders the resulting band, its qualitative width tier, and the evidence label', () => {
     render(<OpportunityDetail opp={opportunity('opp_001', 'Routing friction', CORROBORATED)} audit={AUDIT} />);
 
     const panel = screen.getByTestId('projection-band-panel');
@@ -342,20 +342,21 @@ describe('2.0-A1 T4 — Opportunity Review shows the band and its evidence label
     expect(within(panel).getByTestId('projection-band-tier')).toHaveTextContent(
       'Moderate band',
     );
-    expect(within(panel).getByTestId('projection-band-tier')).toHaveTextContent('34 pts');
+    expect(within(panel).getByTestId('projection-band-tier')).not.toHaveTextContent('34 pts');
     expect(within(panel).getByTestId('projection-evidence-label')).toHaveTextContent(
       'Strong evidence',
     );
   });
 
-  it('explains which evidence input set the width', () => {
+  it('explains which evidence inputs set the width without raw calculation details', () => {
     render(<OpportunityDetail opp={opportunity('opp_001', 'Routing friction', CORROBORATED)} audit={AUDIT} />);
 
     const panel = screen.getByTestId('projection-band-panel');
     expect(within(panel).getByTestId('projection-band-rationale')).toHaveTextContent(
       'strong sample',
     );
-    // All four inputs are shown, each with its contribution.
+    // All four inputs remain visible, without exposing their internal point
+    // contributions or the calculation model version.
     for (const axis of [
       'sample_size',
       'recurrence_stability',
@@ -364,12 +365,10 @@ describe('2.0-A1 T4 — Opportunity Review shows the band and its evidence label
     ]) {
       expect(within(panel).getByTestId(`band-width-driver-${axis}`)).toBeInTheDocument();
     }
-    expect(
-      within(panel).getByTestId('band-width-driver-corroboration_status'),
-    ).toHaveTextContent('+4.5 pts');
-    expect(
-      within(panel).getByTestId('band-width-driver-sample_size'),
-    ).toHaveTextContent('no widening');
+    expect(panel).not.toHaveTextContent('+4.5 pts');
+    expect(panel).not.toHaveTextContent('no widening');
+    expect(panel).not.toHaveTextContent('band model');
+    expect(within(panel).queryByTestId('projection-strength-value')).not.toBeInTheDocument();
   });
 
   it('labels a capped single-source projection and shows its wider band', () => {
