@@ -102,10 +102,6 @@ export default function OpportunityOutcomePanel({
             </table>
           </div>
         </div>
-      ) : data?.emptyState ? (
-        <div className="border-t border-border px-5 py-4 text-sm text-muted">
-          {data.emptyState.message}
-        </div>
       ) : null}
     </section>
   );

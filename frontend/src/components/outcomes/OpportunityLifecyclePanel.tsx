@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useId, useMemo, useState } from 'react';
 import {
   Activity,
   CalendarDays,
@@ -49,6 +49,39 @@ const RECORD_ACTION_PENDING_TOOLTIP =
   'Recording this action date. Later discovery runs will use it as the before-and-after boundary.';
 const DISMISS_TOOLTIP =
   'Dismiss stops active outcome tracking for this opportunity. The lifecycle history remains auditable.';
+
+function LifecycleTooltip({
+  children,
+  focusable = false,
+  testId,
+  text,
+}: {
+  children: (tooltipId: string) => React.ReactNode;
+  focusable?: boolean;
+  testId: string;
+  text: string;
+}) {
+  const tooltipId = useId();
+
+  return (
+    <span
+      data-testid={testId}
+      aria-describedby={focusable ? tooltipId : undefined}
+      className="group relative inline-flex"
+      tabIndex={focusable ? 0 : undefined}
+    >
+      {children(tooltipId)}
+      <span
+        role="tooltip"
+        id={tooltipId}
+        data-testid={`${testId}-content`}
+        className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-72 -translate-x-1/2 rounded-md border border-gray-400/70 bg-panel px-3 py-2 text-xs leading-relaxed text-text opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 dark:border-gray-500/70"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
 
 function localToday(): string {
   const now = new Date();
@@ -273,48 +306,67 @@ export default function OpportunityLifecyclePanel({
                   disabled={Boolean(pending)}
                   className="h-10 rounded-lg border border-border bg-panel px-3 text-sm text-text focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-60"
                 />
-                <span
-                  data-testid="record-action-tooltip"
-                  title={recordActionTooltip}
-                  className="inline-flex"
+                <LifecycleTooltip
+                  testId="record-action-tooltip"
+                  text={recordActionTooltip}
+                  focusable={recordActionDisabled}
                 >
-                  <button
-                    type="submit"
-                    disabled={recordActionDisabled}
-                    className="inline-flex h-10 items-center justify-center rounded-lg border border-accent/30 bg-accent px-4 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
-                    aria-label={pending === 'action' ? 'Recording action' : 'Record Your Action'}
-                  >
-                    {pending === 'action' ? 'Recording...' : 'Record Your Action'}
-                  </button>
-                </span>
+                  {(tooltipId) => (
+                    <button
+                      type="submit"
+                      disabled={recordActionDisabled}
+                      className="inline-flex h-10 items-center justify-center rounded-lg border border-accent/30 bg-accent px-4 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-describedby={tooltipId}
+                      aria-label={pending === 'action' ? 'Recording action' : 'Record Your Action'}
+                    >
+                      {pending === 'action' ? 'Recording...' : 'Record Your Action'}
+                    </button>
+                  )}
+                </LifecycleTooltip>
               </div>
             </form>
           ) : null}
 
           <div className="mt-4 flex flex-wrap gap-2">
             {legalNextStates.has('dismissed') ? (
-              <button
-                type="button"
-                onClick={() => setConfirmMutation('dismiss')}
-                disabled={Boolean(pending)}
-                className="inline-flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-500/10 disabled:opacity-50 dark:text-red-300"
-                title={DISMISS_TOOLTIP}
+              <LifecycleTooltip
+                testId="dismiss-tooltip"
+                text={DISMISS_TOOLTIP}
+                focusable={Boolean(pending)}
               >
-                <XCircle className="h-4 w-4" aria-hidden />
-                Dismiss
-              </button>
+                {(tooltipId) => (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmMutation('dismiss')}
+                    disabled={Boolean(pending)}
+                    className="inline-flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-500/10 disabled:opacity-50 dark:text-red-300"
+                    aria-describedby={tooltipId}
+                  >
+                    <XCircle className="h-4 w-4" aria-hidden />
+                    Dismiss
+                  </button>
+                )}
+              </LifecycleTooltip>
             ) : null}
             {state !== 'open' && legalNextStates.has('open') ? (
-              <button
-                type="button"
-                onClick={() => setConfirmMutation('reopen')}
-                disabled={Boolean(pending)}
-                className="inline-flex items-center gap-2 rounded-lg border border-border bg-bg/30 px-3 py-2 text-sm font-semibold text-text transition hover:bg-panel2 disabled:opacity-50"
-                title={reopenTooltip}
+              <LifecycleTooltip
+                testId="reopen-tooltip"
+                text={reopenTooltip}
+                focusable={Boolean(pending)}
               >
-                <RotateCcw className="h-4 w-4" aria-hidden />
-                Reopen
-              </button>
+                {(tooltipId) => (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmMutation('reopen')}
+                    disabled={Boolean(pending)}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-bg/30 px-3 py-2 text-sm font-semibold text-text transition hover:bg-panel2 disabled:opacity-50"
+                    aria-describedby={tooltipId}
+                  >
+                    <RotateCcw className="h-4 w-4" aria-hidden />
+                    Reopen
+                  </button>
+                )}
+              </LifecycleTooltip>
             ) : null}
           </div>
 
