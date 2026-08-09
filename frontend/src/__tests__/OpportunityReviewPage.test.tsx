@@ -182,8 +182,8 @@ vi.mock('../api/outcomeApi', () => ({
   fetchOutcomePortfolio: (...args: unknown[]) => mockFetchOutcomePortfolio(...args),
   fetchOpportunityLifecycle: (opportunityIdentity: string) =>
     mockFetchOpportunityLifecycle(opportunityIdentity),
-  recordOpportunityAction: (opportunityIdentity: string, actionDate: string) =>
-    mockRecordOpportunityAction(opportunityIdentity, actionDate),
+  recordOpportunityAction: (opportunityIdentity: string, actionDate: string, note?: string) =>
+    mockRecordOpportunityAction(opportunityIdentity, actionDate, note),
   dismissOpportunity: (opportunityIdentity: string) =>
     mockDismissOpportunity(opportunityIdentity),
   reopenOpportunity: (opportunityIdentity: string) =>
@@ -515,7 +515,12 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     renderPage();
 
     const dateInput = await screen.findByLabelText('Action/deployment date');
+    const noteInput = screen.getByLabelText('What changed?');
     expect(dateInput).toBeRequired();
+    expect(noteInput).toHaveAttribute(
+      'placeholder',
+      'Describe the agent, workflow, or process change deployed.',
+    );
     expect(screen.getByRole('button', { name: 'Record Your Action' })).toBeDisabled();
     const disabledTooltip = screen.getByTestId('record-action-tooltip-content');
     expect(disabledTooltip).toHaveTextContent('Select an action/deployment date first');
@@ -523,6 +528,9 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     expect(await screen.findAllByText('No stored movement measurement exists yet.')).toHaveLength(1);
 
     fireEvent.change(dateInput, { target: { value: '2026-08-01' } });
+    fireEvent.change(noteInput, {
+      target: { value: 'Claims triage agent deployed for repetitive intake review.' },
+    });
     expect(screen.getByTestId('record-action-tooltip-content')).toHaveTextContent(
       'later discovery runs can monitor',
     );
@@ -532,6 +540,7 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
       expect(mockRecordOpportunityAction).toHaveBeenCalledWith(
         'opp_identity',
         '2026-08-01',
+        'Claims triage agent deployed for repetitive intake review.',
       );
     });
     expect(await screen.findByTestId('opportunity-lifecycle-state')).toHaveTextContent(

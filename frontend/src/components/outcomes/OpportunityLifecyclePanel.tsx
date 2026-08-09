@@ -144,6 +144,7 @@ export default function OpportunityLifecyclePanel({
   const cache = useDataCache();
   const { push } = useToast();
   const [actionDate, setActionDate] = useState('');
+  const [actionNote, setActionNote] = useState('');
   const [pending, setPending] = useState<PendingMutation>(null);
   const [confirmMutation, setConfirmMutation] = useState<ConfirmMutation | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
@@ -178,7 +179,7 @@ export default function OpportunityLifecyclePanel({
     try {
       const updated =
         kind === 'action'
-          ? await recordOpportunityAction(opportunityIdentity, actionDate)
+          ? await recordOpportunityAction(opportunityIdentity, actionDate, actionNote)
           : kind === 'dismiss'
             ? await dismissOpportunity(opportunityIdentity)
             : await reopenOpportunity(opportunityIdentity);
@@ -187,7 +188,10 @@ export default function OpportunityLifecyclePanel({
       cache.invalidateExact(cacheKeys.opportunityOutcome(opportunityIdentity));
       cache.invalidateExact(cacheKeys.outcomePortfolio);
       setConfirmMutation(null);
-      if (kind !== 'action') setActionDate('');
+      if (kind !== 'action') {
+        setActionDate('');
+        setActionNote('');
+      }
       push(
         kind === 'action'
           ? 'Action/change recorded. Monitoring will begin when a later run lands.'
@@ -295,7 +299,7 @@ export default function OpportunityLifecyclePanel({
               <p className="mt-1 text-xs leading-relaxed text-muted">
                 This date creates the before-and-after boundary used for monitoring.
               </p>
-              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+              <div className="mt-3 space-y-3">
                 <input
                   id={`action-date-${opportunityIdentity}`}
                   type="date"
@@ -306,6 +310,21 @@ export default function OpportunityLifecyclePanel({
                   disabled={Boolean(pending)}
                   className="h-10 rounded-lg border border-border bg-panel px-3 text-sm text-text focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-60"
                 />
+                <div>
+                  <label htmlFor={`action-note-${opportunityIdentity}`} className="text-sm font-semibold text-text">
+                    What changed?
+                  </label>
+                  <textarea
+                    id={`action-note-${opportunityIdentity}`}
+                    value={actionNote}
+                    onChange={(event) => setActionNote(event.target.value)}
+                    maxLength={2000}
+                    rows={3}
+                    disabled={Boolean(pending)}
+                    placeholder="Describe the agent, workflow, or process change deployed."
+                    className="mt-1 w-full resize-y rounded-lg border border-border bg-panel px-3 py-2 text-sm leading-relaxed text-text placeholder:text-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-60"
+                  />
+                </div>
                 <LifecycleTooltip
                   testId="record-action-tooltip"
                   text={recordActionTooltip}

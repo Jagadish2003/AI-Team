@@ -56,9 +56,12 @@ export function fetchOpportunityLifecycle(
 export function recordOpportunityAction(
   opportunityIdentity: string,
   actionDate: string,
+  note?: string,
 ): Promise<OpportunityLifecycle> {
+  const trimmedNote = note?.trim();
   return apiPost<OpportunityLifecycle>(lifecyclePath(opportunityIdentity, 'action'), {
     actionDate,
+    ...(trimmedNote ? { note: trimmedNote } : {}),
   });
 }
 
