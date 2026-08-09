@@ -57,11 +57,17 @@ vi.mock('../lib/apiClient', () => ({
 }));
 
 import DiscoveryRunPage from '../pages/DiscoveryRunPage';
+import { ToastProvider } from '../components/common/Toast';
 
 function renderPage() {
   return render(
     <MemoryRouterStub>
-      <DiscoveryRunPage />
+      {/* Merge note: the page calls useToast() for the Arc-C connector-expiry
+          warning, so it now requires a ToastProvider. `dev` never needed one
+          because that feature did not exist on this page there. */}
+      <ToastProvider>
+        <DiscoveryRunPage />
+      </ToastProvider>
     </MemoryRouterStub>,
   );
 }

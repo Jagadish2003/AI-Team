@@ -1,4 +1,19 @@
 import React from 'react';
+import { useEffect, useState } from 'react';
+import PackCertificationBadge from '../components/common/PackCertificationBadge';
+import {
+  PackDeprecationBadge,
+  PackDeprecationDetail,
+} from '../components/common/PackDeprecationNotice';
+import PackMigrationAssist from '../components/common/PackMigrationAssist';
+import {
+  certificationsByPackId,
+  deprecationsByPackId,
+  fetchPackStates,
+} from '../api/packStateApi';
+import type { PackCertification } from '../types/packCertification';
+import type { PackDeprecationNotice } from '../types/packDeprecation';
+import type { PackCertificationPolicy, PackStateItem } from '../api/packStateApi';
 import {
   ArrowLeft,
   Clock3,
@@ -276,6 +291,58 @@ export default function DiscoveryPlanPage({
 }: Props) {
   const { state, confidence } = setupState;
 
+  // 2.0-C2 T3 (AT-833 / AC2): certification levels for the packs this run may
+  // activate, so the level is visible AT SELECTION rather than only after a run.
+  // Fail-soft: a failed read leaves the badges absent — a pack picker must still
+  // work, and an unresolved badge is never rendered as a level.
+  const [packCertifications, setPackCertifications] = useState<
+    Record<string, PackCertification>
+  >({});
+  // 2.0-C2 T4 (AT-834): the org's activation floor, and which packs it blocks.
+  // Shown BEFORE launch so a restricted org sees the rule at the moment it picks a
+  // pack, rather than a 409 after the whole run is configured.
+  const [certificationPolicy, setCertificationPolicy] =
+    useState<PackCertificationPolicy | null>(null);
+  const [blockedPacks, setBlockedPacks] = useState<Record<string, string>>({});
+  // 2.0-C4 T2 (AT-843 / AC1): deprecation notices for the packs this run may
+  // activate. Run configuration is the surface that matters most for a deprecation
+  // — it is the moment someone is about to build a run on a pack that is going
+  // away, and the only moment the warning can still change their mind. Fail-soft
+  // in the same direction as the badges above: no notice, never an invented one.
+  const [packDeprecations, setPackDeprecations] = useState<
+    Record<string, PackDeprecationNotice>
+  >({});
+  useEffect(() => {
+    let cancelled = false;
+    fetchPackStates()
+      .then(response => {
+        if (cancelled) return;
+        setPackCertifications(certificationsByPackId(response));
+        setPackDeprecations(deprecationsByPackId(response));
+        setCertificationPolicy(response.certificationPolicy ?? null);
+        setBlockedPacks(
+          Object.fromEntries(
+            (response.packs ?? [])
+              .filter((pack: PackStateItem) => pack.activationBlocked)
+              .map((pack: PackStateItem) => [
+                pack.packId,
+                pack.activationBlockedReason ?? 'Blocked by this organisation’s certification policy',
+              ]),
+          ),
+        );
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPackCertifications({});
+        setPackDeprecations({});
+        setCertificationPolicy(null);
+        setBlockedPacks({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const qualityRows = calcQualityRows(
     state.selectedSystemIds,
     state.weightings,
@@ -371,11 +438,56 @@ export default function DiscoveryPlanPage({
               label="Template"
               value={templateLabel}
             />
+            {certificationPolicy?.restricted && (
+              <p
+                data-testid="certification-policy-banner"
+                className="mb-2 rounded-lg border border-blue-500/30 bg-blue-500/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-blue-700"
+              >
+                This organisation only activates packs certified{' '}
+                {certificationPolicy.label.toLowerCase()}.
+                {certificationPolicy.reason ? ` ${certificationPolicy.reason}.` : ''}
+              </p>
+            )}
             {salesforcePacks.length > 0 && (
-              <SummaryRow
-                label="Salesforce packs"
-                value={salesforcePackLabel}
-              />
+              <>
+                <SummaryRow
+                  label="Salesforce packs"
+                  value={salesforcePackLabel}
+                />
+                <div data-testid="salesforce-pack-certifications" className="flex flex-wrap justify-end gap-1.5 pb-2">
+                  {salesforcePacks.map(packId => (
+                    <React.Fragment key={packId}>
+                      <PackCertificationBadge
+                        level={packCertifications[packId]?.level}
+                        label={packCertifications[packId]?.label}
+                        reviewDue={packCertifications[packId]?.reviewDue}
+                        testId={`selection-pack-certification-${packId}`}
+                      />
+                      {/* 2.0-C4 T2 (AT-843 / AC1): a superseded pack says so where
+                          it is SELECTED, beside its certification pill. */}
+                      <PackDeprecationBadge
+                        phase={packDeprecations[packId]?.phase}
+                        label={packDeprecations[packId]?.statusLabel}
+                        notice={packDeprecations[packId]?.summary}
+                        testId={`selection-pack-deprecation-${packId}`}
+                      />
+                    </React.Fragment>
+                  ))}
+                </div>
+                {salesforcePacks
+                  .filter(packId => packDeprecations[packId])
+                  .map(packId => (
+                    <PackDeprecationDetail
+                      key={packId}
+                      phase={packDeprecations[packId].phase}
+                      notice={packDeprecations[packId].summary}
+                      graceEndsOn={packDeprecations[packId].graceEndsOn}
+                      replacementLabel={packDeprecations[packId].replacementLabel}
+                      daysRemaining={packDeprecations[packId].daysRemaining}
+                      testId={`selection-pack-deprecation-detail-${packId}`}
+                    />
+                  ))}
+              </>
             )}
             {/* Analysis pack — chosen per run (non-Salesforce). SINGLE-select
                 dropdown, defaulting to None. */}
@@ -399,8 +511,56 @@ export default function DiscoveryPlanPage({
                 </select>
               </div>
               {selectedAnalysisPack && (
-                <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
-                  {selectedAnalysisPack.description}
+                <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[11px] leading-relaxed text-muted">
+                    {selectedAnalysisPack.description}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <PackCertificationBadge
+                      level={packCertifications[selectedAnalysisPack.id]?.level}
+                      label={packCertifications[selectedAnalysisPack.id]?.label}
+                      reviewDue={packCertifications[selectedAnalysisPack.id]?.reviewDue}
+                      reviewDueDetail={packCertifications[selectedAnalysisPack.id]?.reviewDueDetail}
+                      testId={`selection-pack-certification-${selectedAnalysisPack.id}`}
+                    />
+                    <PackDeprecationBadge
+                      phase={packDeprecations[selectedAnalysisPack.id]?.phase}
+                      label={packDeprecations[selectedAnalysisPack.id]?.statusLabel}
+                      notice={packDeprecations[selectedAnalysisPack.id]?.summary}
+                      testId={`selection-pack-deprecation-${selectedAnalysisPack.id}`}
+                    />
+                  </div>
+                </div>
+              )}
+              {/* The full notice, with the date support ends and the replacement
+                  spelled out — this is the moment the customer can still act on it. */}
+              {selectedAnalysisPack && packDeprecations[selectedAnalysisPack.id] && (
+                <div className="mt-1.5">
+                  <PackDeprecationDetail
+                    phase={packDeprecations[selectedAnalysisPack.id].phase}
+                    notice={packDeprecations[selectedAnalysisPack.id].summary}
+                    graceEndsOn={packDeprecations[selectedAnalysisPack.id].graceEndsOn}
+                    replacementLabel={packDeprecations[selectedAnalysisPack.id].replacementLabel}
+                    daysRemaining={packDeprecations[selectedAnalysisPack.id].daysRemaining}
+                    testId="analysis-pack-deprecation"
+                  />
+                  {/* 2.0-C4 T3 (AT-844 / AC2): the PATH, beside the notice that
+                      announced the problem. Renders nothing unless a replacement is
+                      declared AND this org's saved configuration actually selects
+                      the pack — see PackMigrationAssist. */}
+                  <PackMigrationAssist
+                    packId={selectedAnalysisPack.id}
+                    testId="analysis-pack-migration"
+                  />
+                </div>
+              )}
+              {selectedAnalysisPack && blockedPacks[selectedAnalysisPack.id] && (
+                <p
+                  data-testid="analysis-pack-blocked"
+                  className="mt-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-700"
+                >
+                  {blockedPacks[selectedAnalysisPack.id]}. This run cannot start
+                  while it is selected.
                 </p>
               )}
             </div>

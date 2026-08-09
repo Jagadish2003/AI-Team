@@ -179,7 +179,10 @@ KNOWN_AUDIT_GAPS: Dict[str, str] = {
     "POST /api/db-connectors/{connector_id}/scope": "Native-DB table/column scope unaudited. Owner: D4 T1 follow-up.",
     # -- Connector create / edit (D4 names this explicitly) -----------------
     # -- Run lifecycle ------------------------------------------------------
-    "POST /api/runs/{run_id}/compute": "Run computation unaudited. Owner: D4 T1 follow-up.",
+    # POST /api/runs/{run_id}/compute closed the ratchet in 2.0-C4: it is the third
+    # run-start edge (after /stack-builder/launch and routes_sprint4_t2) and now
+    # emits RUN_STARTED with source="compute". Removed from this list rather than
+    # re-worded — the gap list may only shrink.
     "POST /api/runs/{run_id}/replay": "Replay re-serves artifacts and can reset decisions; unaudited. Owner: D4 T1 follow-up.",
     "DELETE /api/stack-builder/setup-state/{org_id}": "Setup-state deletion unaudited (the SAVE emits setup_state_saved). Owner: D4 T1 follow-up.",
     # -- Analyst / lifecycle ------------------------------------------------
@@ -737,6 +740,11 @@ class TestRegistryGovernance:
             "run_completed",       # run completion emits telemetry only
             "user_login",          # see AUDIT_EXEMPT_ROUTES['/api/auth/login']
         }
+        # NOTE: pack_migration_applied / pack_migration_reverted are NOT listed
+        # here. They are emitted by routes_pack_migration; they only appeared dead
+        # while both went through one helper that took the event type as a
+        # parameter, which this sweep cannot resolve statically. Fixed at the
+        # source (two literal call sites), not by declaring them dead.
         assert set(dead) == expected_dead, (
             "The set of registered-but-never-emitted audit types changed.\n"
             f"  now: {dead}\n  expected: {sorted(expected_dead)}\n"

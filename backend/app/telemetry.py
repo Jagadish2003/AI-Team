@@ -137,6 +137,243 @@ class PackExecutedPayload(TypedDict, total=False):
     duration_ms: NotRequired[int]
 
 
+class PackActivationRefusedPayload(TypedDict, total=False):
+    """2.0-C1 T1 (AT-826) — a pack activation refused on compatibility grounds.
+
+    Emitted at an activation edge when a pack declares a platform-capability range
+    or required normalised concept this platform does not satisfy. Carries the
+    NAMED unmet requirements so support can see exactly what was unmet without
+    reconstructing it from a registry that may have moved on. No credentials, no
+    PII — pack ids, concept ids, and version strings only.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_ids: NotRequired[list[str]]
+    platform_version: NotRequired[str]
+    unmet: NotRequired[list[dict]]
+    reason: NotRequired[str]
+
+
+class PackExecutionSkippedPayload(TypedDict, total=False):
+    """2.0-C1 T2 (AT-827) — a DISABLED pack was dropped from a run's selection.
+
+    Excluding a disabled pack is normal and expected, but it must never be silent
+    (the same discipline as MSP-B7's suppression/deferral reports): this event is
+    the record that a pack the caller selected did not execute, and why. Pack ids
+    and state strings only — no credentials, no PII.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_ids: NotRequired[list[str]]
+    reason: NotRequired[str]
+    excluded: NotRequired[list[dict]]
+
+
+class PackStateChangedPayload(TypedDict, total=False):
+    """2.0-C1 T2 (AT-827) — a pack was disabled or re-enabled for an org.
+
+    The ``pack_state_history`` table is the domain audit trail; this event places
+    the transition in the telemetry stream so run health and support tooling can
+    correlate "this run skipped cloud_ops" with "cloud_ops was disabled at T".
+    """
+    org_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    transition: NotRequired[str]
+    previous_state: NotRequired[str]
+    state: NotRequired[str]
+    revision: NotRequired[int]
+    actor_id: NotRequired[str]
+    changed_at: NotRequired[str]
+
+
+class PackCertificationReviewedPayload(TypedDict, total=False):
+    """2.0-C2 T2 (AT-832) — a pack certification review was recorded.
+
+    The ``pack_certification_reviews`` table is the domain audit trail; this event
+    places the decision in the telemetry stream so support can correlate "this pack
+    was re-signed at T" with "it was reviewed at T-1". Ids, levels, and criterion
+    ids only — never the reviewer's free-text notes.
+    """
+    org_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    pack_version: NotRequired[str]
+    revision: NotRequired[int]
+    reviewer_id: NotRequired[str]
+    proposed_level: NotRequired[str]
+    decision: NotRequired[str]
+    platform_version: NotRequired[str]
+    passed_criteria: NotRequired[list]
+    reviewed_at: NotRequired[str]
+
+
+class PackCertificationPolicyChangedPayload(TypedDict, total=False):
+    """2.0-C2 T4 (AT-834) — an org's pack certification activation floor changed."""
+    org_id: NotRequired[str]
+    previous_minimum_level: NotRequired[str]
+    minimum_level: NotRequired[str]
+    revision: NotRequired[int]
+    actor_id: NotRequired[str]
+    changed_at: NotRequired[str]
+
+
+class PackInstalledPayload(TypedDict, total=False):
+    """2.0-C3 T4 (AT-839) — an authored pack was installed from a signed bundle.
+
+    Carries provenance (bundle digest, publisher key id) and never the bundle
+    itself: the artifact can be large and is partner-supplied, and telemetry is
+    for observing that an install happened, not for storing what was installed.
+    """
+    org_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    pack_version: NotRequired[str]
+    bundle_digest: NotRequired[str]
+    signing_key_id: NotRequired[str]
+    activated: NotRequired[bool]
+    actor_id: NotRequired[str]
+    installed_at: NotRequired[str]
+
+
+class PackInstallRefusedPayload(TypedDict, total=False):
+    """2.0-C3 T4 (AT-839) — an install or activation was refused, and by which gate.
+
+    ``reason`` is the gate (signature / validation / compatibility / policy) and
+    ``failure_count`` how many specific problems it found. The failures themselves
+    stay in the HTTP response and the logs — they can quote manifest content, and
+    telemetry is not the place for partner-supplied text.
+    """
+    org_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    reason: NotRequired[str]
+    failure_count: NotRequired[int]
+    actor_id: NotRequired[str]
+    refused_at: NotRequired[str]
+
+
+class PackActivationChangedPayload(TypedDict, total=False):
+    """2.0-C3 T4 (AT-839) — an installed authored pack was activated or withdrawn."""
+    org_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    pack_version: NotRequired[str]
+    status: NotRequired[str]
+    actor_id: NotRequired[str]
+    changed_at: NotRequired[str]
+
+
+class PackSandboxValidatedPayload(TypedDict, total=False):
+    """2.0-C3 T6 (AT-841) — a pack's manifest and fixtures were re-validated.
+
+    Emitted at install and again before activation, so the sandbox's cost and
+    verdict are observable over time: a pack whose fixtures creep towards the
+    limits is visible before it hits them. Counts and the failing STAGE only —
+    never the failure text, which quotes partner-supplied content.
+    """
+    org_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    trigger: NotRequired[str]
+    ok: NotRequired[bool]
+    stage: NotRequired[str]
+    failure_count: NotRequired[int]
+    case_count: NotRequired[int]
+    record_count: NotRequired[int]
+    duration_ms: NotRequired[int]
+    actor_id: NotRequired[str]
+
+
+class PackCertificationPolicyRefusedPayload(TypedDict, total=False):
+    """2.0-C2 T4 (AT-834) — an activation was refused by the org's policy.
+
+    Emitted at the activation edges so a refusal is observable in run health and
+    support tooling rather than existing only as an HTTP 409 the caller saw once.
+    Pack ids and levels only.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_ids: NotRequired[list]
+    minimum_level: NotRequired[str]
+    violations: NotRequired[list]
+
+
+class PackMigrationPayload(TypedDict, total=False):
+    """2.0-C4 T3 (AT-844) — an org-config pack migration was applied or reverted.
+
+    The append-only migration ledger is the domain record; this event places the
+    transition in the telemetry stream so support can correlate "this org's runs
+    changed pack at T" with the deprecation that prompted it. Ids, field NAMES, and
+    counts only — never the configuration values themselves, and never the operator's
+    free-text reason.
+    """
+    org_id: NotRequired[str]
+    migration_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    replacement_pack_id: NotRequired[str]
+    fields: NotRequired[list]
+    change_count: NotRequired[int]
+    unmapped_count: NotRequired[int]
+    warnings: NotRequired[list]
+    forced: NotRequired[bool]
+    reverts_migration_id: NotRequired[str]
+    actor_id: NotRequired[str]
+    at: NotRequired[str]
+
+
+class PackDeprecationDisabledPayload(TypedDict, total=False):
+    """2.0-C4 T4 (AT-845) — a pack was retired because its grace period ended.
+
+    Emitted once per real transition (an already-disabled pack writes nothing), so
+    support can correlate "this org's runs stopped including cloud_ops at T" with the
+    announced end date rather than inferring it. Pack ids and dates only.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    grace_ends_on: NotRequired[str]
+    replacement_pack_id: NotRequired[str]
+    actor_id: NotRequired[str]
+
+
+class PackDeprecationAnnouncedPayload(TypedDict, total=False):
+    """2.0-C4 T5 (AT-846) — an org came under a pack's deprecation terms.
+
+    Emitted once per (org, pack, declared terms), so a repeat run is silent but a
+    change to the grace date or the replacement announces again. Pack ids, phase, and
+    dates only.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    phase: NotRequired[str]
+    grace_ends_on: NotRequired[str]
+    replacement_pack_id: NotRequired[str]
+
+
+class PackVersionPinnedPayload(TypedDict, total=False):
+    """2.0-C1 T3 (AT-828) — a run executed a ROLLED-BACK pack version.
+
+    Emitted when activation resolves one or more version pins, so run health and
+    support can see that a run deliberately used a prior version rather than the
+    currently-shipped one. Pack ids and version strings only.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_ids: NotRequired[list[str]]
+    pinned_versions: NotRequired[dict]
+
+
+class PackVersionPinUnservablePayload(TypedDict, total=False):
+    """2.0-C1 T3 (AT-828) — a version pin could not be honoured.
+
+    The pinned version's archived artifact is no longer declared, so the pack ran its
+    CURRENT version instead (stamped consistently with what it executed). Emitted so
+    a stale pin is never silent — an operator must either re-archive the artifact or
+    clear the pin.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    version: NotRequired[str]
+    reason: NotRequired[str]
+
+
 class DetectorFiredPayload(TypedDict, total=False):
     """T1-S14-C — one record per detector that fires in a run."""
     detector_id: NotRequired[str]
@@ -1044,6 +1281,54 @@ register_event_type("run.signal_snapshot", RunSignalSnapshotPayload)
 # panel consumes this historical snapshot instead of reconstructing an old run
 # from the mutable pack registry.
 register_event_type("run.pack_executed", PackExecutedPayload)
+# 2.0-C1 T1 (AT-826): emitted at an activation edge when an incompatible pack is
+# refused, so a refusal is observable in run health and support tooling rather
+# than existing only as an HTTP 409 the caller saw once.
+register_event_type("pack.activation_refused", PackActivationRefusedPayload)
+# 2.0-C1 T2 (AT-827): the disabled-pack lifecycle. `execution_skipped` is emitted
+# at the activation edges/runner when a disabled pack is dropped from a selection;
+# `state_changed` when an owner disables or re-enables a pack.
+register_event_type("pack.execution_skipped", PackExecutionSkippedPayload)
+register_event_type("pack.state_changed", PackStateChangedPayload)
+# 2.0-C1 T3 (AT-828): version rollback. `version_pinned` records that a run used a
+# prior version deliberately; `version_pin_unservable` records a pin that could not
+# be honoured (its archived artifact is gone) so a stale pin is never silent.
+register_event_type("pack.version_pinned", PackVersionPinnedPayload)
+register_event_type("pack.version_pin_unservable", PackVersionPinUnservablePayload)
+# 2.0-C2 T2 (AT-832): a checklist-driven certification review was recorded. The
+# review records a DECISION; only the AT-831 signature grants a badge.
+register_event_type("pack.certification_reviewed", PackCertificationReviewedPayload)
+# 2.0-C2 T4 (AT-834): the activation-policy control. `policy_changed` records an
+# owner raising or lowering the floor; `policy_refused` records an activation the
+# floor blocked.
+register_event_type(
+    "pack.certification_policy_changed", PackCertificationPolicyChangedPayload
+)
+register_event_type(
+    "pack.certification_policy_refused", PackCertificationPolicyRefusedPayload
+)
+# 2.0-C3 T4 (AT-839): authored-pack packaging & installation. `installed` and
+# `activation_changed` record what an owner did; `install_refused` records which
+# gate (signature / validation / compatibility / certification policy) stopped an
+# install, so a refusal is observable in support tooling rather than existing only
+# as an HTTP 409 the caller saw once.
+register_event_type("pack.installed", PackInstalledPayload)
+register_event_type("pack.install_refused", PackInstallRefusedPayload)
+register_event_type("pack.activation_changed", PackActivationChangedPayload)
+# 2.0-C3 T6 (AT-841): the sandbox verdict, at install and again before activation.
+# Cost and outcome, never the failure text.
+register_event_type("pack.sandbox_validated", PackSandboxValidatedPayload)
+# 2.0-C4 T3 (AT-844): org-config migration off a deprecated pack. Two event types
+# rather than one with a direction field, so "customers are moving to cloud_ops" and
+# "customers are backing out of cloud_ops" are separable without parsing a payload.
+register_event_type("pack.migration_applied", PackMigrationPayload)
+register_event_type("pack.migration_reverted", PackMigrationPayload)
+# 2.0-C4 T4 (AT-845): the end of a grace period, enforced. Distinct from
+# "pack.state_changed" because the actor is the platform, not an owner.
+register_event_type("pack.deprecation_disabled", PackDeprecationDisabledPayload)
+# 2.0-C4 T5 (AT-846): the FIRST of the three deprecation transitions — the org coming
+# under a pack's deprecation terms, which had no record at all before this task.
+register_event_type("pack.deprecation_announced", PackDeprecationAnnouncedPayload)
 # T3-S11-A Sprint 11
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
 # T3-S12-A T7 Sprint 12

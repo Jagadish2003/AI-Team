@@ -13,6 +13,7 @@
  *
  * jsPDF is imported dynamically so it stays code-split out of the main bundle.
  */
+import type { PackCertification } from '../types/packCertification';
 import type { OpportunityCandidate } from '../types/analystReview';
 import type { OutcomeReportSection } from '../types/outcome';
 import { buildMatrixSvg, LIGHT_MATRIX_PALETTE } from './matrixLayout';
@@ -41,6 +42,12 @@ export interface ExecutiveReportPdfData {
   userName?: string | null;
   generatedAt: string;
   runId?: string | null;
+  /**
+   * 2.0-C2 T3 (AT-833 / AC2): the certification level of every pack that produced
+   * a claim in this report, in order of first appearance. Rendered under the
+   * title so a board paper says which level of pack produced its claims.
+   */
+  packCertifications?: PackCertification[];
   outcomeSection?: OutcomeReportSection | null;
 }
 
@@ -306,6 +313,23 @@ export async function downloadExecutiveReportPdf(
     'normal',
     MUTED,
   );
+  // 2.0-C2 T3 (AT-833 / AC2): provenance of the CLAIMS, not of the document —
+  // stated on the export itself so a reader quoting a finding downstream can say
+  // which level of pack produced it without going back to the product.
+  const certifications = data.packCertifications ?? [];
+  if (certifications.length > 0) {
+    wrapped(
+      `Produced by: ${certifications
+        .map(
+          (item) =>
+            `${item.packId} (${item.label}${item.reviewDue ? ', review due' : ''})`,
+        )
+        .join(' · ')}`,
+      9,
+      'normal',
+      MUTED,
+    );
+  }
   y += 3.5;
   setDraw(ACCENT);
   pdf.setLineWidth(0.6);

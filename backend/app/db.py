@@ -16,6 +16,9 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 
 from . import connector_roadmap
+# 2.0-C1 T4 (AT-829): run history is never deleted. history_retention owns the
+# protected-table set and is dependency-free, so importing it here is safe.
+from .history_retention import assert_no_history_deletion
 
 logger = logging.getLogger(__name__)
 
@@ -457,13 +460,27 @@ def require_run_exists(run_id: str) -> Dict[str, Any]:
 
 
 def delete_run_events(run_id: str) -> None:
-    # Soft delete: the app DB role has UPDATE but not DELETE. Mark the run's
-    # events deleted; insert_run_events re-activates any (run_id, seq) it rewrites,
-    # and get_run_events filters is_deleted, so a shrunk event list correctly drops
-    # the now-stale higher-seq rows.
+    """SOFT-delete a run's events. Despite the name, no row is ever removed.
+
+    Marks the run's events deleted; insert_run_events re-activates any
+    (run_id, seq) it rewrites, and get_run_events filters is_deleted, so rewriting a
+    shrunk event list correctly drops the now-stale higher-seq rows from READS while
+    the underlying rows remain.
+
+    2.0-C1 T4 (AT-829 / AC4): ``run_events`` is a protected history table — the app
+    login role has DELETE/TRUNCATE REVOKED on it (provision.sql / alembic 0044), so
+    this MUST stay an UPDATE. A previous version of this comment claimed the app role
+    had "UPDATE but not DELETE" generally; that was not true of this provisioning
+    path, which grants ALL PRIVILEGES and then revokes only on the protected tables.
+    The soft-delete shape is now the enforced contract rather than an assumption.
+    """
+    statement = "UPDATE run_events SET is_deleted = TRUE WHERE run_id = %s"
+    # Self-check: if this ever became a hard DELETE, fail here with the named
+    # history-retention reason rather than as an opaque privilege error in production.
+    assert_no_history_deletion(statement, operation="delete_run_events")
     with closing(connect()) as con:
         cur = con.cursor()
-        cur.execute("UPDATE run_events SET is_deleted = TRUE WHERE run_id = %s", (run_id,))
+        cur.execute(statement, (run_id,))
         con.commit()
 
 

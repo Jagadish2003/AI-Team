@@ -37,6 +37,7 @@ from .normalization_enrichment import KV_NORMALIZATION, enrich_ambiguous_mapping
 from .opportunity_display import (
     with_display,
     with_display_title,
+    with_display_all,
     with_display_titles,
     with_exec_report_display_titles,
     with_roadmap_display_titles,
@@ -85,6 +86,11 @@ from .routes_ingestion import register_ingestion_routes
 from .routes_entity_match_proposals import register_entity_match_proposal_routes
 from .routes_entity_merges import register_entity_merge_routes
 from .routes_entity_unmerges import register_entity_unmerge_routes
+from .routes_pack_certification import register_pack_certification_routes
+from .routes_pack_deprecation import register_pack_deprecation_routes
+from .routes_pack_install import register_pack_install_routes
+from .routes_pack_migration import register_pack_migration_routes
+from .routes_pack_state import register_pack_state_routes
 from .routes_runbook_matches import register_runbook_match_routes
 from .routes_secops_evidence import register_secops_evidence_routes
 from .routes_opportunity_lifecycle import register_opportunity_lifecycle_routes
@@ -397,6 +403,19 @@ register_ingestion_routes(app)
 register_runbook_match_routes(app)
 # MSP-B12 T3: analyst-only, audited resolution of one SecOps evidence pointer.
 register_secops_evidence_routes(app)
+# 2.0-C1 T2 (AT-827): pack lifecycle state — viewer-readable, Owner-writable
+# active/disabled transitions plus the append-only transition history.
+register_pack_state_routes(app)
+# 2.0-C2 T2 (AT-832): certification review checklist + append-only review trail.
+register_pack_certification_routes(app)
+# 2.0-C3 T4 (AT-839): install / activate an authored pack from a signed bundle.
+register_pack_install_routes(app)
+# 2.0-C4 T3 (AT-844): org-config migration off a deprecated pack — preview
+# (analyst+), Owner-confirmed apply, and a reversible append-only ledger.
+register_pack_migration_routes(app)
+# 2.0-C4 T5 (AT-846): the deprecation / migration / post-grace-disable trail, Owner
+# only — the same bar as /api/audit-log, whose rows these are.
+register_pack_deprecation_routes(app)
 # 2.0-A2 T1: analyst-driven opportunity lifecycle (open -> actioned -> monitoring
 # -> measured, plus dismissed/stalled), keyed on the stable opportunity_identity.
 register_opportunity_lifecycle_routes(app)
@@ -924,8 +943,13 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
         adjusted = projected
     except Exception as exc:  # noqa: BLE001 - projection fallback is advisory
         logger.warning("Stored projection fallback not applied: %s", exc)
+    # Merge note: this was `[with_display(opp) for opp in adjusted]` on `dev`.
+    # `with_display_all` is that exact comprehension with the three per-finding
+    # pack lookups (disabled state, certification, deprecation) hoisted and
+    # resolved ONCE for the whole list — the 2.0-C1 T2 optimisation. Same output,
+    # so dev's pipeline is unchanged; it just stops re-reading pack state per row.
     return scrub_opportunity_narratives(
-        apply_run_terminology([with_display(opp) for opp in adjusted], run_id)
+        apply_run_terminology(with_display_all(adjusted), run_id)
     )
 
 

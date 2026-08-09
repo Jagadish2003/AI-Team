@@ -1,4 +1,5 @@
 import type { OpportunityCandidate } from './analystReview';
+import type { PackCertification } from './packCertification';
 import type { OutcomeReportSection } from './outcome';
 
 export type ExecutiveReportConfidence = 'High' | 'Moderate' | 'Low';
@@ -33,5 +34,9 @@ export interface ExecutiveReport {
   snapshotBubbles: ExecutiveSnapshotBubble[];
   roadmapHighlights: ExecutiveRoadmapHighlights;
   aiExecutiveSummary?: string;
+  // 2.0-C2 T3 (AT-833 / AC2): which LEVEL of pack produced the claims in this
+  // report, in order of first appearance. Frozen into the artifact at generation
+  // time — an export states what was verifiable when it was produced.
+  packCertifications?: PackCertification[];
   outcomeSection?: OutcomeReportSection;
 }

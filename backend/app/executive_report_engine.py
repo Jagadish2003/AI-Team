@@ -80,7 +80,44 @@ def build_executive_report(
             "blockerCount": 0,
         },
 
+        # 2.0-C2 T3 (AT-833 / AC2): which LEVEL of pack produced the claims in this
+        # report. A board paper quoting a finding has to be able to say whether it
+        # came from a CloudFulcrum-certified pack, a partner pack, or a community
+        # one — so the export states it rather than leaving the reader to look it up.
+        "packCertifications": pack_certifications(opps),
+
         # T6 enrichment layer adds this later
         "aiExecutiveSummary": "",
         "outcomeSection": outcome_section or build_empty_outcome_report_section(run_id),
     }
+
+
+def pack_certifications(opps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Certification badge for every pack that contributed a finding to this report.
+
+    Order follows first appearance in the findings, so the pack behind the leading
+    claim is listed first. Levels are the EFFECTIVE (signature-verified) ones — a
+    pack whose claim cannot be proved is reported as Community here exactly as it is
+    everywhere else (2.0-C2 AC1), because an export is the surface where an
+    unverified badge would do the most damage.
+
+    Frozen into the report artifact at generation time, which is the honest reading
+    for an export: it states what was verifiable when the report was produced.
+
+    Fail-soft — a report must still generate if certification cannot be resolved. It
+    then carries no badges rather than unproved ones.
+    """
+    pack_ids: List[str] = []
+    for opp in opps:
+        pack_id = str((opp or {}).get("packId") or "").strip()
+        if pack_id and pack_id not in pack_ids:
+            pack_ids.append(pack_id)
+    if not pack_ids:
+        return []
+    try:
+        from discovery.packs.pack_certification import certification_badges
+
+        badges = certification_badges(pack_ids)
+    except Exception:  # noqa: BLE001
+        return []
+    return [badges[pack_id] for pack_id in pack_ids if pack_id in badges]
