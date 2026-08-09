@@ -515,11 +515,11 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     renderPage();
 
     const dateInput = await screen.findByLabelText('Action/deployment date');
-    const noteInput = screen.getByLabelText('What changed?');
+    const noteInput = screen.getByLabelText('What agent or process was deployed?');
     expect(dateInput).toBeRequired();
     expect(noteInput).toHaveAttribute(
       'placeholder',
-      'Describe the agent, workflow, or process change deployed.',
+      'Example: Deployed a claims triage agent for repetitive intake review, or updated the approval routing workflow.',
     );
     expect(screen.getByRole('button', { name: 'Record Your Action' })).toBeDisabled();
     const disabledTooltip = screen.getByTestId('record-action-tooltip-content');

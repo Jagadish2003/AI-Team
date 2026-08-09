@@ -312,7 +312,7 @@ export default function OpportunityLifecyclePanel({
                 />
                 <div>
                   <label htmlFor={`action-note-${opportunityIdentity}`} className="text-sm font-semibold text-text">
-                    What changed?
+                    What agent or process was deployed?
                   </label>
                   <textarea
                     id={`action-note-${opportunityIdentity}`}
@@ -321,7 +321,7 @@ export default function OpportunityLifecyclePanel({
                     maxLength={2000}
                     rows={3}
                     disabled={Boolean(pending)}
-                    placeholder="Describe the agent, workflow, or process change deployed."
+                    placeholder="Example: Deployed a claims triage agent for repetitive intake review, or updated the approval routing workflow."
                     className="mt-1 w-full resize-y rounded-lg border border-border bg-panel px-3 py-2 text-sm leading-relaxed text-text placeholder:text-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-60"
                   />
                 </div>
