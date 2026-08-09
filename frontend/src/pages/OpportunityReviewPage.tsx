@@ -275,11 +275,11 @@ export default function OpportunityReviewPage() {
         {learningInactive && (
           <div
             data-testid="learning-inactive-state"
-            className="mt-3 flex items-start gap-3 rounded-lg border border-amber-500/35 bg-amber-400/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200"
+            className="mt-3 flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700"
           >
             <AlertCircle
               size={18}
-              className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-300"
+              className="mt-0.5 shrink-0 text-amber-700"
               aria-hidden="true"
             />
             <div className="min-w-0">

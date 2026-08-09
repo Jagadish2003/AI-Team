@@ -287,6 +287,11 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     expect(screen.getByTestId('learning-inactive-state')).toHaveTextContent(
       /7 more informing decisions needed/i,
     );
+    expect(screen.getByTestId('learning-inactive-state')).toHaveClass(
+      'border-amber-500/40',
+      'bg-amber-500/10',
+      'text-amber-700',
+    );
   });
 
   // ── Selection tests ─────────────────────────────────────────────────────────
