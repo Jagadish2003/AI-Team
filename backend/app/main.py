@@ -1013,12 +1013,13 @@ def _mirror_decision_to_learning(
     identity = str(opp.get("opportunity_identity") or "").strip()
     if not identity:
         return
+    org_id = get_current_org_id()
     try:
         from .learning_feedback import record_feedback
 
         debug = opp.get("_debug") if isinstance(opp.get("_debug"), dict) else {}
         record_feedback(
-            get_current_org_id(),
+            org_id,
             identity,
             action,
             actor_id="review_decision",
@@ -1028,6 +1029,21 @@ def _mirror_decision_to_learning(
         )
     except Exception as exc:  # noqa: BLE001 - learning must never break review
         logger.warning("Could not mirror decision to learning record: %s", exc)
+        return
+
+    # The durable feedback write is the signal boundary. Refresh the stored
+    # adjustment now (never on the later GET serving path), so a future run can
+    # actually be reordered without an operator calling /recompute manually.
+    try:
+        from .learning_adjustment_state import recompute_after_signal_change
+
+        recompute_after_signal_change(
+            org_id,
+            actor_id="review_decision",
+            trigger="analyst_decision",
+        )
+    except Exception as exc:  # noqa: BLE001 - advisory learning stays non-blocking
+        logger.warning("Could not refresh learning after review decision: %s", exc)
 
 
 @app.post(

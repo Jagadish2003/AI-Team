@@ -14,6 +14,7 @@ import OpportunityDetail from "../components/analyst_review/OpportunityDetail";
 import ReasoningOverride from "../components/analyst_review/ReasoningOverride";
 import OutcomePortfolioPanel from "../components/outcomes/OutcomePortfolioPanel";
 import OpportunityOutcomePanel from "../components/outcomes/OpportunityOutcomePanel";
+import OpportunityLifecyclePanel from "../components/outcomes/OpportunityLifecyclePanel";
 import { Skeleton } from "../components/common/Skeleton";
 import ErrorPanel from "../components/common/ErrorPanel";
 import { RunRequiredEmptyState } from "../components/common/RunRequiredEmptyState";
@@ -371,7 +372,10 @@ export default function OpportunityReviewPage() {
         )}
 
         {showRelease2ArcAUi && selected && (
-          <OpportunityOutcomePanel opportunityIdentity={selectedOutcomeIdentity} />
+          <>
+            <OpportunityLifecyclePanel opportunityIdentity={selectedOutcomeIdentity} />
+            <OpportunityOutcomePanel opportunityIdentity={selectedOutcomeIdentity} />
+          </>
         )}
 
         {showRelease2ArcAUi && hasOutcomeIdentities && (

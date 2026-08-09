@@ -5,9 +5,11 @@ here, not an expression evaluated at read time. See
 ``database/models/ranking_adjustments.py`` for why that distinction is what makes
 T4's audit and reset answerable.
 
-**Recomputation is explicit.** Nothing here runs on the serving path: serving
-READS the stored value. A ranking that shifted because someone opened a page
-would be exactly the invisible drift A3 exists to prevent.
+**Recomputation happens at explicit signal-write boundaries.** Nothing here runs
+on the serving path: serving READS the stored value. Analyst decisions and newly
+stored outcome batches request a refresh after their own write commits. A ranking
+that shifted merely because someone opened a page would still be exactly the
+invisible drift A3 exists to prevent.
 
 **Cold start is stored, not inferred.** When T1's signal set is inactive the
 recomputation still writes rows, with ``learning_active = FALSE`` and a zero
@@ -474,6 +476,32 @@ def recompute_adjustments(
     }
 
 
+def recompute_after_signal_change(
+    org_id: str,
+    *,
+    actor_id: str = ACTOR_SYSTEM,
+    trigger: str,
+) -> Optional[Dict[str, Any]]:
+    """Refresh stored adjustments after a committed decision/outcome mutation.
+
+    Learning is advisory and must never make the mutation that produced its
+    signal fail. Callers therefore use this non-blocking boundary helper instead
+    of duplicating broad exception handling. The trigger is deliberately logged
+    (not learned from) so an operations trace explains why a recompute ran.
+    """
+
+    try:
+        return recompute_adjustments(org_id, actor_id=actor_id)
+    except Exception as exc:  # noqa: BLE001 - learning must not break its source
+        logger.warning(
+            "Could not recompute ranking adjustments after %s for org %s: %s",
+            _clean(trigger) or "signal_change",
+            _clean(org_id) or "unknown",
+            exc,
+        )
+        return None
+
+
 def reset_adjustments(
     org_id: str,
     *,
@@ -687,6 +715,7 @@ __all__ = [
     "get_adjustment_history",
     "get_adjustments",
     "list_adjustment_state",
+    "recompute_after_signal_change",
     "recompute_adjustments",
     "reset_adjustments",
 ]

@@ -10,12 +10,54 @@ export type OutcomeProjectionVerdict =
   | 'not_projected'
   | 'too_early';
 
+export type OpportunityLifecycleState =
+  | 'open'
+  | 'actioned'
+  | 'monitoring'
+  | 'measured'
+  | 'dismissed'
+  | 'stalled';
+
+export interface OpportunityLifecycle {
+  orgId: string;
+  opportunityIdentity: string;
+  state: OpportunityLifecycleState | string;
+  actionDate?: string | null;
+  actionedBy?: string | null;
+  actionedAt?: string | null;
+  revision?: number;
+  firstSeenRunId?: string | null;
+  lastRunId?: string | null;
+  lastTransitionAt?: string | null;
+  updatedBy?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  measurable?: boolean;
+  legalNextStates?: string[];
+}
+
 export interface OutcomeConfounderSummary {
   count: number;
   materialCount: number;
   advisoryCount?: number;
   byType?: Record<string, number>;
   types?: string[];
+}
+
+export interface OutcomeConfounder {
+  schemaVersion?: string;
+  type?: string;
+  severity?: 'material' | 'advisory' | string;
+  label?: string;
+  detail?: {
+    implication?: string;
+    description?: string;
+    message?: string;
+    reason?: string;
+    [key: string]: unknown;
+  };
+  detectedAt?: string | null;
+  thresholdBasis?: string | null;
 }
 
 export interface OutcomeNumberEvidence {
@@ -90,7 +132,7 @@ export interface OutcomeMeasurement {
     [key: string]: unknown;
   };
   confounderSummary: OutcomeConfounderSummary;
-  confounders: Array<Record<string, unknown>>;
+  confounders: OutcomeConfounder[];
   numberRefs: OutcomeNumberRef[];
 }
 
@@ -98,7 +140,7 @@ export interface OpportunityOutcomeView {
   schemaVersion: string;
   orgId: string;
   opportunityIdentity: string;
-  lifecycle?: Record<string, unknown> | null;
+  lifecycle?: OpportunityLifecycle | null;
   measurementCount: number;
   caveatedMeasurementCount: number;
   latestMeasurement?: OutcomeMeasurement | null;

@@ -448,6 +448,7 @@ def _invalidate_action_dependent_movements(
     actor_id: str,
 ) -> None:
     """Mark outcome measurements stale when the action they followed is cleared."""
+    invalidated = 0
     try:
         from .opportunity_movement import invalidate_movements_for_action_reversal
 
@@ -471,6 +472,25 @@ def _invalidate_action_dependent_movements(
             opportunity_identity,
             exc,
         )
+
+    if invalidated:
+        # Removing the action also removes these outcomes from A3's signal set.
+        # Recompute at the same mutation boundary so stale outcome weight cannot
+        # continue to influence future ranking.
+        try:
+            from .learning_adjustment_state import recompute_after_signal_change
+
+            recompute_after_signal_change(
+                org_id,
+                actor_id=actor_id,
+                trigger="action_reversal",
+            )
+        except Exception as exc:  # noqa: BLE001 - lifecycle unwind already committed
+            logger.warning(
+                "Could not refresh learning after action reversal for %s: %s",
+                opportunity_identity,
+                exc,
+            )
 
 
 def _audit_and_emit(

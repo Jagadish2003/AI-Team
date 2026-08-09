@@ -21,6 +21,11 @@ import { LEADERSHIP_ACTIONS } from '../components/executive_report/KeyInsights';
 import { projectionBasisSummary } from '../components/projection/ProjectionBasis';
 import { recommendationHeadline } from '../components/projection/ProjectionRecommendation';
 import { showRelease2ArcAUi } from '../config/releaseFlags';
+import {
+  outcomeCaveatExplanation,
+  outcomeCaveatLabel,
+  outcomeCaveatSeverity,
+} from './outcomeCaveats';
 
 export interface ExecutiveReportPdfData {
   confidence: string;
@@ -450,6 +455,20 @@ export async function downloadExecutiveReportPdf(
         'normal',
         MUTED,
       );
+      (measurement.confounders ?? []).forEach((caveat) => {
+        const explanation = outcomeCaveatExplanation(caveat);
+        wrapped(
+          [
+            `Caveat (${outcomeCaveatSeverity(caveat)}): ${outcomeCaveatLabel(caveat)}`,
+            explanation ? `Why this matters: ${explanation}` : null,
+          ]
+            .filter(Boolean)
+            .join('. ') + '.',
+          8.5,
+          'normal',
+          MUTED,
+        );
+      });
     });
     y += 5;
   }

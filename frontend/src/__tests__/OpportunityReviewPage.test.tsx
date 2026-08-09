@@ -29,7 +29,7 @@
  *   npx vitest run src/__tests__/OpportunityReviewPage.test.tsx
  */
 import React from 'react';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { DataCacheProvider } from '../lib/dataCache';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
@@ -91,6 +91,10 @@ const mockPush = vi.hoisted(() => vi.fn());
 const mockFetchLearningSignals = vi.hoisted(() => vi.fn());
 const mockFetchOpportunityOutcome = vi.hoisted(() => vi.fn());
 const mockFetchOutcomePortfolio = vi.hoisted(() => vi.fn());
+const mockFetchOpportunityLifecycle = vi.hoisted(() => vi.fn());
+const mockRecordOpportunityAction = vi.hoisted(() => vi.fn());
+const mockDismissOpportunity = vi.hoisted(() => vi.fn());
+const mockReopenOpportunity = vi.hoisted(() => vi.fn());
 
 function learningSignals(active = true) {
   return {
@@ -176,6 +180,14 @@ vi.mock('../api/outcomeApi', () => ({
   fetchOpportunityOutcome: (opportunityIdentity: string) =>
     mockFetchOpportunityOutcome(opportunityIdentity),
   fetchOutcomePortfolio: (...args: unknown[]) => mockFetchOutcomePortfolio(...args),
+  fetchOpportunityLifecycle: (opportunityIdentity: string) =>
+    mockFetchOpportunityLifecycle(opportunityIdentity),
+  recordOpportunityAction: (opportunityIdentity: string, actionDate: string) =>
+    mockRecordOpportunityAction(opportunityIdentity, actionDate),
+  dismissOpportunity: (opportunityIdentity: string) =>
+    mockDismissOpportunity(opportunityIdentity),
+  reopenOpportunity: (opportunityIdentity: string) =>
+    mockReopenOpportunity(opportunityIdentity),
 }));
 
 vi.mock('../components/common/TopNav', () => ({
@@ -254,6 +266,38 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
       filters: {},
       aggregates: { numberRefs: [], actionedOpportunityCount: 0, measuredOpportunityCount: 0, measurementCount: 0, caveatedMeasurementCount: 0 },
       items: [],
+    });
+    mockFetchOpportunityLifecycle.mockResolvedValue({
+      orgId: 'org_test',
+      opportunityIdentity: 'opp_identity',
+      state: 'open',
+      actionDate: null,
+      legalNextStates: ['actioned', 'dismissed'],
+      measurable: false,
+    });
+    mockRecordOpportunityAction.mockResolvedValue({
+      orgId: 'org_test',
+      opportunityIdentity: 'opp_identity',
+      state: 'actioned',
+      actionDate: '2026-08-01',
+      legalNextStates: ['dismissed', 'monitoring', 'open', 'stalled'],
+      measurable: true,
+    });
+    mockDismissOpportunity.mockResolvedValue({
+      orgId: 'org_test',
+      opportunityIdentity: 'opp_identity',
+      state: 'dismissed',
+      actionDate: '2026-08-01',
+      legalNextStates: ['open'],
+      measurable: false,
+    });
+    mockReopenOpportunity.mockResolvedValue({
+      orgId: 'org_test',
+      opportunityIdentity: 'opp_identity',
+      state: 'open',
+      actionDate: null,
+      legalNextStates: ['actioned', 'dismissed'],
+      measurable: false,
     });
   });
 
@@ -462,6 +506,70 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     expect(mockFetchOpportunityOutcome).not.toHaveBeenCalled();
     expect(mockFetchOutcomePortfolio).not.toHaveBeenCalled();
     expect(screen.queryByText('Opportunity Outcome')).toBeNull();
+  });
+
+  it('A2 AC2: records an action with the required deployment date', async () => {
+    if (!showRelease2ArcAUi) return;
+    mockOpportunities = [{ ...OPP_1, opportunity_identity: 'opp_identity' }, OPP_2];
+
+    renderPage();
+
+    const dateInput = await screen.findByLabelText('Action/deployment date');
+    expect(dateInput).toBeRequired();
+    expect(screen.getByRole('button', { name: 'Record action/change' })).toBeDisabled();
+
+    fireEvent.change(dateInput, { target: { value: '2026-08-01' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Record action/change' }));
+
+    await waitFor(() => {
+      expect(mockRecordOpportunityAction).toHaveBeenCalledWith(
+        'opp_identity',
+        '2026-08-01',
+      );
+    });
+    expect(await screen.findByTestId('opportunity-lifecycle-state')).toHaveTextContent(
+      'Action recorded',
+    );
+    expect(screen.getByTestId('opportunity-action-date')).toHaveTextContent(/Aug.*2026/);
+  });
+
+  it('A2 lifecycle: displays action date and supports dismiss then reopen', async () => {
+    if (!showRelease2ArcAUi) return;
+    mockOpportunities = [{ ...OPP_1, opportunity_identity: 'opp_identity' }, OPP_2];
+    mockFetchOpportunityLifecycle.mockResolvedValueOnce({
+      orgId: 'org_test',
+      opportunityIdentity: 'opp_identity',
+      state: 'actioned',
+      actionDate: '2026-08-01',
+      legalNextStates: ['dismissed', 'monitoring', 'open', 'stalled'],
+      measurable: true,
+    });
+
+    renderPage();
+
+    expect(await screen.findByTestId('opportunity-lifecycle-state')).toHaveTextContent(
+      'Action recorded',
+    );
+    expect(screen.getByTestId('opportunity-action-date')).toHaveTextContent(/Aug.*2026/);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    const dismissDialog = screen.getByRole('dialog', { name: 'Dismiss opportunity' });
+    fireEvent.click(within(dismissDialog).getByRole('button', { name: 'Dismiss' }));
+
+    await waitFor(() => {
+      expect(mockDismissOpportunity).toHaveBeenCalledWith('opp_identity');
+    });
+    expect(await screen.findByTestId('opportunity-lifecycle-state')).toHaveTextContent(
+      'Dismissed',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reopen' }));
+    const reopenDialog = screen.getByRole('dialog', { name: 'Reopen opportunity' });
+    fireEvent.click(within(reopenDialog).getByRole('button', { name: 'Reopen' }));
+
+    await waitFor(() => {
+      expect(mockReopenOpportunity).toHaveBeenCalledWith('opp_identity');
+    });
+    expect(await screen.findByTestId('opportunity-lifecycle-state')).toHaveTextContent('Open');
   });
 
   it('AC6: Approve button calls setDecision with APPROVED', async () => {

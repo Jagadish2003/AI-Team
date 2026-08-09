@@ -61,6 +61,8 @@ export const cacheKeys = {
   outcomePortfolio: 'outcomes/portfolio',
   opportunityOutcome: (opportunityIdentity: string) =>
     `outcomes/opportunity/${opportunityIdentity}`,
+  opportunityLifecycle: (opportunityIdentity: string) =>
+    `outcomes/lifecycle/${opportunityIdentity}`,
   learningScope: 'learning',
   learningSignals: 'learning/signals',
 
