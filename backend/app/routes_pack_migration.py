@@ -205,7 +205,7 @@ def apply_pack_migration(
     # A no-op apply is not an audit event — only a real configuration change is
     # (the same rule as a no-op pack state transition).
     if record.changed:
-        _audit(PACK_MIGRATION_APPLIED, org_id, actor_id, record)
+        _audit_applied(org_id, actor_id, record)
         _record_telemetry("pack.migration_applied", record)
     return record.to_dict()
 
@@ -243,7 +243,7 @@ def revert_pack_migration(
     except PackMigrationConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
-    _audit(PACK_MIGRATION_REVERTED, org_id, actor_id, record, forced=body.force)
+    _audit_reverted(org_id, actor_id, record, forced=body.force)
     _record_telemetry("pack.migration_reverted", record, forced=body.force)
     return record.to_dict()
 
@@ -252,21 +252,19 @@ def _changed_fields(record: MigrationRecord) -> List[str]:
     return [change.field for change in record.changes]
 
 
-def _audit(
-    event_type: str,
+def _audit_fields(
     org_id: str,
     actor_id: str,
     record: MigrationRecord,
     *,
     forced: bool = False,
-) -> None:
-    """Place the transition in the org-wide audit stream (parent-story AC4).
+) -> Dict[str, Any]:
+    """The audit payload shared by both transitions (parent-story AC4).
 
     Field NAMES and counts only — the configuration values themselves live on the
     migration ledger, which is the domain record.
     """
-    log_event(
-        event_type,
+    return dict(
         org_id=org_id,
         user_id=actor_id,
         migration_id=record.id,
@@ -277,6 +275,30 @@ def _audit(
         unmapped_count=len(record.unmapped),
         reverts_migration_id=record.reverts_migration_id,
         forced=forced,
+    )
+
+
+# The two emissions are written out separately, with the event type as a LITERAL
+# registry constant at each call site, rather than shared behind one helper taking
+# `event_type`. The audit conformance sweep resolves each log_event call site's type
+# statically, and a type chosen by a parameter is exactly what it cannot verify — so
+# a single parameterised helper made both `pack_migration_applied` and
+# `pack_migration_reverted` look like registered-but-never-emitted types. Same
+# reasoning as the connector connect/disconnect pair in main.py.
+
+
+def _audit_applied(org_id: str, actor_id: str, record: MigrationRecord) -> None:
+    """Record an applied migration in the org-wide audit stream."""
+    log_event(PACK_MIGRATION_APPLIED, **_audit_fields(org_id, actor_id, record))
+
+
+def _audit_reverted(
+    org_id: str, actor_id: str, record: MigrationRecord, *, forced: bool = False
+) -> None:
+    """Record a reverted migration in the org-wide audit stream."""
+    log_event(
+        PACK_MIGRATION_REVERTED,
+        **_audit_fields(org_id, actor_id, record, forced=forced),
     )
 
 

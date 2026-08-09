@@ -721,7 +721,12 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
         response_model=ComputeResponse,
         dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
     )
-    async def compute_run(run_id: str, body: ComputeRequest, background_tasks: BackgroundTasks) -> ComputeResponse:
+    async def compute_run(
+        run_id: str,
+        body: ComputeRequest,
+        background_tasks: BackgroundTasks,
+        token: str = Depends(require_auth),
+    ) -> ComputeResponse:
         # Ensure run exists. db.run_get should raise 404; keep defensive for alternate impls.
         run = db.run_get(run_id)
         if run is None:
@@ -746,6 +751,40 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
                 db.run_kv_set("connector_health", run_id, connector_health)
         except Exception as _e:
             logger.warning("Connector health check failed (non-blocking): %s", _e)
+
+        # This is the THIRD run-start edge and the only one that recorded nothing.
+        # /stack-builder/launch audits RUN_STARTED and routes_sprint4_t2 emits it for
+        # its own path, but a run computed directly here — a direct API caller, or a
+        # recompute of an existing run record — left no trace of who started it or
+        # what it was pointed at. Emitted BEFORE the background task is queued, so a
+        # failure inside the run cannot lose the record of it being started; `source`
+        # distinguishes this edge from the Stack Builder one in the trail.
+        #
+        # This also makes the audit-conformance ratchet honest for this route. The
+        # sweep already saw it reach log_event, but only through the C4 deprecation
+        # announcement inside _gate_pack_activation — which fires only when a pack is
+        # actually being deprecated, so an ordinary compute wrote nothing. Dropping
+        # the KNOWN_AUDIT_GAPS entry without this would have claimed coverage the
+        # route did not have.
+        try:
+            from .middleware.audit import OUTCOME_SUCCESS, RUN_STARTED, log_event
+            from .rbac import _get_user_id_from_token
+
+            log_event(
+                RUN_STARTED,
+                run_id=run_id,
+                user_id=_get_user_id_from_token(token),
+                target=run_id,
+                pack_id=body.pack,
+                pack_ids=list(body.pack_ids or []),
+                system_count=len(body.systems or []),
+                systems=list(body.systems or []),
+                mode=body.mode,
+                source="compute",
+                outcome=OUTCOME_SUCCESS,
+            )
+        except Exception:  # noqa: BLE001 — audit must never fail the action (D4 T1).
+            logger.warning("Run-start audit failed (non-blocking) run=%s", run_id)
 
         # Mark status running and return immediately.
         _set_status(run_id, "running", counts={"opportunities": 0, "evidence": 0})

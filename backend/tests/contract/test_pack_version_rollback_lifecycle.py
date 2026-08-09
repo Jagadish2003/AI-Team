@@ -30,13 +30,20 @@ from app.pack_state import (
     set_pack_state_store,
 )
 from app.rbac import seed_owner
+from discovery.packs.pack_config import get_pack_version
 
 OWNER_TOKEN = os.getenv("DEV_JWT", "dev-token-change-me")
 ANALYST_TOKEN = "analyst-token"
 VIEWER_TOKEN = "viewer-token"
 
+# PRIOR must stay a literal: it names a real rollback target that has to exist as
+# discovery/packs/versions/cloud_ops_pack_config.v1.1.0.json.
 PRIOR = "1.1.0"
-CURRENT = "1.2.0"
+# CURRENT is READ from the registry, never restated. These tests assert that a pin
+# overrides the SHIPPED version and that restoring returns to it — neither claim is
+# about a particular number, so hardcoding one only makes a legitimate pack bump
+# (2.0-B1 T7 moved cloud_ops 1.2.0 → 1.2.1) look like a rollback regression.
+CURRENT = get_pack_version("cloud_ops")
 
 # The org requests are scoped to, or None to send NO X-Org-Id header — the default, so
 # every currently-passing test keeps its exact previous request shape. Only the
@@ -272,7 +279,11 @@ class TestRunsAfterRollbackUseThePriorVersion:
         )
         run = db.run_get(response.json()["runId"])
         assert run["packVersions"]["cloud_ops"] == PRIOR
-        assert run["packVersions"]["security_ops"] == CURRENT
+        # The unpinned pack ships ITS OWN current version — read from the registry,
+        # not from CURRENT, which is cloud_ops's. The two packs happened to share a
+        # version number, so this assertion passed for the wrong reason until they
+        # diverged.
+        assert run["packVersions"]["security_ops"] == get_pack_version("security_ops")
         assert run["pinnedPackVersions"] == {"cloud_ops": PRIOR}
 
     def test_a_restored_pack_returns_to_the_current_version(self, client):

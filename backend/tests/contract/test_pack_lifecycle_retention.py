@@ -30,12 +30,20 @@ from app.pack_state import (
     STATE_DISABLED,
     set_pack_state_store,
 )
-from discovery.packs.pack_config import PACK_REGISTRY
+from discovery.packs.pack_config import PACK_REGISTRY, get_pack_version
 
 OWNER_TOKEN = os.getenv("DEV_JWT", "dev-token-change-me")
 PACK = "cloud_ops"
+# PRIOR must stay a literal: it names a real rollback target that has to exist as
+# discovery/packs/versions/cloud_ops_pack_config.v1.1.0.json.
 PRIOR = "1.1.0"
-CURRENT = "1.2.0"
+# CURRENT is READ from the registry, never restated. What these tests assert is
+# "the version this run executed is still the version the run record reports" —
+# not any particular number. Pinning the literal made a legitimate pack bump
+# (2.0-B1 T7 moved cloud_ops 1.2.0 → 1.2.1) fail retention tests that have
+# nothing to do with versioning, which trains people to edit the number rather
+# than read the failure.
+CURRENT = get_pack_version(PACK)
 
 
 @pytest.fixture(autouse=True)
