@@ -590,10 +590,10 @@ def _advance_lifecycle_after_movement(record: Mapping[str, Any]) -> None:
     try:
         from .opportunity_lifecycle import get_lifecycle, system_transition
         from .opportunity_lifecycle_states import (
-            STATE_ACTIONED,
             STATE_MEASURED,
             STATE_MONITORING,
             STATE_STALLED,
+            is_measurable,
         )
 
         org_id = str(record.get("orgId") or "").strip()
@@ -601,7 +601,7 @@ def _advance_lifecycle_after_movement(record: Mapping[str, Any]) -> None:
         run_id = str(record.get("currentRunId") or "").strip() or None
         current = get_lifecycle(org_id, identity) if org_id and identity else None
         state = str((current or {}).get("state") or "")
-        if state not in {STATE_ACTIONED, STATE_MONITORING, STATE_MEASURED, STATE_STALLED}:
+        if not is_measurable(state):
             return
 
         if state != STATE_MONITORING:
@@ -651,19 +651,15 @@ def _advance_lifecycle_after_terminal_skip(
     try:
         from .opportunity_lifecycle import get_lifecycle, system_transition
         from .opportunity_lifecycle_states import (
-            STATE_ACTIONED,
             STATE_MEASURED,
             STATE_MONITORING,
             STATE_STALLED,
+            is_measurable,
         )
 
         current = get_lifecycle(org_id, opportunity_identity)
         state = str((current or {}).get("state") or "")
-        if state == STATE_STALLED or state not in {
-            STATE_ACTIONED,
-            STATE_MONITORING,
-            STATE_MEASURED,
-        }:
+        if state == STATE_STALLED or not is_measurable(state):
             return
         if state == STATE_MEASURED:
             current = system_transition(
@@ -674,7 +670,11 @@ def _advance_lifecycle_after_terminal_skip(
                 actor_id="outcome_monitor",
             )
             state = str(current.get("state") or "")
-        if state in {STATE_ACTIONED, STATE_MONITORING}:
+        # After excluding stalled and normalising measured -> monitoring, the
+        # measurable states left here are precisely the recorded-action states
+        # that may honestly become stalled.  Keep the human-only action state
+        # encapsulated in the lifecycle module rather than naming it here.
+        if is_measurable(state):
             system_transition(
                 org_id,
                 opportunity_identity,

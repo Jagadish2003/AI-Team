@@ -1,5 +1,5 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0048.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0049.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
 -- 03_lazy_runtime_tables.sql. Creates the agentiq role, all tables (incl.
@@ -14,7 +14,7 @@
 -- vendor-side license_registry + append-only issuance_audit),
 -- indexes/constraints/rules, seeds the connector catalog, grants the app login
 -- role(s) privileges on the schema, REVOKES DELETE/TRUNCATE on the run-history
--- tables (2.0-C1 AC4), and stamps alembic_version to head 0048.
+-- tables (2.0-C1 AC4 plus A1/A2/A3 history), and stamps alembic_version to head 0049.
 --
 -- BEFORE RUNNING ON PRODUCTION — two values in this file are dev defaults and
 -- MUST be set for the target environment. Both are marked "TODO(deploy)" below:
@@ -1991,9 +1991,10 @@ INSERT INTO "public"."connectors" ("id", "payload") VALUES ('zendesk', '{"id": "
 -- 2.0-C1/C2: this file now carries the 0031 (pack_states / pack_state_history),
 -- 0032 (version-pin columns), 0033 (REVOKE DELETE/TRUNCATE on the history tables)
 -- 0034 (pack_certification_reviews) and 0035 (pack_certification_policies)
--- objects, so it must stamp the post-merge head 0048. A stale stamp would leave a
+-- objects, and 0049's A1/A2/A3 repair/privilege contract, so it must stamp head
+-- 0049. A stale stamp would leave a
 -- freshly provisioned database claiming a head it is ahead of, and `alembic upgrade
--- head` would then re-run the C-arc migrations (now 0042-0048). Those are all
+-- head` would then re-run the later migrations (now 0042-0049). Those are all
 -- idempotent, so it would not break, but the recorded head would be wrong. Bump
 -- this whenever you add DDL here.
 CREATE INDEX "idx_opp_lifecycle_org_state" ON "public"."opportunity_lifecycle" USING "btree" ("org_id", "state");
@@ -2063,7 +2064,7 @@ CREATE INDEX "idx_ranking_adjustment_history_group" ON "public"."ranking_adjustm
 --
 REVOKE UPDATE, DELETE, TRUNCATE ON "public"."audit_log" FROM PUBLIC;
 
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0048') ON CONFLICT DO NOTHING;
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0049') ON CONFLICT DO NOTHING;
 
 
 --
@@ -2147,8 +2148,15 @@ DECLARE
     protected_tables text[] := ARRAY[
         'kv',                   -- run-scoped artifacts: findings, evidence, roadmap, report
         'opportunity_instances',-- per-instance pack id + pack version stamps (R16-B1 §4)
+        'opportunity_baselines',-- immutable A2 finding-time measurement basis
+        'opportunity_feedback', -- append-only A3 analyst decision history
+        'opportunity_lifecycle',-- current A2 action state/date (reset by transition, not delete)
+        'opportunity_lifecycle_history', -- append-only A2 transition history
+        'opportunity_movements',-- stored A2 comparisons, caveats, and projection validation
         'pack_certification_reviews', -- append-only certification review trail (2.0-C2 T2)
         'pack_state_history',   -- append-only pack lifecycle trail (2.0-C1 T2/T3)
+        'ranking_adjustment_history', -- append-only A3 learning history
+        'ranking_adjustments', -- current A3 state (reset is an audited update)
         'run_events',           -- run event log (soft-deleted, never removed)
         'runs'                  -- run records
     ];
@@ -2165,6 +2173,49 @@ BEGIN
                     );
                 END IF;
             END LOOP;
+        END IF;
+    END LOOP;
+END
+$$;
+
+
+--
+-- A1/A2/A3 closed-loop immutability — alembic 0049
+--
+-- The retention block above prevents deletion of every closed-loop record.  The
+-- four tables below are stricter: they are append-only (or write-once for the
+-- baseline), so the application must not UPDATE them either.  audit_log is
+-- re-asserted here because the broad GRANT ALL block above would otherwise undo
+-- migration 0038's A3 reset/recompute audit guarantee on a pure-SQL install.
+--
+DO
+$$
+DECLARE
+    r text;
+    t text;
+    app_roles text[] := ARRAY['agentiq', 'aiqdevusr', current_user];
+    append_only_tables text[] := ARRAY[
+        'opportunity_baselines',
+        'opportunity_feedback',
+        'opportunity_lifecycle_history',
+        'ranking_adjustment_history'
+    ];
+BEGIN
+    FOREACH t IN ARRAY append_only_tables LOOP
+        EXECUTE format('REVOKE UPDATE ON TABLE public.%I FROM PUBLIC', t);
+    END LOOP;
+
+    FOR r IN SELECT DISTINCT unnest(app_roles) LOOP
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+            FOREACH t IN ARRAY append_only_tables LOOP
+                EXECUTE format('REVOKE UPDATE ON TABLE public.%I FROM %I', t, r);
+                EXECUTE format('GRANT SELECT, INSERT ON TABLE public.%I TO %I', t, r);
+            END LOOP;
+            REVOKE UPDATE, DELETE, TRUNCATE ON TABLE public.audit_log FROM PUBLIC;
+            EXECUTE format(
+                'REVOKE UPDATE, DELETE, TRUNCATE ON TABLE public.audit_log FROM %I', r
+            );
+            EXECUTE format('GRANT SELECT, INSERT ON TABLE public.audit_log TO %I', r);
         END IF;
     END LOOP;
 END

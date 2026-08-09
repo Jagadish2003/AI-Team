@@ -4,9 +4,11 @@ This is the MAINTAINED provisioning path (Alembic is the single source of truth
 for the native tables). It is idempotent and safe to re-run.
 
 The AgentIQ schema is assembled from three sources; this script runs all three
-so the target database is complete after one invocation:
+in dependency order so the target database is complete after one invocation:
 
-  1. Alembic migrations (0001..head) — the native tables:
+  1. Core ``{id,payload}`` tables are materialised first (without seed rows), so
+     migrations that extend ``runs`` and protect ``runs``/``kv`` can see them.
+  2. Alembic migrations (0001..head) — the native tables:
         telemetry_events, signal_snapshots, entities, users, login_attempts,
         orgs, entity_relationships, causal_hypotheses, audit_log,
         workspace_members, org_licenses, and (R-1.9.1-L3, migration 0026) the
@@ -14,14 +16,16 @@ so the target database is complete after one invocation:
         added by later migrations  (+ the alembic_version stamp).
         This path runs `alembic upgrade head`, so it stays in lock-step with the
         pure-SQL provision.sql bundle (Path B), which is a snapshot of this head.
-  2. seed_loader.py --no-reset — the {id, payload} tables and run scaffolding:
+  3. seed_loader.py --no-reset — optional core reference seed rows:
         connectors, uploads, runs, evidence, mappings, permissions,
         opportunities, audit_events, executive_reports, run_events, kv
         (and, with --seed, the core reference rows: connectors / mappings /
         permissions / uploads).
-  3. Tables with no Alembic migration and not in seed_loader, created directly
+  4. Tables with no Alembic migration and not in seed_loader, created directly
      here. The application no longer creates tables at runtime, so provisioning
      is the only place these are created: credentials, nonces, oauth_nonces.
+  5. History/immutability privileges are re-applied after every table source has
+     run, then the complete A1/A2/A3 contract is verified read-only.
 
 Prerequisite: the target database already exists and DATABASE_URL points at it.
 (The agentiq role is created by the pure-SQL path's provision.sql; this Alembic
@@ -62,7 +66,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
 
 _THIS_DIR = Path(__file__).resolve().parent
 _BACKEND_DIR = _THIS_DIR.parents[1]  # provision -> database -> backend
@@ -81,18 +84,29 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 def _redacted(url: str) -> str:
     """Hide the password in a connection string for logging."""
-    if "@" in url and "://" in url:
-        scheme, rest = url.split("://", 1)
-        creds, host = rest.split("@", 1)
-        user = creds.split(":", 1)[0]
-        return f"{scheme}://{user}:***@{host}"
-    return url
+    try:
+        from psycopg2.extensions import parse_dsn
+
+        parts = parse_dsn(url)
+        user = parts.get("user") or "(default)"
+        host = parts.get("host") or "(local socket)"
+        port = f":{parts['port']}" if parts.get("port") else ""
+        database = parts.get("dbname") or "(default)"
+        return f"postgresql://{user}:***@{host}{port}/{database}"
+    except Exception:
+        # Never return the original input on a parse failure: it can contain the
+        # very password this helper exists to protect.
+        return "<redacted database URL>"
 
 
 def _db_name(url: str) -> str:
     """Extract the database name from a connection URL (for the confirm prompt)."""
-    tail = url.rsplit("/", 1)[-1]
-    return tail.split("?", 1)[0]
+    try:
+        from psycopg2.extensions import parse_dsn
+
+        return str(parse_dsn(url).get("dbname") or "")
+    except Exception:
+        return ""
 
 
 #: Hosts treated as a local database — loopback, or a unix socket (no host).
@@ -102,7 +116,9 @@ _LOCAL_DB_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", ""})
 def _db_host(url: str) -> str:
     """Return the lowercased host of a connection URL ('' for a unix socket)."""
     try:
-        return (urlparse(url).hostname or "").lower()
+        from psycopg2.extensions import parse_dsn
+
+        return str(parse_dsn(url).get("host") or "").lower()
     except Exception:
         return ""
 
@@ -114,7 +130,15 @@ def _is_local_db(url: str) -> bool:
     :data:`_LOCAL_DB_HOSTS`) is treated as potentially production and refused for the
     unattended destructive path.
     """
-    return _db_host(url) in _LOCAL_DB_HOSTS
+    try:
+        from psycopg2.extensions import parse_dsn
+
+        host = str(parse_dsn(url).get("host") or "").lower()
+    except Exception:
+        # A DSN we cannot prove is local is treated as remote/potentially
+        # production.  This is the destructive-reset guard, so fail closed.
+        return False
+    return host in _LOCAL_DB_HOSTS
 
 
 def confirm_reset() -> None:
@@ -167,7 +191,7 @@ def reset_schema() -> None:
     """
     import psycopg2
 
-    print("[0/3] reset: DROP SCHEMA public CASCADE; CREATE SCHEMA public ...")
+    print("[0/5] reset: DROP SCHEMA public CASCADE; CREATE SCHEMA public ...")
     con = psycopg2.connect(DATABASE_URL)
     try:
         con.autocommit = True
@@ -187,7 +211,7 @@ def run_migrations() -> None:
     from alembic import command as alembic_command
     from alembic.config import Config as AlembicConfig
 
-    print("[1/3] migrations ...")
+    print("[2/5] migrations ...")
     cfg = AlembicConfig(str(_BACKEND_DIR / "alembic.ini"))
     cfg.set_main_option("script_location", str(_BACKEND_DIR / "migrations"))
     # Skip env.py's fileConfig() so Alembic does not emit its INFO log lines
@@ -197,32 +221,39 @@ def run_migrations() -> None:
     alembic_command.upgrade(cfg, "head")
 
 
-def run_seed_loader(seed: bool) -> None:
-    """Create the {id, payload} core tables (and seed reference rows if asked).
+def ensure_core_tables() -> None:
+    """Create the non-Alembic core tables before versioned migrations run.
 
-    With seed=True we run seed_loader.py --no-reset, which creates the core
-    {id, payload} tables AND upserts the reference rows (connectors, mappings,
-    permissions, uploads). --no-reset is critical: it stops seed_loader dropping
-    the Alembic-managed tables created in step 1 (its default behaviour is a full
-    public-schema reset).
-
-    With seed=False we import seed_loader and call ensure_db() directly, which
-    creates the same tables but inserts no rows.
+    ``runs`` and ``kv`` are owned by seed_loader, but migrations 0011/0044 extend
+    or protect them.  Creating their base shape first prevents a clean install
+    from silently skipping those migrations because the tables did not exist yet.
     """
-    if not seed:
-        print("[2/3] core tables (schema only) ...")
-        import psycopg2
 
+    import io
+    import psycopg2
+    from contextlib import redirect_stdout
+
+    print("[1/5] core tables (schema only) ...")
+    # seed_loader historically prints DATABASE_URL at import. Suppress that
+    # legacy output so provisioning never exposes a password in deployment logs.
+    with redirect_stdout(io.StringIO()):
         from database import seed_loader
 
-        con = psycopg2.connect(DATABASE_URL)
-        try:
-            seed_loader.ensure_db(con)
-        finally:
-            con.close()
+    con = psycopg2.connect(DATABASE_URL)
+    try:
+        seed_loader.ensure_db(con)
+    finally:
+        con.close()
+
+
+def seed_core_rows(seed: bool) -> None:
+    """Optionally upsert the core reference rows after migrations complete."""
+
+    if not seed:
+        print("[3/5] core reference seed skipped (--no-seed) ...")
         return
 
-    print("[2/3] core tables + seed ...")
+    print("[3/5] core reference seed ...")
     # seed_loader prints its own progress (Seed Path / counts); capture it and
     # surface it only on failure to keep the provisioning output concise.
     result = subprocess.run(
@@ -247,7 +278,7 @@ def ensure_lazy_tables() -> None:
     statement is CREATE TABLE/INDEX IF NOT EXISTS (plus an idempotent ADD COLUMN
     IF NOT EXISTS), so this is safe to re-run.
     """
-    print("[3/3] lazy tables (credentials, nonces, oauth_nonces) ...")
+    print("[4/5] lazy tables (credentials, nonces, oauth_nonces) ...")
     import psycopg2
 
     from database.models.credentials import (
@@ -290,9 +321,40 @@ def ensure_lazy_tables() -> None:
         con.close()
 
 
-def verify(verbose: bool) -> None:
-    """Report the resulting table count + Alembic head (full list with --verbose)."""
+def apply_history_privileges() -> None:
+    """Apply privilege guards after every table source has materialised.
+
+    On a clean install ``kv``/``runs`` come from seed_loader rather than Alembic.
+    Re-applying the idempotent guards here closes the ordering gap where migration
+    0044 ran before those tables existed.
+    """
+
     import psycopg2
+
+    from database.models.closed_loop_immutability import (
+        ALL_CLOSED_LOOP_IMMUTABILITY_DDL,
+    )
+    from database.models.history_retention import ALL_HISTORY_RETENTION_DDL
+
+    print("[5/5] closed-loop history privileges ...")
+    con = psycopg2.connect(DATABASE_URL)
+    try:
+        with con.cursor() as cur:
+            for statement in (
+                *ALL_HISTORY_RETENTION_DDL,
+                *ALL_CLOSED_LOOP_IMMUTABILITY_DDL,
+            ):
+                cur.execute(statement)
+        con.commit()
+    finally:
+        con.close()
+
+
+def verify(verbose: bool) -> None:
+    """Report inventory/head and fail if the A1/A2/A3 loop is incomplete."""
+    import psycopg2
+
+    from database.provision.a1_a3_readiness import inspect_connection
 
     con = psycopg2.connect(DATABASE_URL)
     try:
@@ -306,6 +368,14 @@ def verify(verbose: bool) -> None:
         version = cur.fetchone()
         head = version[0] if version else "(none)"
         print(f"Done: {len(tables)} tables, alembic head {head}.")
+        readiness = inspect_connection(con)
+        if not readiness.ready:
+            detail = "\n".join(f"  - {issue}" for issue in readiness.issues)
+            raise SystemExit(
+                "Provisioning completed, but the A1/A2/A3 database contract is "
+                f"not ready:\n{detail}"
+            )
+        print("A1/A2/A3 database readiness: READY.")
         if verbose:
             print("  " + ", ".join(tables))
     finally:
@@ -324,9 +394,11 @@ def main() -> None:
     if reset:
         confirm_reset()
         reset_schema()
+    ensure_core_tables()
     run_migrations()
-    run_seed_loader(seed)
+    seed_core_rows(seed)
     ensure_lazy_tables()
+    apply_history_privileges()
     verify(verbose)
 
 

@@ -58,32 +58,56 @@ FILES = {
 def ensure_db(conn) -> None:
     cur = conn.cursor()
 
+    def table_exists(name: str) -> bool:
+        cur.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_name = %s",
+            (name,),
+        )
+        return cur.fetchone() is not None
+
+    def column_exists(table: str, column: str) -> bool:
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = %s AND column_name = %s",
+            (table, column),
+        )
+        return cur.fetchone() is not None
+
     for t in TABLES:
-        cur.execute(f"""
-            CREATE TABLE IF NOT EXISTS {t} (
-                id TEXT PRIMARY KEY,
-                payload TEXT NOT NULL
-            )
-        """)
+        # A production app role commonly has DML but does not own pre-provisioned
+        # tables. Even ``ALTER ... IF NOT EXISTS`` still requires ownership, so
+        # probe read-only first and issue DDL only for a genuinely missing object.
+        if not table_exists(t):
+            cur.execute(f"""
+                CREATE TABLE {t} (
+                    id TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL
+                )
+            """)
 
     # runs needs the seq insertion-order column (see app/db.py init_tables).
-    cur.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS seq BIGSERIAL")
+    if not column_exists("runs", "seq"):
+        cur.execute("ALTER TABLE runs ADD COLUMN seq BIGSERIAL")
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS run_events (
-            run_id TEXT NOT NULL,
-            seq INTEGER NOT NULL,
-            payload TEXT NOT NULL,
-            is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
-            PRIMARY KEY (run_id, seq)
-        )
-    """)
+    if not table_exists("run_events"):
+        cur.execute("""
+            CREATE TABLE run_events (
+                run_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                payload TEXT NOT NULL,
+                is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+                PRIMARY KEY (run_id, seq)
+            )
+        """)
     # Soft-delete column for DBs created before it existed (idempotent).
-    cur.execute(
-        "ALTER TABLE run_events ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE"
-    )
+    elif not column_exists("run_events", "is_deleted"):
+        cur.execute(
+            "ALTER TABLE run_events ADD COLUMN is_deleted BOOLEAN NOT NULL DEFAULT FALSE"
+        )
 
-    cur.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+    if not table_exists("kv"):
+        cur.execute("CREATE TABLE kv (key TEXT PRIMARY KEY, payload TEXT NOT NULL)")
     conn.commit()
 
 

@@ -76,6 +76,32 @@ PROTECTED_TABLE_REASONS: Dict[str, str] = {
         "per-instance opportunity records carrying the pack id and pack version "
         "stamp that R16-B1 §4 provenance depends on"
     ),
+    "opportunity_lifecycle": (
+        "the current customer-recorded A2 action state and deployment date; "
+        "resetting it by deletion would detach later measurements from the action"
+    ),
+    "opportunity_lifecycle_history": (
+        "the append-only A2 record of every action, dismissal, reopen, monitoring, "
+        "measurement, and stalled transition"
+    ),
+    "opportunity_baselines": (
+        "the immutable A2 measurement basis frozen when an opportunity is first "
+        "found; deleting it makes the outcome impossible to reproduce"
+    ),
+    "opportunity_movements": (
+        "the stored A2 before/after comparisons, their source run ids, labelled "
+        "caveats, and A1 projection-validation results"
+    ),
+    "opportunity_feedback": (
+        "the append-only A3 analyst decision record that explains learned ordering"
+    ),
+    "ranking_adjustments": (
+        "the current bounded A3 ranking state; reset is an audited update to "
+        "neutral, never deletion"
+    ),
+    "ranking_adjustment_history": (
+        "the append-only A3 history behind Owner inspection and reset audit"
+    ),
     "pack_state_history": (
         "the append-only pack lifecycle audit trail — disable/enable and "
         "rollback/restore transitions (2.0-C1 T2/T3)"
