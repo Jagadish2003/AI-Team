@@ -51,3 +51,74 @@ export interface LearningSignalSetResponse {
   };
   activation: LearningActivationState;
 }
+
+export interface LearningAdjustmentCaps {
+  maxScoreFraction: number;
+  maxRankMove: number;
+  pointsPerSignalUnit: number;
+}
+
+export interface LearningAdjustmentGroup {
+  detectorId: string | null;
+  packId: string | null;
+  signalConcept: string | null;
+  netWeight: number;
+  outcomeWeight: number;
+  decisionWeight: number;
+  hasOutcomeEvidence: boolean;
+  signalCount: number;
+  learningActive: boolean;
+  contributingRefs: unknown[];
+  configVersion: string | null;
+  revision: number;
+  computedAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface LearningAdjustmentStateResponse {
+  orgId: string;
+  enabled: boolean;
+  caps: LearningAdjustmentCaps;
+  configVersion: string;
+  learningState: LearningActivationState;
+  groups: LearningAdjustmentGroup[];
+}
+
+export type LearningAdjustmentChangeKind =
+  | 'activated'
+  | 'recomputed'
+  | 'deactivated'
+  | 'reset';
+
+export interface LearningAdjustmentHistoryEntry {
+  schemaVersion: string;
+  historyId: string;
+  orgId: string;
+  detectorId: string | null;
+  packId: string | null;
+  changeKind: LearningAdjustmentChangeKind;
+  previousNetWeight: number | null;
+  netWeight: number;
+  signalCount: number;
+  learningActive: boolean;
+  actorId: string;
+  configVersion: string | null;
+  revision: number;
+  recordedAt: string;
+  resetReason?: string | null;
+  resetMarker?: boolean;
+}
+
+export interface LearningAdjustmentResetResponse {
+  schemaVersion: string;
+  orgId: string;
+  changeKind: 'reset';
+  groupsReset: number;
+  opportunitiesAffected: number;
+  previousState: LearningAdjustmentGroup[];
+  currentState: LearningAdjustmentGroup[];
+  configVersion: string;
+  resetAt: string;
+  actorId: string;
+  reason?: string;
+}

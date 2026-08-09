@@ -65,6 +65,8 @@ export const cacheKeys = {
     `outcomes/lifecycle/${opportunityIdentity}`,
   learningScope: 'learning',
   learningSignals: 'learning/signals',
+  learningAdjustmentState: 'learning/adjustment/state',
+  learningAdjustmentHistory: 'learning/adjustment/history',
 
   // ── Run Health dashboard ─────────────────────────────────────────────────
   /** Prefix covering every run-health panel — invalidate to refresh them all. */
