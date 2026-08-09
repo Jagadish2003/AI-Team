@@ -71,7 +71,9 @@ export function expiredFromStatuses(
  */
 export async function findExpiredConnectors(
   connectorIds: string[],
-  fetchStatus: (id: string) => Promise<{ status: TokenStatus }> = fetchTokenStatus,
+  fetchStatus: (id: string) => Promise<{ status: TokenStatus }> = (
+    id: string,
+  ) => fetchTokenStatus(id, { ensureValid: true }),
 ): Promise<string[]> {
   if (connectorIds.length === 0) return [];
   const statuses = await Promise.all(

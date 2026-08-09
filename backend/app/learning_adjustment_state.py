@@ -5,9 +5,11 @@ here, not an expression evaluated at read time. See
 ``database/models/ranking_adjustments.py`` for why that distinction is what makes
 T4's audit and reset answerable.
 
-**Recomputation is explicit.** Nothing here runs on the serving path: serving
-READS the stored value. A ranking that shifted because someone opened a page
-would be exactly the invisible drift A3 exists to prevent.
+**Recomputation happens at explicit signal-write boundaries.** Nothing here runs
+on the serving path: serving READS the stored value. Analyst decisions and newly
+stored outcome batches request a refresh after their own write commits. A ranking
+that shifted merely because someone opened a page would still be exactly the
+invisible drift A3 exists to prevent.
 
 **Cold start is stored, not inferred.** When T1's signal set is inactive the
 recomputation still writes rows, with ``learning_active = FALSE`` and a zero
@@ -244,7 +246,7 @@ def get_adjustment_history(
         with closing(db.connect()) as con:
             with con.cursor() as cur:
                 cur.execute(
-                    "SELECT record FROM ranking_adjustment_history"
+                    "SELECT record, reset_reason FROM ranking_adjustment_history"
                     " WHERE org_id = %s ORDER BY recorded_at DESC, history_id DESC"
                     " LIMIT %s",
                     (org, max(1, min(int(limit), 1000))),
@@ -257,13 +259,18 @@ def get_adjustment_history(
     for row in rows:
         raw = row[0]
         if isinstance(raw, Mapping):
-            out.append(dict(raw))
+            parsed_record = dict(raw)
+            if row[1] and not parsed_record.get("resetReason"):
+                parsed_record["resetReason"] = row[1]
+            out.append(parsed_record)
             continue
         try:
             parsed = json.loads(raw) if raw else None
         except (TypeError, ValueError):
             continue
         if isinstance(parsed, dict):
+            if row[1] and not parsed.get("resetReason"):
+                parsed["resetReason"] = row[1]
             out.append(parsed)
     return out
 
@@ -474,11 +481,37 @@ def recompute_adjustments(
     }
 
 
+def recompute_after_signal_change(
+    org_id: str,
+    *,
+    actor_id: str = ACTOR_SYSTEM,
+    trigger: str,
+) -> Optional[Dict[str, Any]]:
+    """Refresh stored adjustments after a committed decision/outcome mutation.
+
+    Learning is advisory and must never make the mutation that produced its
+    signal fail. Callers therefore use this non-blocking boundary helper instead
+    of duplicating broad exception handling. The trigger is deliberately logged
+    (not learned from) so an operations trace explains why a recompute ran.
+    """
+
+    try:
+        return recompute_adjustments(org_id, actor_id=actor_id)
+    except Exception as exc:  # noqa: BLE001 - learning must not break its source
+        logger.warning(
+            "Could not recompute ranking adjustments after %s for org %s: %s",
+            _clean(trigger) or "signal_change",
+            _clean(org_id) or "unknown",
+            exc,
+        )
+        return None
+
+
 def reset_adjustments(
     org_id: str,
     *,
     actor_id: str,
-    reason: Optional[str] = None,
+    reason: str,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """Neutralise this org's current adjustment state and append reset history.
@@ -500,7 +533,9 @@ def reset_adjustments(
     previous = _safe_state(org)
     groups_reset = len(previous)
     opportunities_affected = _affected_opportunity_count(previous)
-    reset_reason = _clean(reason)[:500] or None
+    reset_reason = _clean(reason)[:500]
+    if not reset_reason:
+        raise ValueError("a reset reason is required for the audit history")
 
     with closing(db.connect()) as con:
         with con.cursor() as cur:
@@ -552,6 +587,7 @@ def reset_adjustments(
                             "resetReason": reset_reason,
                             "previousState": dict(row),
                         },
+                        reset_reason=reset_reason,
                     )
             else:
                 _append_history(
@@ -573,6 +609,7 @@ def reset_adjustments(
                         "resetMarker": True,
                         "previousState": [],
                     },
+                    reset_reason=reset_reason,
                 )
         con.commit()
 
@@ -589,8 +626,7 @@ def reset_adjustments(
         "resetAt": when.isoformat(),
         "actorId": actor,
     }
-    if reset_reason:
-        payload["reason"] = reset_reason
+    payload["reason"] = reset_reason
 
     emit_ranking_adjustment_changed(
         org_id=org,
@@ -631,6 +667,7 @@ def _append_history(
     revision: int,
     when: datetime,
     extra: Optional[Mapping[str, Any]] = None,
+    reset_reason: Optional[str] = None,
 ) -> None:
     history_id = f"radj_{uuid.uuid4().hex[:20]}"
     record = {
@@ -655,8 +692,8 @@ def _append_history(
         "INSERT INTO ranking_adjustment_history ("
         "  history_id, org_id, detector_id, pack_id, change_kind,"
         "  previous_net_weight, net_weight, signal_count, learning_active,"
-        "  actor_id, config_version, revision, record, recorded_at"
-        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        "  actor_id, config_version, revision, reset_reason, record, recorded_at"
+        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             history_id,
             org_id,
@@ -670,6 +707,7 @@ def _append_history(
             actor_id,
             config_version,
             revision,
+            _clean(reset_reason) or None,
             json.dumps(record),
             when,
         ),
@@ -687,6 +725,7 @@ __all__ = [
     "get_adjustment_history",
     "get_adjustments",
     "list_adjustment_state",
+    "recompute_after_signal_change",
     "recompute_adjustments",
     "reset_adjustments",
 ]

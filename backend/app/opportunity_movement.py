@@ -38,6 +38,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from . import db
 from .opportunity_movement_record import (
     MOVEMENT_SCHEMA_VERSION,
+    VERDICT_COMPARABLE,
+    VERDICT_NOT_COMPARABLE,
     build_movement_record,
 )
 from .outcome_confounders import detect_confounders, summarise_confounders
@@ -571,7 +573,123 @@ def measure_movement(
 
     if persist:
         _store_movement(record)
+        _advance_lifecycle_after_movement(record)
     return record
+
+
+def _advance_lifecycle_after_movement(record: Mapping[str, Any]) -> None:
+    """Advance lifecycle presentation state after a movement row commits.
+
+    The lifecycle is derived from the durable measurement, never a gate that can
+    erase it. Every first/subsequent measurement passes through ``monitoring``;
+    a comparable record reaches ``measured``, a record that is explicitly not
+    comparable reaches ``stalled``, and a weak comparison stays in monitoring
+    while later runs accumulate.
+    """
+
+    try:
+        from .opportunity_lifecycle import get_lifecycle, system_transition
+        from .opportunity_lifecycle_states import (
+            STATE_MEASURED,
+            STATE_MONITORING,
+            STATE_STALLED,
+            is_measurable,
+        )
+
+        org_id = str(record.get("orgId") or "").strip()
+        identity = str(record.get("opportunityIdentity") or "").strip()
+        run_id = str(record.get("currentRunId") or "").strip() or None
+        current = get_lifecycle(org_id, identity) if org_id and identity else None
+        state = str((current or {}).get("state") or "")
+        if not is_measurable(state):
+            return
+
+        if state != STATE_MONITORING:
+            current = system_transition(
+                org_id,
+                identity,
+                STATE_MONITORING,
+                run_id=run_id,
+                actor_id="outcome_monitor",
+            )
+            state = str(current.get("state") or "")
+
+        verdict = str((record.get("comparability") or {}).get("verdict") or "")
+        target = (
+            STATE_MEASURED
+            if verdict == VERDICT_COMPARABLE
+            else STATE_STALLED
+            if verdict == VERDICT_NOT_COMPARABLE
+            else None
+        )
+        if target and state != target:
+            system_transition(
+                org_id,
+                identity,
+                target,
+                run_id=run_id,
+                actor_id="outcome_monitor",
+            )
+    except Exception as exc:  # noqa: BLE001 - the stored measurement remains valid
+        logger.warning(
+            "Could not advance lifecycle after movement for %s: %s",
+            record.get("opportunityIdentity"),
+            exc,
+        )
+
+
+def _advance_lifecycle_after_terminal_skip(
+    org_id: str,
+    opportunity_identity: str,
+    run_id: str,
+    reason: str,
+) -> None:
+    """Move an actioned lifecycle to stalled when this run cannot measure it."""
+
+    if reason not in {SKIP_NO_ACTION_DATE, SKIP_NO_BASELINE, SKIP_NO_CURRENT_SIGNALS}:
+        return
+    try:
+        from .opportunity_lifecycle import get_lifecycle, system_transition
+        from .opportunity_lifecycle_states import (
+            STATE_MEASURED,
+            STATE_MONITORING,
+            STATE_STALLED,
+            is_measurable,
+        )
+
+        current = get_lifecycle(org_id, opportunity_identity)
+        state = str((current or {}).get("state") or "")
+        if state == STATE_STALLED or not is_measurable(state):
+            return
+        if state == STATE_MEASURED:
+            current = system_transition(
+                org_id,
+                opportunity_identity,
+                STATE_MONITORING,
+                run_id=run_id,
+                actor_id="outcome_monitor",
+            )
+            state = str(current.get("state") or "")
+        # After excluding stalled and normalising measured -> monitoring, the
+        # measurable states left here are precisely the recorded-action states
+        # that may honestly become stalled.  Keep the human-only action state
+        # encapsulated in the lifecycle module rather than naming it here.
+        if is_measurable(state):
+            system_transition(
+                org_id,
+                opportunity_identity,
+                STATE_STALLED,
+                run_id=run_id,
+                note=reason,
+                actor_id="outcome_monitor",
+            )
+    except Exception as exc:  # noqa: BLE001 - the run remains non-blocking
+        logger.warning(
+            "Could not mark lifecycle stalled after %s for %s: %s",
+            reason,
+            opportunity_identity,
+            exc,
+        )
 
 
 def _detect_record_confounders(
@@ -819,6 +937,12 @@ def measure_movements_for_run(
         except MovementMeasurementSkipped as exc:
             counts["skipped"] += 1
             skips[exc.reason] = skips.get(exc.reason, 0) + 1
+            _advance_lifecycle_after_terminal_skip(
+                org_id,
+                identity,
+                run_id,
+                exc.reason,
+            )
             continue
         except Exception as exc:  # noqa: BLE001 - never break a run
             counts["failed"] += 1
@@ -831,6 +955,25 @@ def measure_movements_for_run(
             continue
         counts["measured"] += 1
         measured_ids.append(identity)
+
+    if measured_ids:
+        # Outcome records are A3's strongest signals. Refresh once after the
+        # whole run batch commits so every new measurement participates and a
+        # run with many opportunities does not recompute once per row.
+        try:
+            from .learning_adjustment_state import recompute_after_signal_change
+
+            recompute_after_signal_change(
+                org_id,
+                actor_id="outcome_measurement",
+                trigger="measured_outcome_batch",
+            )
+        except Exception as exc:  # noqa: BLE001 - measurement remains authoritative
+            logger.warning(
+                "Could not refresh learning after movement batch for run %s: %s",
+                run_id,
+                exc,
+            )
 
     return {**counts, "skipReasons": skips, "measuredIdentities": measured_ids}
 

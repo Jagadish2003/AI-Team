@@ -2,6 +2,7 @@ import React from "react";
 import { ArrowLeft, ShieldCheck } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import PageShell from "../components/common/PageShell";
+import LearningGovernancePanel from "../components/settings/LearningGovernancePanel";
 import WorkspaceMembersPanel from "../components/settings/WorkspaceMembersPanel";
 import { useOrgName } from "../context/LicenseContext";
 
@@ -22,7 +23,7 @@ export default function SettingsPage() {
   return (
     <PageShell
       title="Settings"
-      description="Manage workspace access and keep team membership aligned with review responsibilities."
+      description="Manage workspace access and Owner governance controls."
       actions={
         <button
           type="button"
@@ -52,7 +53,10 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      <WorkspaceMembersPanel />
+      <div className="space-y-4">
+        <WorkspaceMembersPanel />
+        <LearningGovernancePanel />
+      </div>
     </PageShell>
   );
 }

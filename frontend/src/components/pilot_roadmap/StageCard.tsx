@@ -2,7 +2,6 @@ import React from 'react';
 import { OpportunityCandidate } from '../../types/analystReview';
 import { RoadmapStage } from '../../types/pilotRoadmap';
 import {
-  ProjectionStrengthBadge,
   demoteCappedProjections,
   projectionBandLabel,
 } from '../projection/ProjectionBand';
@@ -73,13 +72,6 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
                       <span data-testid={`opp-band-${o.id}`}>Projected {bandLabel}</span>
                     )}
                   </div>
-                  {/* Projection strength carries its own cap label, so a reader
-                      never sees the ordering signal without its caveat. */}
-                  {showRelease2ArcAUi && (
-                    <div className="mt-1.5">
-                      <ProjectionStrengthBadge projection={o.projection} />
-                    </div>
-                  )}
                   <RankingAdjustmentCompact ranking={o._ranking} />
                   {renderBlueprintLink?.(o.id)}
                 </button>

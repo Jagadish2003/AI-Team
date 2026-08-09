@@ -280,9 +280,15 @@ class TestNoActionWithoutAHumanSuppliedDate:
 
         assert state["state"] == "actioned"
         assert state["actionDate"] == YESTERDAY
+        assert state["actionNote"] == "agent deployed to prod"
         assert state["actionedBy"]
         assert state["actionedAt"]
         assert state["measurable"] is True
+
+        history = client.get(
+            f"{BASE}/{identity}/history", headers=_auth(org)
+        ).json()["transitions"]
+        assert history[-1]["note"] == "agent deployed to prod"
 
     def test_no_route_can_request_a_platform_state(self, client):
         """monitoring / measured / stalled are the platform's own moves."""

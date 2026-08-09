@@ -80,3 +80,20 @@ def test_reset_interactive_aborts_on_wrong_name(ps, monkeypatch):
     monkeypatch.setattr("builtins.input", lambda *_a, **_k: "not-the-name")
     with pytest.raises(SystemExit):
         ps.confirm_reset()
+
+
+def test_dsn_helpers_do_not_leak_special_character_password(ps):
+    url = "postgresql://app:p%40ss%2Fword@db.example.com:5432/agentiq?sslmode=require"
+    rendered = ps._redacted(url)
+    assert "p%40ss" not in rendered
+    assert "word" not in rendered
+    assert "***" in rendered
+    assert ps._db_name(url) == "agentiq"
+    assert ps._db_host(url) == "db.example.com"
+
+
+def test_unparseable_dsn_is_never_echoed(ps):
+    secret = "definitely-not-a-valid-dsn-with-secret"
+    assert ps._redacted(secret) == "<redacted database URL>"
+    assert secret not in ps._redacted(secret)
+    assert ps._is_local_db(secret) is False

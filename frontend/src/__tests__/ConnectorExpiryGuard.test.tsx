@@ -116,6 +116,25 @@ describe('expiredFromStatuses', () => {
 // ── Reading live statuses ────────────────────────────────────────────────────
 
 describe('findExpiredConnectors', () => {
+  it('asks the backend to verify live validity before launch', async () => {
+    const fetchMock = vi.fn(async (_url: string) =>
+      new Response(JSON.stringify({ status: 'refresh_failed' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      expect(await findExpiredConnectors(['salesforce'])).toEqual(['salesforce']);
+      expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+        '/api/connectors/salesforce/token-status?ensure_valid=true',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('reads each connector and returns the expired ones', async () => {
     const fetchStatus = vi.fn(async (id: string) => ({
       status: (id === 'salesforce' ? 'refresh_failed' : 'connected') as TokenStatus,

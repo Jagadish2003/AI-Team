@@ -255,7 +255,6 @@ export default function ProjectionBasisPanel({
         </span>
       </div>
       <div className="space-y-3 rounded-lg border border-border bg-bg/30 p-3">
-        <ProjectionThinEvidenceNotice projection={projection} />
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {items.map((item) => (
             <div
