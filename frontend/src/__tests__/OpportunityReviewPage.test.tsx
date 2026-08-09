@@ -516,10 +516,18 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
 
     const dateInput = await screen.findByLabelText('Action/deployment date');
     expect(dateInput).toBeRequired();
-    expect(screen.getByRole('button', { name: 'Record action/change' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Record Your Action' })).toBeDisabled();
+    expect(screen.getByTestId('record-action-tooltip')).toHaveAttribute(
+      'title',
+      expect.stringContaining('Select an action/deployment date first'),
+    );
 
     fireEvent.change(dateInput, { target: { value: '2026-08-01' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Record action/change' }));
+    expect(screen.getByTestId('record-action-tooltip')).toHaveAttribute(
+      'title',
+      expect.stringContaining('later discovery runs can monitor'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Record Your Action' }));
 
     await waitFor(() => {
       expect(mockRecordOpportunityAction).toHaveBeenCalledWith(
@@ -551,7 +559,12 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
       'Action recorded',
     );
     expect(screen.getByTestId('opportunity-action-date')).toHaveTextContent(/Aug.*2026/);
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    const dismissButton = screen.getByRole('button', { name: 'Dismiss' });
+    expect(dismissButton).toHaveAttribute(
+      'title',
+      expect.stringContaining('stops active outcome tracking'),
+    );
+    fireEvent.click(dismissButton);
     const dismissDialog = screen.getByRole('dialog', { name: 'Dismiss opportunity' });
     fireEvent.click(within(dismissDialog).getByRole('button', { name: 'Dismiss' }));
 
@@ -562,7 +575,12 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
       'Dismissed',
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reopen' }));
+    const reopenButton = screen.getByRole('button', { name: 'Reopen' });
+    expect(reopenButton).toHaveAttribute(
+      'title',
+      expect.stringContaining('clears the recorded action date'),
+    );
+    fireEvent.click(reopenButton);
     const reopenDialog = screen.getByRole('dialog', { name: 'Reopen opportunity' });
     fireEvent.click(within(reopenDialog).getByRole('button', { name: 'Reopen' }));
 

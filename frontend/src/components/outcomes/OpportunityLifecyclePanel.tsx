@@ -41,6 +41,15 @@ const STATE_DESCRIPTIONS: Record<string, string> = {
   dismissed: 'This opportunity is no longer being actively tracked.',
 };
 
+const RECORD_ACTION_DISABLED_TOOLTIP =
+  'Select an action/deployment date first. Recording the action creates the before-and-after boundary for outcome monitoring.';
+const RECORD_ACTION_READY_TOOLTIP =
+  'Record this action date so later discovery runs can monitor before-and-after movement.';
+const RECORD_ACTION_PENDING_TOOLTIP =
+  'Recording this action date. Later discovery runs will use it as the before-and-after boundary.';
+const DISMISS_TOOLTIP =
+  'Dismiss stops active outcome tracking for this opportunity. The lifecycle history remains auditable.';
+
 function localToday(): string {
   const now = new Date();
   const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
@@ -111,6 +120,16 @@ export default function OpportunityLifecyclePanel({
     [data?.legalNextStates],
   );
   const state = data?.state ?? 'open';
+  const recordActionDisabled = !actionDate || Boolean(pending);
+  const recordActionTooltip =
+    pending === 'action'
+      ? RECORD_ACTION_PENDING_TOOLTIP
+      : recordActionDisabled
+        ? RECORD_ACTION_DISABLED_TOOLTIP
+        : RECORD_ACTION_READY_TOOLTIP;
+  const reopenTooltip = data?.actionDate
+    ? 'Reopen returns this opportunity to active review. It clears the recorded action date and removes measurements from active outcome views; history remains auditable.'
+    : 'Reopen returns this opportunity to active review. The lifecycle history remains auditable.';
 
   if (!opportunityIdentity) return null;
 
@@ -254,13 +273,20 @@ export default function OpportunityLifecyclePanel({
                   disabled={Boolean(pending)}
                   className="h-10 rounded-lg border border-border bg-panel px-3 text-sm text-text focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-60"
                 />
-                <button
-                  type="submit"
-                  disabled={!actionDate || Boolean(pending)}
-                  className="inline-flex h-10 items-center justify-center rounded-lg border border-accent/30 bg-accent px-4 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+                <span
+                  data-testid="record-action-tooltip"
+                  title={recordActionTooltip}
+                  className="inline-flex"
                 >
-                  {pending === 'action' ? 'Recording...' : 'Record action/change'}
-                </button>
+                  <button
+                    type="submit"
+                    disabled={recordActionDisabled}
+                    className="inline-flex h-10 items-center justify-center rounded-lg border border-accent/30 bg-accent px-4 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label={pending === 'action' ? 'Recording action' : 'Record Your Action'}
+                  >
+                    {pending === 'action' ? 'Recording...' : 'Record Your Action'}
+                  </button>
+                </span>
               </div>
             </form>
           ) : null}
@@ -272,6 +298,7 @@ export default function OpportunityLifecyclePanel({
                 onClick={() => setConfirmMutation('dismiss')}
                 disabled={Boolean(pending)}
                 className="inline-flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-500/10 disabled:opacity-50 dark:text-red-300"
+                title={DISMISS_TOOLTIP}
               >
                 <XCircle className="h-4 w-4" aria-hidden />
                 Dismiss
@@ -283,6 +310,7 @@ export default function OpportunityLifecyclePanel({
                 onClick={() => setConfirmMutation('reopen')}
                 disabled={Boolean(pending)}
                 className="inline-flex items-center gap-2 rounded-lg border border-border bg-bg/30 px-3 py-2 text-sm font-semibold text-text transition hover:bg-panel2 disabled:opacity-50"
+                title={reopenTooltip}
               >
                 <RotateCcw className="h-4 w-4" aria-hidden />
                 Reopen
