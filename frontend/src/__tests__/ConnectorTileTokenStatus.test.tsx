@@ -85,7 +85,11 @@ describe("ConnectorTile — token-status mapping (CS-2 AC6/AC7)", () => {
       renderTile();
 
       // Token status resolved; the action stays on the connected path.
-      await waitFor(() => expect(mockTokenStatus).toHaveBeenCalledWith("salesforce"));
+      await waitFor(() =>
+        expect(mockTokenStatus).toHaveBeenCalledWith("salesforce", {
+          ensureValid: true,
+        }),
+      );
       expect(screen.queryByText("Token expired")).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
     }

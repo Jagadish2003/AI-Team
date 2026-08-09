@@ -129,7 +129,10 @@ export default function ConnectorTile({
   // exist. A failure is non-fatal: the tile just renders without the status.
   const { data: tokenStatusData, refetch: refetchTokenStatus } = useResource(
     isConnected && isEnabled ? cacheKeys.connectorTokenStatus(connector.id) : null,
-    () => fetchTokenStatus(connector.id),
+    () =>
+      connector.id === 'salesforce'
+        ? fetchTokenStatus(connector.id, { ensureValid: true })
+        : fetchTokenStatus(connector.id),
   );
   const tokenStatus: TokenStatus | null = tokenStatusData?.status ?? null;
 

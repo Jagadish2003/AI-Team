@@ -2221,6 +2221,52 @@ def test_delete_token_unreachable_revocation_still_returns_204(client):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("status_code", "body", "expected"),
+    [
+        (200, {"DailyApiRequests": {}}, True),
+        (401, [{"errorCode": "INVALID_SESSION_ID"}], False),
+        (400, [{"errorCode": "INVALID_SESSION_ID"}], False),
+        (503, {"error": "unavailable"}, None),
+    ],
+)
+async def test_salesforce_access_token_probe_distinguishes_invalid_from_unavailable(
+    status_code,
+    body,
+    expected,
+):
+    """Only Salesforce evidence of an invalid session should demand Reconnect."""
+    from app.routes_connector_auth import _probe_salesforce_access_token
+
+    transport = _MockTransport(status_code, body)
+    result = await _probe_salesforce_access_token(
+        "https://example.my.salesforce.com",
+        "secret-access-token",
+        _transport=transport,
+    )
+
+    assert result is expected
+    assert transport.last_request is not None
+    assert transport.last_request.url.path == "/services/data/v59.0/limits/"
+    assert transport.last_request.headers["authorization"] == "Bearer secret-access-token"
+
+
+@pytest.mark.anyio
+async def test_salesforce_access_token_probe_fails_open_on_network_timeout():
+    """A network problem is unknown, not an instruction to reconnect."""
+    from app.routes_connector_auth import _probe_salesforce_access_token
+
+    assert (
+        await _probe_salesforce_access_token(
+            "https://example.my.salesforce.com",
+            "secret-access-token",
+            _transport=_TimeoutTransport(),
+        )
+        is None
+    )
+
+
 def test_token_status_returns_needs_auth_when_no_token(client):
     """token-status returns needs_auth when no token is stored (AC14)."""
     resp = client.get(
@@ -2244,6 +2290,51 @@ def test_token_status_returns_connected_for_fresh_token(client):
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "connected"
+    _clear_credentials()
+
+
+def test_token_status_ensure_valid_catches_revoked_fresh_salesforce_session(client):
+    """A provider-revoked token must show Reconnect before discovery starts.
+
+    The stored expiry is deliberately two hours away: this pins the reported bug
+    where Integration Hub showed Connected until ingestion received Salesforce's
+    first INVALID_SESSION_ID response.
+    """
+    from app.auth.vault import store_token as _store_token_vault
+
+    with _patch.dict(_os.environ, _vault_env()):
+        _store_token_vault(
+            _AUTH_ORG_ID,
+            "salesforce",
+            _token_response(access_token="revoked-but-fresh", expires_in=7200),
+        )
+        with _patch(
+            "app.live_ingest_credentials.get_connector_instance_url",
+            return_value="https://example.my.salesforce.com",
+        ), _patch(
+            "app.routes_connector_auth._probe_salesforce_access_token",
+            new_callable=_AsyncMock,
+            return_value=False,
+        ) as mock_probe:
+            resp = client.get(
+                "/api/connectors/salesforce/token-status?ensure_valid=true",
+                headers=_AUTH_HEADERS,
+            )
+
+        # The persisted flag makes every later status read show Reconnect too;
+        # ingestion no longer has to fail first to create this state.
+        later = client.get(
+            "/api/connectors/salesforce/token-status",
+            headers=_AUTH_HEADERS,
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "refresh_failed"
+    assert later.json()["status"] == "refresh_failed"
+    mock_probe.assert_awaited_once_with(
+        "https://example.my.salesforce.com",
+        "revoked-but-fresh",
+    )
     _clear_credentials()
 
 

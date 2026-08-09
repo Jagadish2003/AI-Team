@@ -38,6 +38,7 @@ from datetime import datetime, timezone
 from typing import Dict, Optional
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
@@ -70,6 +71,7 @@ from app.auth.auth_modes import (
 from app import network_profile
 from app.auth.vault import (
     REFRESH_THRESHOLD_SECONDS,
+    _mark_refresh_failed,
     consume_nonce,
     get_jwt_bearer_credential_metadata,
     get_static_credential_metadata,
@@ -91,6 +93,58 @@ from database.models.credentials import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SALESFORCE_TOKEN_PROBE_PATH = "/services/data/v59.0/limits/"
+_SALESFORCE_INVALID_SESSION_MARKERS = (
+    "INVALID_SESSION_ID",
+    "INVALID_AUTH_HEADER",
+)
+
+
+async def _probe_salesforce_access_token(
+    instance_url: Optional[str],
+    access_token: Optional[str],
+    *,
+    _transport: Optional[httpx.AsyncBaseTransport] = None,
+) -> Optional[bool]:
+    """Ask Salesforce whether an access token works right now.
+
+    ``True`` means Salesforce accepted the token, ``False`` is reserved for an
+    explicit invalid-session response, and ``None`` means validity could not be
+    determined (missing instance URL, timeout, network failure, or provider 5xx).
+    Unknown must not be turned into Reconnect: reconnecting cannot fix a network
+    outage, and the UI should only make that demand on evidence from Salesforce.
+
+    The limits endpoint is a small authenticated read already used by the live
+    validator. No customer records are requested and response content is never
+    logged.
+    """
+    if not instance_url or not access_token:
+        return None
+
+    url = f"{instance_url.rstrip('/')}{_SALESFORCE_TOKEN_PROBE_PATH}"
+    try:
+        async with httpx.AsyncClient(
+            timeout=5.0,
+            transport=_transport,
+            follow_redirects=False,
+        ) as client:
+            probe = await client.get(
+                url,
+                headers={"Authorization": f"Bearer {access_token.strip()}"},
+            )
+    except httpx.RequestError:
+        logger.info("Salesforce token probe unavailable for %s", instance_url)
+        return None
+
+    response_text = probe.text[:2048].upper()
+    if probe.status_code == 401 or any(
+        marker in response_text for marker in _SALESFORCE_INVALID_SESSION_MARKERS
+    ):
+        return False
+    if 200 <= probe.status_code < 300:
+        return True
+    return None
 
 # Frontend OAuth callback target (CS-2 / AT-326 T4; FE route added in AT-325 T3).
 #
@@ -719,10 +773,11 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         """Return the connector's live OAuth status and recorded expiry.
 
         When an access token has expired, verify its saved refresh token here.
-        Launch guards pass ``ensure_valid=true`` to perform the same verification
-        inside the near-expiry window. A successful refresh keeps the connector
-        live; a rejected refresh becomes ``refresh_failed`` so Integration Hub can
-        show Reconnect and discovery can stop before creating an unhealthy run.
+        Launch guards and the Salesforce Integration Hub card pass
+        ``ensure_valid=true``. That refreshes near-expiry credentials and asks
+        Salesforce to reject any server-revoked session whose stored timestamp
+        still looks fresh. A rejected refresh/session becomes ``refresh_failed``
+        so Reconnect appears before discovery can create an unhealthy run.
         """
         response.headers["Cache-Control"] = "no-store"
         # Scope to the caller's org — the OAuth callback stores the credential under
@@ -780,9 +835,10 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         should_verify_refresh = seconds_left <= 0 or (
             ensure_valid and seconds_left <= REFRESH_THRESHOLD_SECONDS
         )
+        current_record = None
         if should_verify_refresh and has_refresh_token:
             try:
-                refreshed = await get_token(
+                current_record = await get_token(
                     org_id,
                     connector_id,
                     min_validity_seconds=(
@@ -795,15 +851,50 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                     "expires_at": expires_at.isoformat(),
                 }
 
-            refreshed_seconds_left = (refreshed.expires_at - now).total_seconds()
-            return {
-                "status": (
-                    "needs_refresh"
-                    if refreshed_seconds_left <= REFRESH_THRESHOLD_SECONDS
-                    else "connected"
-                ),
-                "expires_at": refreshed.expires_at.isoformat(),
-            }
+            expires_at = current_record.expires_at
+            seconds_left = (expires_at - now).total_seconds()
+
+        # A future timestamp is not proof that Salesforce still accepts the
+        # session: an admin can revoke it server-side and Salesforce then returns
+        # INVALID_SESSION_ID while our stored expires_at remains hours away. The
+        # Integration Hub and every launch guard pass ensure_valid=true, so ask
+        # Salesforce before showing Connected or allowing discovery to start.
+        if ensure_valid and connector_id == "salesforce":
+            if current_record is None:
+                try:
+                    current_record = await get_token(
+                        org_id,
+                        connector_id,
+                        min_validity_seconds=0,
+                    )
+                except ConnectorNotAuthenticatedError:
+                    return {
+                        "status": "needs_auth",
+                        "expires_at": expires_at.isoformat(),
+                    }
+
+            from app.live_ingest_credentials import get_connector_instance_url
+
+            instance_url = get_connector_instance_url(
+                org_id,
+                connector_id,
+            ) or os.getenv("SF_INSTANCE_URL")
+            probe_result = await _probe_salesforce_access_token(
+                instance_url,
+                current_record.access_token,
+            )
+            if probe_result is False:
+                try:
+                    _mark_refresh_failed(org_id, connector_id)
+                except Exception:
+                    logger.exception(
+                        "Could not persist Salesforce reconnect state for org %s",
+                        org_id,
+                    )
+                return {
+                    "status": "refresh_failed",
+                    "expires_at": expires_at.isoformat(),
+                }
 
         # Near-expiry OR already expired: refreshable unless the refresh token is
         # gone or a prior refresh failed. 'needs_refresh' keeps the connector shown
