@@ -110,7 +110,7 @@ export interface OpportunityRanking {
   baseImpact: number;
   adjustedRank: number;
   /** Positions moved; negative means it moved up the list. */
-  moved: number;
+  moved?: number;
   adjusted: boolean;
   caps: OpportunityRankingCaps;
   // Present only when a learned adjustment applied to this finding.
