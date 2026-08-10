@@ -209,6 +209,41 @@ def _apply_temporal_enrichment(
     return opps
 
 
+def _selected_live_systems(requested: List[str], live: List[str]) -> List[str]:
+    """The authenticated connectors the customer actually selected for this run.
+
+    Returns the subset of ``live`` covered by ``requested``, preserving ``live``
+    order. Empty when nothing matches — the caller decides what that means.
+
+    The two lists speak DIFFERENT vocabularies, which is why this is not a set
+    intersection. Stack Builder records registry ids, which for Salesforce are
+    per-PRODUCT (``salesforce_sc``, ``salesforce_fsc``, ``salesforce_ncino``),
+    while ``resolve_live_systems`` returns CONNECTOR ids (``salesforce``) —
+    because one Salesforce connection serves every Salesforce product. A plain
+    ``set(requested) & set(live)`` would therefore drop Salesforce from every run
+    that selected a specific product, which is a worse failure than the one being
+    fixed: silently running without the system of record.
+
+    Matching is exact, or product-to-connector by an ``id_`` prefix in either
+    direction. Deliberately no fuzzy matching: an unrecognised selection must fall
+    through to the caller's fallback rather than be guessed into a match.
+    """
+    if not requested or not live:
+        return []
+    wanted = {s.strip().lower() for s in requested if s and s.strip()}
+
+    def _covered(connector_id: str) -> bool:
+        cid = connector_id.strip().lower()
+        if cid in wanted:
+            return True
+        # salesforce_sc -> salesforce, or a selection naming the connector family.
+        return any(
+            w.startswith(f"{cid}_") or cid.startswith(f"{w}_") for w in wanted
+        )
+
+    return [c for c in live if _covered(c)]
+
+
 def _run_trackb_and_persist(
     run_id: str,
     mode: str,
@@ -259,12 +294,45 @@ def _run_trackb_and_persist(
 
     if live_systems:
         mode = "live"
-        systems = live_systems
-        _emit_event(
-            run_id,
-            "CONNECT",
-            f"Using authenticated connectors: {', '.join(live_systems)}",
-        )
+        requested = [str(s).strip() for s in (systems or []) if str(s).strip()]
+        selected_live = _selected_live_systems(requested, live_systems)
+
+        if requested and selected_live:
+            # Run ONLY what the customer selected in Stack Builder. Replacing the
+            # selection with every authenticated connector (the previous behaviour)
+            # made the Integration Hub and the run scope the same thing: connecting
+            # a source anywhere silently pulled it into every subsequent run, so a
+            # run scoped to five systems ingested all of them, and their signals
+            # reached detection and corroboration unasked.
+            systems = selected_live
+            excluded = [s for s in live_systems if s not in set(selected_live)]
+            _emit_event(
+                run_id,
+                "CONNECT",
+                f"Using selected connectors: {', '.join(selected_live)}"
+                + (
+                    f" (connected but not selected: {', '.join(excluded)})"
+                    if excluded
+                    else ""
+                ),
+            )
+        else:
+            # No selection recorded, or a selection that overlaps nothing live.
+            # Fall back to the authenticated set rather than running with no
+            # sources — an empty run would report "no findings", which reads as a
+            # clean estate rather than a misconfiguration.
+            systems = live_systems
+            if requested:
+                logger.warning(
+                    "Run %s: none of the selected systems %s are authenticated; "
+                    "falling back to the connected set %s",
+                    run_id, requested, live_systems,
+                )
+            _emit_event(
+                run_id,
+                "CONNECT",
+                f"Using authenticated connectors: {', '.join(live_systems)}",
+            )
     else:
         _emit_event(run_id, "CONNECT", f"Connected sources: {', '.join(systems)}")
 

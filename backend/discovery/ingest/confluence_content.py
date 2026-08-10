@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -273,6 +273,13 @@ def build_content_artifact(
     provenance: Dict[str, Any] = {
         "origin": "observed",
         "space_key": space_key,
+        # The page's own Confluence id, declared explicitly. MSP-B5's runbook
+        # library builds deterministic match keys from _PROVENANCE_ID_KEYS, which
+        # includes 'page_id'; without it the only id-shaped key a Confluence page
+        # offered was 'url', so a resolution note citing a bare page id could never
+        # resolve and fell through to the semantic path. This is the id Confluence
+        # already gave us — nothing is inferred from the title here.
+        "page_id": content_id,
         "space_name": record.get("space_name"),
         "content_type": record.get("content_type"),
         "title": record.get("title"),
@@ -379,6 +386,44 @@ class DeepContentResult:
     artifacts_absent: int = 0
     artifacts_removal_failed: int = 0
     chunks_removed: int = 0
+    #: ServiceNow/Jira/GitHub markers found in page BODIES (COR-11's supply).
+    #: The reach path extracts these from page TITLES only, which misses the common
+    #: case by a wide margin: a postmortem cites "INC-4821" in its text, not in its
+    #: heading. Collected here because this is the only path that holds the rendered
+    #: body. The rule that reads them still requires an exact id match against a
+    #: record already linked to the detector, so a passing mention corroborates
+    #: nothing on its own.
+    cross_references: List[Dict[str, Any]] = field(default_factory=list)
+
+
+def extract_body_cross_references(
+    artifacts: List[ContentArtifact],
+) -> List[Dict[str, Any]]:
+    """Pull ServiceNow/Jira/GitHub markers out of rendered page text.
+
+    Uses the SAME source-agnostic extractor the reach paths use
+    (``slack_signals.extract_cross_reference_markers``) so a reference means the
+    same thing wherever it was found. Deduplicated on ``(system, ref)``.
+    """
+    from .slack_signals import extract_cross_reference_markers
+
+    seen = set()
+    out: List[Dict[str, Any]] = []
+    for artifact in artifacts or []:
+        content = getattr(artifact, "content", "") or ""
+        if not content:
+            continue
+        try:
+            markers = extract_cross_reference_markers(content)
+        except Exception:  # noqa: BLE001 — a marker scan never sinks ingestion
+            continue
+        for marker in markers or ():
+            key = (marker.get("system"), str(marker.get("ref", "")).upper())
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(marker)
+    return out
 
 
 def ingest_confluence_content(
@@ -510,6 +555,8 @@ def ingest_confluence_content(
 
     artifacts = content_artifacts(ing, org_id, scoped)
     result.pages_render_failed = result.pages_seen - len(artifacts)
+    # COR-11's supply: markers in the page BODY, which only this path can see.
+    result.cross_references = extract_body_cross_references(artifacts)
     if not artifacts:
         return result
 

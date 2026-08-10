@@ -341,3 +341,33 @@ class TestCandidatesAndAvailability:
         assert result.status == RETRIEVAL_OK
         assert result.found_any is False
         assert fake.calls == []  # retrieve never called
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SharePoint file METADATA must not compete as runbook content
+#
+# SharePoint indexes two different things under source_system='sharepoint': page
+# content ("{site}:page:{id}") and the reach connector's driveItem metadata
+# ("{site}/{drive}:{item}"), whose resolver renders only Name/Type/Size/URL. The
+# substrate's source_filter cannot separate them, so runbook_match does.
+# ─────────────────────────────────────────────────────────────────────────────
+from discovery.detectors.runbook_match import is_runbook_content_artifact
+
+
+def test_sharepoint_page_and_list_ids_are_runbook_content():
+    assert is_runbook_content_artifact("sharepoint", "S-eng:page:pg-runbook")
+    assert is_runbook_content_artifact("sharepoint", "S-eng:list:lst-approvals")
+
+
+def test_sharepoint_driveitem_metadata_is_not_runbook_content():
+    """The failure this prevents: 'Name: Q3-budget.xlsx / Type: file' out-scoring a
+    real runbook on a filename term, or talking a documentation-gap detector out of
+    firing with a file that documents nothing."""
+    assert not is_runbook_content_artifact("sharepoint", "S-eng/b-docs:f400")
+
+
+def test_other_runbook_sources_are_always_content():
+    """Only SharePoint carries both kinds under one source system."""
+    assert is_runbook_content_artifact("confluence", "ENG:100")
+    assert is_runbook_content_artifact("document", "sharepoint:S-eng/b-docs:f400")
+    assert is_runbook_content_artifact("DOCUMENT", "anything")

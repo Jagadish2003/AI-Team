@@ -459,6 +459,84 @@ def test_sharepoint_content_ids_parse_without_colliding_with_drive_items():
     assert resolvers._parse_sharepoint_content_id("no-separator") is None
 
 
+def test_sharepoint_content_freshness_is_attributed_to_the_substrate_source_system(
+    monkeypatch,
+):
+    """The freshness subscriber keys on (org_id, source_system, source_artifact).
+
+    ``SharePointContentIngestor.connector_id`` is 'sharepoint_content' (its own
+    checkpoint namespace) while its pages are INDEXED under 'sharepoint'. Attributing
+    the change event to the connector id marked zero chunks stale and filed the queue
+    row under a source system with no registered resolver — ``no_resolver``, pending
+    forever. The telemetry event must still carry the real connector id.
+    """
+    from discovery.ingest import change_runner
+
+    notified: list = []
+    emitted: list = []
+    monkeypatch.setattr(change_runner, "_notify_freshness", notified.append)
+    monkeypatch.setattr(
+        change_runner,
+        "record_event",
+        lambda *a, **k: None,
+        raising=False,
+    )
+
+    class _FakeTelemetry:
+        @staticmethod
+        def record_event(event_type, payload):
+            emitted.append((event_type, payload))
+
+    monkeypatch.setitem(
+        __import__("sys").modules, "app.telemetry", _FakeTelemetry
+    )
+
+    change_runner._emit_artifact_changed(
+        "org_1",
+        "sharepoint_content",
+        [{"artifact_id": "S-eng:page:pg-1", "change_kind": "updated"}],
+        retrieval_source_system="sharepoint",
+    )
+
+    assert notified, "freshness must still be notified"
+    # Freshness is told the SUBSTRATE identity, so the stale-mark can match.
+    assert notified[0]["connector_id"] == "sharepoint"
+    assert notified[0]["artifact_id"] == "S-eng:page:pg-1"
+    # Telemetry keeps the real connector id — which connector observed the change is
+    # a different question from which partition holds the chunks.
+    assert emitted and emitted[0][1]["connector_id"] == "sharepoint_content"
+
+
+def test_connectors_without_an_override_are_unchanged(monkeypatch):
+    """The override is opt-in: every other connector keeps connector_id as its
+    freshness source system, so this change is byte-identical for them."""
+    from discovery.ingest import change_runner
+
+    notified: list = []
+    monkeypatch.setattr(change_runner, "_notify_freshness", notified.append)
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "app.telemetry",
+        type("_T", (), {"record_event": staticmethod(lambda *a, **k: None)}),
+    )
+
+    change_runner._emit_artifact_changed(
+        "org_1", "confluence", [{"artifact_id": "ENG:100", "change_kind": "updated"}]
+    )
+
+    assert notified and notified[0]["connector_id"] == "confluence"
+
+
+def test_sharepoint_content_ingestor_declares_the_substrate_source_system():
+    """Pins the declaration itself, so the ingestor cannot quietly lose it."""
+    assert (
+        sharepoint_content_mod.SharePointContentIngestor.retrieval_source_system
+        == "sharepoint"
+    )
+    # And the two really are different — which is why the override is needed at all.
+    assert sharepoint_content_mod.SharePointContentIngestor.connector_id != "sharepoint"
+
+
 def test_sharepoint_declares_both_backing_modules():
     """Both connectors serving source_system='sharepoint' must be import-checked at
     startup. A lazily-imported second module would fail INSIDE the resolver, which

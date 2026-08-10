@@ -111,7 +111,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 try:
     from backend.discovery.packs.corroboration_rules import (
@@ -166,6 +166,24 @@ _TIMESTAMP_KEYS = (
 #: priority alone.
 _CORROBORATION_LEAD_WEIGHT_MIN = 0.80
 
+#: The role every industry and template assigns to a knowledge base, and the systems
+#: that hold it by default. Used ONLY to give an unconfigured run the same lead
+#: rule a configured one gets — see the neutral branch of
+#: ``_weighting_info_for_system``. Not a substitute for the customer's own
+#: weighting: an explicit role always wins, including one that re-roles Confluence
+#: as something else entirely.
+ROLE_DOCUMENTATION = "documentation_system"
+_DEFAULT_DOCUMENTATION_SYSTEMS = frozenset({"confluence", "sharepoint"})
+
+#: Kept in step with ``discovery.weighting_context.ROLE_WEIGHT`` — imported rather
+#: than restated where possible, so the two cannot drift.
+try:  # pragma: no cover - import shape varies by execution root
+    from discovery.weighting_context import ROLE_WEIGHT as _ROLE_WEIGHT
+
+    _DOCUMENTATION_ROLE_WEIGHT = float(_ROLE_WEIGHT[ROLE_DOCUMENTATION])
+except Exception:  # pragma: no cover - corroboration must never fail to import
+    _DOCUMENTATION_ROLE_WEIGHT = 0.6
+
 #: Mapping from fired corroboration rules to the system whose configured
 #: role/priority should modulate that corroboration contribution.
 _CORROBORATION_RULE_SYSTEMS: Dict[str, str] = {
@@ -173,6 +191,12 @@ _CORROBORATION_RULE_SYSTEMS: Dict[str, str] = {
     "COR-02": "jira",
     "COR-04": "confluence",
     "COR-07": "jira",
+    # Documentation cross-references. Mapping them here is what subjects them to
+    # the role-weight rule: documentation_system is 0.6, below the 0.80 lead
+    # threshold, so these contribute to and are credited on an elevation another
+    # source leads, and can never produce HIGH on their own.
+    "COR-11": "confluence",
+    "COR-12": "sharepoint",
     # R17-A3 §3: Java-app operational friction is first-class OBSERVED evidence
     # (directly measured), so COR-09 is an ELEVATING corroborator like COR-01/02 —
     # not a supporting-only ceiling like Slack (COR-05).
@@ -793,6 +817,88 @@ def check_cor07_jira_sprint_velocity(
     return True
 
 
+#: Fields a linked ServiceNow/Jira record may carry its human-facing id in. The
+#: canonical record is ``dict(record)``, so whatever the connector supplied
+#: survives; connectors differ on the field name, and guessing one would make the
+#: rule silently never fire for the others.
+_RECORD_ID_FIELDS = (
+    "number", "key", "issue_key", "ticket", "ticket_number", "id", "name",
+)
+
+
+def _normalise_reference(value: Any) -> str:
+    """Normalise an id for comparison: case, whitespace and separators only.
+
+    ``INC-4821``, ``inc4821`` and ``INC 4821`` are the same incident written three
+    ways. Nothing fuzzier than this — a substring or similarity match would let
+    ``INC-48`` corroborate ``INC-4821``.
+    """
+    text = str(value or "").strip().lower()
+    return "".join(ch for ch in text if ch.isalnum())
+
+
+def _linked_record_references(run_data: Dict[str, Any], detector_id: str) -> set:
+    """Normalised ids of every ServiceNow/Jira record linked to this detector."""
+    refs = set()
+    for record in list(_servicenow_incidents(run_data)) + list(_jira_issues(run_data)):
+        if not _linked_to_detector(record, detector_id):
+            continue
+        for field in _RECORD_ID_FIELDS:
+            normalised = _normalise_reference(record.get(field))
+            if normalised:
+                refs.add(normalised)
+    return refs
+
+
+def _check_documentation_cross_reference(
+    system_id: str, detector_id: str, run_data: Dict[str, Any]
+) -> bool:
+    """COR-11 / COR-12: a document cites a record linked to this detector.
+
+    Both connectors have always extracted ``cross_references`` — ServiceNow, Jira
+    and GitHub markers pulled from Confluence page titles and SharePoint file names
+    — and nothing ever read them. This is what reads them.
+
+    The corroboration is the EXPLICIT id match, not the existence of documentation:
+    a page titled "INC-4821 postmortem" is demonstrably about the same incident the
+    detector fired on. A document that merely discusses the topic proves nothing
+    about the friction, which is why there is no "documentation exists" rule.
+    """
+    block = _system_block(run_data, system_id)
+    if not block:
+        return False
+    references = block.get("cross_references")
+    if not isinstance(references, (list, tuple)) or not references:
+        return False
+
+    linked = _linked_record_references(run_data, detector_id)
+    if not linked:
+        # Nothing to match against: no ServiceNow/Jira record is linked to this
+        # detector, so a document reference cannot be tied to it. Not a corroboration.
+        return False
+
+    for entry in references:
+        if not isinstance(entry, Mapping):
+            continue
+        if _normalise_reference(entry.get("ref")) in linked:
+            return True
+    return False
+
+
+def check_cor11_confluence_cross_reference(
+    detector_id: str, run_data: Dict[str, Any]
+) -> bool:
+    """COR-11: a Confluence page references a record linked to this detector."""
+    return _check_documentation_cross_reference("confluence", detector_id, run_data)
+
+
+def check_cor12_sharepoint_cross_reference(
+    detector_id: str, run_data: Dict[str, Any]
+) -> bool:
+    """COR-12: a SharePoint document references a record linked to this detector."""
+    return _check_documentation_cross_reference("sharepoint", detector_id, run_data)
+
+
 def check_cor08_single_source(run_data: Dict[str, Any]) -> bool:
     """COR-08: only one system connected — cannot self-corroborate.
 
@@ -883,6 +989,32 @@ def _weighting_info_for_system(
     }
 
     if weighting_context is None or getattr(weighting_context, "is_neutral", True):
+        # Neutral fallback is 1.0/lead for a system with no configured role — which
+        # is right for a system of record, and WRONG for a documentation source.
+        #
+        # Confluence and SharePoint are `documentation_system` in every industry and
+        # template that lists them (ROLE_WEIGHT 0.6, "supports interpretation, does
+        # not lead"), so with weighting configured they cannot lead a MEDIUM->HIGH
+        # elevation. Without it they could — meaning identical evidence produced
+        # HIGH or MEDIUM depending on whether the customer finished Stack Builder,
+        # which is not a difference anyone can explain to a reviewer.
+        #
+        # Documentation is held to the configured rule in both cases. It still
+        # CONTRIBUTES its source chip, its label and its weight, and can still carry
+        # a finding to HIGH alongside a lead source such as ServiceNow — it just
+        # cannot get there alone. That matters most for COR-04, whose evidence is an
+        # ABSENCE of documentation: "we found no runbook" is also what a broken
+        # index looks like, so it is the last basis that should elevate unaided.
+        if system_id in _DEFAULT_DOCUMENTATION_SYSTEMS:
+            info.update(
+                {
+                    "role": ROLE_DOCUMENTATION,
+                    "source_weight": _DOCUMENTATION_ROLE_WEIGHT,
+                    "lead_authority": (
+                        _DOCUMENTATION_ROLE_WEIGHT >= _CORROBORATION_LEAD_WEIGHT_MIN
+                    ),
+                }
+            )
         return info
 
     try:
@@ -1006,7 +1138,7 @@ def _build_label(fired_rules: List[str], triple: bool) -> Optional[str]:
     if triple:
         return TRIPLE_CORROBORATION_LABEL
     # Priority order for the headline label among non-derived rules.
-    for rule_id in ("COR-06", "COR-01", "COR-02", "COR-04", "COR-07", "COR-09", "COR-10", "COR-05", "COR-08"):
+    for rule_id in ("COR-06", "COR-01", "COR-02", "COR-04", "COR-07", "COR-09", "COR-10", "COR-11", "COR-12", "COR-05", "COR-08"):
         if rule_id in fired_rules:
             return RULE_CARD_LABELS.get(rule_id)
     return RULE_CARD_LABELS.get(fired_rules[0])
@@ -1115,6 +1247,19 @@ def evaluate_corroboration(
     if check_cor07_jira_sprint_velocity(detector_id, run_data, run_timestamp):
         fired_rules.append("COR-07")
         sources.append("Jira (sprint velocity decline)")
+
+    # COR-11 / COR-12: documentation that explicitly CITES a record linked to this
+    # detector. The corroboration is the id match, not the existence of a document —
+    # see the rule registry for why "documentation exists" is deliberately not a
+    # rule. Both are subject to the documentation role weight, so they support an
+    # elevation without ever leading one.
+    if check_cor11_confluence_cross_reference(detector_id, run_data):
+        fired_rules.append("COR-11")
+        sources.append("Confluence (references the same record)")
+
+    if check_cor12_sharepoint_cross_reference(detector_id, run_data):
+        fired_rules.append("COR-12")
+        sources.append("SharePoint (references the same record)")
 
     # COR-09: Java application operational friction (R17-A3). First-class observed
     # evidence — an ELEVATING corroborator like ServiceNow/Jira (not Slack-capped).
