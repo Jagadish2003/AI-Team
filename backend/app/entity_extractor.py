@@ -283,6 +283,30 @@ def _salesforce_user_names(sf_data: Dict[str, Any]) -> Dict[str, str]:
     return merged
 
 
+#: Salesforce key prefix for a Group — which is what a Queue is stored as. A
+#: User is ``005``. Salesforce ids are 15 or 18 characters and the first three
+#: identify the object type, so this is an exact structural test, not a guess.
+_SF_GROUP_KEY_PREFIX = "00G"
+
+
+def _is_salesforce_group_id(source_id: Optional[str]) -> bool:
+    """True when a Salesforce owner id belongs to a Group/Queue rather than a User.
+
+    Decided from the ID PREFIX alone. Deliberately never from the name: a queue
+    called "Priya Sharma" is still a queue and a user called "Payments Operations"
+    is still a user, and guessing from names is how a group ends up recorded as a
+    person (or worse, an individual's name ends up presented as a team).
+
+    Returns False for an absent or malformed id — the conservative direction,
+    because ``person`` is the pre-existing behaviour and a wrong ``team`` would
+    silently invent a group that does not exist.
+    """
+    text = str(source_id or "").strip()
+    if len(text) < 15:   # a Salesforce id is 15 or 18 characters
+        return False
+    return text[:3].upper() == _SF_GROUP_KEY_PREFIX
+
+
 def _resolve_person_name(
     display_name: Optional[str],
     source_id: Optional[str],
@@ -388,8 +412,22 @@ def _extract_salesforce_entities(
             except Exception as exc:
                 logger.warning("SF person extraction failed for %s: %s", name, exc)
 
-    # Person: OwnerId / AssignedTo fields from common Salesforce record buckets.
-    # These are source IDs, so they carry confidence=1.0 through resolution.
+    # Owner / AssignedTo fields from common Salesforce record buckets. These are
+    # source IDs, so they carry confidence=1.0 through resolution.
+    #
+    # A Salesforce owner is EITHER a User or a Queue/Group, and the two are
+    # different kinds of thing. Every owner used to become a ``person``, which
+    # recorded a queue named "Payments Operations" as an individual — wrong on its
+    # own terms, and it made a Salesforce queue structurally unable to pair with a
+    # ServiceNow assignment group (both are groups, but the types never matched, so
+    # cross-source resolution had nothing to work with).
+    #
+    # The two are told apart DETERMINISTICALLY by the Salesforce key prefix — 00G
+    # is a Group/Queue, 005 a User — the same rule the 2.0-B4 concept mappers
+    # already use, so there is one answer to "is this owner a group?" in the
+    # codebase rather than two. Nothing is inferred from the NAME: a queue called
+    # "Priya Sharma" is still a queue, and a user called "Payments Operations" is
+    # still a user.
     for collection_name in (
         "records",
         "cases",
@@ -403,16 +441,29 @@ def _extract_salesforce_entities(
                 display_name, source_id = _ref_name_and_id(record.get(field_name))
                 if not display_name:
                     continue
-                display_name = _resolve_person_name(display_name, source_id, user_names)
+                is_queue = _is_salesforce_group_id(source_id)
+                if is_queue:
+                    # A queue's name is its own; never run it through the person
+                    # name resolver, which looks the id up in the USER table.
+                    owner_type = "team"
+                else:
+                    owner_type = "person"
+                    display_name = _resolve_person_name(
+                        display_name, source_id, user_names
+                    )
                 try:
                     e = resolve_or_create_entity(
                         org_id=org_id,
-                        entity_type="person",
+                        entity_type=owner_type,
                         display_name=display_name,
                         source_system="salesforce",
                         source_record_id=source_id or display_name,
                         run_id=run_id,
-                        metadata={"source": collection_name, "field": field_name},
+                        metadata={
+                            "source": collection_name,
+                            "field": field_name,
+                            **({"salesforce_owner": "queue"} if is_queue else {}),
+                        },
                     )
                     _append_entity(entities, e)
                 except Exception as exc:

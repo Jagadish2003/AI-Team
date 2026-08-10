@@ -54,6 +54,10 @@ const STATUS_TONE: Record<ProposalStatus, string> = {
 /** Human label for a resolution tier. Only propose-only tiers reach this screen. */
 function tierLabel(tier: string): string {
   if (tier === "name_similarity") return "Name match";
+  // Tier 4 (opt-in): the full names DIFFER and only a leading word matched, so the
+  // label says "partial" rather than "name match" — a reviewer scanning the queue
+  // should be able to see at a glance which pairs rest on the weaker signal.
+  if (tier === "name_prefix_similarity") return "Partial name match";
   return tier.replace(/_/g, " ");
 }
 

@@ -811,21 +811,35 @@ def map_directly_observed(
                 obj_name = _sf_object_name(record)
                 if not owner_name or not obj_name:
                     continue
-                person = get_resolved_entity(org_id, "person", owner_name, entities)
+                # A Salesforce owner is a User or a Queue. The extractor records a
+                # queue as a ``team`` (deterministically, by the 00G key prefix), so
+                # the owner endpoint has to be looked up as whichever it is —
+                # otherwise a queue-owned record silently gets NO owns edge and the
+                # queue sits in the graph with no relationships at all.
+                #
+                # Person is tried first so existing user-owned records keep their
+                # exact previous behaviour, including the ambiguity counting below.
+                owner = get_resolved_entity(org_id, "person", owner_name, entities)
+                owner_type = "person"
+                if owner is None:
+                    team_owner = get_resolved_entity(org_id, "team", owner_name, entities)
+                    if team_owner is not None:
+                        owner, owner_type = team_owner, "team"
                 obj = get_resolved_entity(org_id, "object", obj_name, entities)
-                if person is None or obj is None:
+                if owner is None or obj is None:
                     if _counters is not None and (
                         _is_entity_ambiguous(org_id, "person", owner_name, entities)
+                        or _is_entity_ambiguous(org_id, "team", owner_name, entities)
                         or _is_entity_ambiguous(org_id, "object", obj_name, entities)
                     ):
                         _counters["skipped_ambiguous"] = _counters.get("skipped_ambiguous", 0) + 1
                     continue
                 source = str(record.get("source_system") or "salesforce")
                 if write_once(
-                    person,
+                    owner,
                     obj,
                     "owns",
-                    {"field": "OwnerId", "source": source},
+                    {"field": "OwnerId", "source": source, "owner_type": owner_type},
                 ):
                     count += 1
             except Exception as exc:

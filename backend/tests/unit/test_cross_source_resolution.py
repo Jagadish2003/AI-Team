@@ -274,15 +274,20 @@ def test_a_shared_neighbour_of_a_different_relationship_type_does_not_corroborat
 
 
 def test_tiers_are_ranked_strongest_first():
+    # TIER_NAME_PREFIX is the opt-in leading-word tier (default OFF). It ranks
+    # WEAKEST deliberately: a shared first word is less evidence than a whole
+    # matching name, so an exact match must always win the decision.
     assert csr.TIERS_BY_RANK == (
         csr.TIER_EXPLICIT_REFERENCE,
         csr.TIER_ALIAS_MAPPING,
         csr.TIER_NAME_SIMILARITY,
+        csr.TIER_NAME_PREFIX,
     )
     assert (
         csr.TIER_RANK[csr.TIER_EXPLICIT_REFERENCE]
         < csr.TIER_RANK[csr.TIER_ALIAS_MAPPING]
         < csr.TIER_RANK[csr.TIER_NAME_SIMILARITY]
+        < csr.TIER_RANK[csr.TIER_NAME_PREFIX]
     )
 
 

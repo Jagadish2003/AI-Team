@@ -3457,7 +3457,7 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
             first_assigned_field=first_assigned_field,
         )
         if escalation_field and record.get(escalation_field):
-            incident["escalated_to"] = record.get(escalation_field)
+            incident["assignment_group"] = record.get(escalation_field)
         # Carry the event-signature link column(s) through under their ServiceNow
         # names. The incident payload is built as an explicit literal with no
         # passthrough, so a requested-but-uncopied column is still dropped here —

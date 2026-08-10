@@ -39,6 +39,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -443,10 +444,13 @@ def record_proposals(
 ) -> RecordOutcome:
     """Record the PROPOSALS carried by a batch of T1 resolution decisions.
 
-    Only tier-3 proposals reach this table: a decision that authorises an
+    Only PROPOSAL-tier decisions reach this table: one that authorises an
     auto-merge has nothing to review, and an ``unresolved``/``ambiguous`` one has
-    nothing to show. Each proposed pair is written once (order-independent id),
-    and an already-answered pair is left untouched and counted.
+    nothing to show. That is tier 3 (exact name) and, where a deployment has opted
+    in, tier 4 (leading-word name) — the tier travels with each row so a reviewer
+    can see which signal produced the question. Each proposed pair is written once
+    (order-independent id), and an already-answered pair is left untouched and
+    counted.
 
     Idempotent: running it twice over the same decisions creates nothing new the
     second time. Never raises for an individual malformed decision — that entry is
@@ -902,6 +906,88 @@ def decide(
 SCANNABLE_ENTITY_TYPES: Tuple[str, ...] = ("system", "team", "project", "object")
 
 
+#: Deployment opt-in for the tier-4 leading-word tier. ``0``/unset keeps the
+#: engine's default behaviour (exact name matching only).
+PREFIX_WORDS_ENV = "ENTITY_MATCH_PREFIX_WORDS"
+#: Drop the shared-neighbour requirement for the leading-word tier, leaving the
+#: words as the only evidence. The fastest way to fill a review queue.
+PREFIX_NO_CORROBORATION_ENV = "ENTITY_MATCH_PREFIX_NO_CORROBORATION"
+#: Cap on proposals per subject. Matters most when the guards above are off.
+PREFIX_MAX_ENV = "ENTITY_MATCH_PREFIX_MAX_PROPOSALS"
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("%s=%r is not an integer — using %d", name, raw, default)
+        return default
+    return value if value > 0 else default
+
+
+def _scan_policy():
+    """The resolution policy this scan runs under.
+
+    The switch lives HERE rather than in ``cross_source_resolution`` on purpose:
+    that module is deliberately pure — no env, no clock, no I/O — which is what
+    makes its merge-boundary guarantee auditable by reading it. Enabling a tier is
+    an operational decision, so it belongs at the scan boundary where the other
+    operational decisions already are.
+
+    A malformed or negative value falls back to OFF and logs, rather than raising:
+    a typo in a deployment variable should not stop a scan, and silently enabling
+    a wider match would be the worse failure.
+    """
+    from .cross_source_resolution import DEFAULT_POLICY, ResolutionPolicy
+
+    raw = os.getenv(PREFIX_WORDS_ENV, "").strip()
+    if not raw:
+        return DEFAULT_POLICY
+    try:
+        words = int(raw)
+    except ValueError:
+        logger.warning(
+            "%s=%r is not an integer — leading-word matching stays OFF",
+            PREFIX_WORDS_ENV, raw,
+        )
+        return DEFAULT_POLICY
+    if words <= 0:
+        return DEFAULT_POLICY
+
+    corroborate = not _env_flag(PREFIX_NO_CORROBORATION_ENV)
+    cap = _env_int(PREFIX_MAX_ENV, DEFAULT_POLICY.max_proposals)
+
+    logger.info(
+        "Entity match scan: leading-word tier ENABLED at %d word(s) "
+        "(require_corroboration=%s, cap=%d). Cross-source pairs whose full names "
+        "differ will be PROPOSED for review — never merged.",
+        words, corroborate, cap,
+    )
+    if not corroborate:
+        # The shared-neighbour requirement is tier 4's only evidence beyond the
+        # words. Said loudly because this is the setting that fills a queue
+        # fastest, and an operator who did it by accident should be able to find
+        # out from the log rather than from the review surface.
+        logger.warning(
+            "Entity match scan: leading-word tier running WITHOUT the "
+            "corroborating-relationship requirement — any cross-source pair "
+            "sharing its first %d word(s) will be proposed on the names alone. "
+            "The cap of %d is the only bound on queue size.", words, cap,
+        )
+    return ResolutionPolicy(
+        name_prefix_words=words,
+        name_prefix_require_corroboration=corroborate,
+        max_proposals=cap,
+    )
+
+
 def scan_for_proposals(
     org_id: str, *, entity_types: Optional[Sequence[str]] = None
 ) -> RecordOutcome:
@@ -919,10 +1005,12 @@ def scan_for_proposals(
         if t in SCANNABLE_ENTITY_TYPES
     ]
 
+    policy = _scan_policy()
+
     created = refreshed = skipped = 0
     ids: List[str] = []
     for entity_type in requested:
-        decisions = resolve_org_entity_type(org, entity_type)
+        decisions = resolve_org_entity_type(org, entity_type, policy=policy)
         outcome = record_proposals(org, decisions)
         created += outcome.created
         refreshed += outcome.refreshed
