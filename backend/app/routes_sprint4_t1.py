@@ -389,6 +389,37 @@ def _run_trackb_and_persist(
         db.run_kv_set("opps", run_id, opps)
         db.run_kv_set("evidence", run_id, ev)
 
+        # R16-B1 (T6): persist the queryable evidence-pointer trail so a finding
+        # can later be walked back to the source artifacts that produced it
+        # (source_system + source_artifact + source_timestamp).
+        #
+        # This step existed only in materialize_t2.run_trackb_and_persist, the
+        # SIBLING implementation reached via POST /api/runs/start. The product
+        # starts runs through POST /api/runs/{id}/compute, which lands here — so in
+        # practice no run stored pointers, 2.0-B1's trace never reached its
+        # source-record layer, and every finding reported
+        # `complete: false / no_source_record`. The chain looked thin because the
+        # provenance was never written, not because the finding was.
+        #
+        # Kept identical to the sibling (same arguments, same non-blocking posture)
+        # rather than factored out: consolidating the two ~300-line materialisation
+        # functions is a separate change with its own blast radius, and leaving this
+        # gap open until then would be the worse trade. A unit test asserts both
+        # paths write pointers so they cannot drift apart again.
+        try:
+            from .evidence_pointers import store_evidence_pointers
+
+            store_evidence_pointers(
+                run_id, opps, evidence=ev,
+                run_completed_at=payload.get("completedAt"),
+            )
+        except Exception as e:  # noqa: BLE001 — provenance storage is additive.
+            errors["evidence_pointers"] = str(e)
+            logger.warning(
+                "Evidence pointer storage failed (non-blocking): %s", e
+            )
+
+
         # R16-B1 (T4): persist one per-run opportunity_instance per opportunity,
         # carrying the stable opportunity_identity + run-specific score/confidence/
         # evidence/narrative (R16-B1 §2a). Built from the RAW runner opportunities
