@@ -8,11 +8,18 @@ import type {
 } from "../../types/analystReview";
 
 function movementLabel(ranking: OpportunityRanking): string {
-  const moved = ranking.reason?.ranksMoved ?? Math.abs(ranking.moved ?? 0);
-  const direction = (ranking.reason?.direction ?? (ranking.moved < 0 ? "up" : "down")) === "up"
-    ? "higher"
-    : "lower";
-  return `Ranked ${direction}${moved ? ` by ${moved} rank${moved === 1 ? "" : "s"}` : ""}`;
+  const movedValue = typeof ranking.moved === "number" ? ranking.moved : null;
+  const moved = ranking.reason?.ranksMoved ?? Math.abs(movedValue ?? 0);
+  const direction =
+    ranking.reason?.direction ??
+    (movedValue === null ? null : movedValue < 0 ? "up" : "down");
+  if (direction !== "up" && direction !== "down") {
+    return moved
+      ? `Rank adjusted by ${moved} rank${moved === 1 ? "" : "s"}`
+      : "Rank adjusted";
+  }
+  const directionLabel = direction === "up" ? "higher" : "lower";
+  return `Ranked ${directionLabel}${moved ? ` by ${moved} rank${moved === 1 ? "" : "s"}` : ""}`;
 }
 
 function hasReason(ranking: OpportunityRanking | null | undefined): ranking is OpportunityRanking & {
@@ -20,7 +27,7 @@ function hasReason(ranking: OpportunityRanking | null | undefined): ranking is O
 } {
   return Boolean(
     ranking?.adjusted &&
-      ranking.moved !== undefined &&
+      typeof ranking.moved === "number" &&
       ranking.reason?.summary,
   );
 }

@@ -391,6 +391,7 @@ class TestTheCopyNeverOverclaims:
             "Prove value fast with low-effort quick wins.",
             "Scale into strategic pilots with cross-team alignment.",
             "Invest in complex opportunities requiring deeper data + governance.",
+            "Recommend reviewing the adjustment history before reset.",
         ],
     )
     def test_legitimate_copy_is_not_flagged(self, text):

@@ -72,7 +72,7 @@ def _read_run_for_org(run_id: str) -> Dict[str, Any]:
         raise HTTPException(404, "run not found")
 
     run_org = _run_org_id(run if isinstance(run, dict) else {})
-    if run_org and run_org != get_current_org_id():
+    if run_org != get_current_org_id():
         raise HTTPException(404, "run not found")
     return run if isinstance(run, dict) else {}
 
@@ -233,7 +233,7 @@ def explain_adjustment(
     )
 
     record = result.by_opportunity_id().get(opportunity_id)
-    if record is None or (not record.moved and not record.was_capped):
+    if record is None or (record.moved is None and not record.was_capped):
         raise HTTPException(404, "no ranking adjustment for this opportunity")
 
     return {

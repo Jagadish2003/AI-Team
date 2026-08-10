@@ -141,6 +141,16 @@ class TestTheCapIsRealNotDecorative:
             for slot, base_index in enumerate(placement):
                 assert abs(slot - base_index) <= cap
 
+    def test_bounded_placement_uses_rank_delta_as_target_tie_break(self):
+        """A claimed target slot should beat its current incumbent."""
+
+        keys = [
+            (0.0, 0, 0),   # incumbent at slot 0
+            (0.0, -1, 1),  # asks to move up into slot 0
+        ]
+
+        assert _bounded_placement(keys, max_move=1) == [1, 0]
+
     def test_no_finding_moves_further_than_the_rank_cap(self):
         """Asserted on real output from the real function, on data that BITES.
 

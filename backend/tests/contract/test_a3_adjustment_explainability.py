@@ -124,11 +124,15 @@ def _opp(index: int, detector: str, impact: int = 7):
     }
 
 
-def _run_with_opps(opps: List[Dict[str, Any]]) -> str:
-    from app.db import run_kv_set
-    from app.run_store import start_run_
+def _run_with_opps(org: str, opps: List[Dict[str, Any]]) -> str:
+    from app.db import run_kv_set, upsert_run
+    from app.run_store import read_run, start_run_
 
     run_id = start_run_({"pack": "service_cloud"})["runId"]
+    run = read_run(run_id)
+    run["org_id"] = org
+    run["orgId"] = org
+    upsert_run(run_id, run)
     run_kv_set("opps", run_id, opps)
     return run_id
 
@@ -145,7 +149,7 @@ def adjusted(client):
     opps = [_opp(i, "DISFAVOURED") for i in range(5)]
     opps += [_opp(i + 5, "FAVOURED") for i in range(5)]
     opps.append(_opp(10, "NEUTRAL"))
-    run_id = _run_with_opps(opps)
+    run_id = _run_with_opps(org, opps)
     return {"org": org, "run_id": run_id, "opps": opps, "decisions": decisions}
 
 

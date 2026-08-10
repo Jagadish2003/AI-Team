@@ -215,11 +215,15 @@ def _opps() -> List[Dict[str, Any]]:
     ]
 
 
-def _run_with_opps(opps: List[Dict[str, Any]]) -> str:
-    from app.db import run_kv_set
-    from app.run_store import start_run_
+def _run_with_opps(org: str, opps: List[Dict[str, Any]]) -> str:
+    from app.db import run_kv_set, upsert_run
+    from app.run_store import read_run, start_run_
 
     run_id = start_run_({"pack": "service_cloud"})["runId"]
+    run = read_run(run_id)
+    run["org_id"] = org
+    run["orgId"] = org
+    upsert_run(run_id, run)
     run_kv_set("opps", run_id, opps)
     return run_id
 
@@ -240,12 +244,13 @@ class TestAdversarialTwoOrgIsolation:
         assert client.get(BASE, headers=_auth(org_b)).json()["groups"] == []
 
         opps = _opps()
-        run_id = _run_with_opps(opps)
+        run_id_a = _run_with_opps(org_a, opps)
+        run_id_b = _run_with_opps(org_b, opps)
         served_a = client.get(
-            f"/api/runs/{run_id}/opportunities", headers=_auth(org_a)
+            f"/api/runs/{run_id_a}/opportunities", headers=_auth(org_a)
         ).json()
         served_b = client.get(
-            f"/api/runs/{run_id}/opportunities", headers=_auth(org_b)
+            f"/api/runs/{run_id_b}/opportunities", headers=_auth(org_b)
         ).json()
 
         assert _ids(served_a) != _ids(opps), (
@@ -256,9 +261,14 @@ class TestAdversarialTwoOrgIsolation:
         )
         assert all("_ranking" not in row for row in served_b)
 
-        preview_b = client.get(f"{BASE}/preview/{run_id}", headers=_auth(org_b)).json()
+        preview_b = client.get(
+            f"{BASE}/preview/{run_id_b}", headers=_auth(org_b)
+        ).json()
         assert preview_b["learningActive"] is False
         assert "not yet active" in (preview_b["inactiveReason"] or "")
+
+        cross_preview = client.get(f"{BASE}/preview/{run_id_a}", headers=_auth(org_b))
+        assert cross_preview.status_code == 404
 
     def test_cross_org_feedback_entry_is_not_found(self, client):
         org_a, org_b = _org(), _org()
@@ -303,7 +313,7 @@ class TestResetIsOrgScoped:
         assert all(row["changeKind"] != "reset" for row in b_history_after)
 
         opps = _opps()
-        run_id = _run_with_opps(opps)
+        run_id = _run_with_opps(org_b, opps)
         served_b = client.get(
             f"/api/runs/{run_id}/opportunities", headers=_auth(org_b)
         ).json()
