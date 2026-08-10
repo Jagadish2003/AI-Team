@@ -1755,6 +1755,20 @@ def _emit_billing_run_completed(
             _seq: Optional[int] = billing_chain.next_seq(org_id)
         except Exception:
             _seq = None
+        # started_at/completed_at stay the authoritative record (an invoice needs to
+        # know WHICH billing period a run falls in, not just how long it took).
+        # duration_ms is derived from them purely so record_event's promoted column
+        # of the same name is populated here as it is on run.completed — it is a
+        # query/index convenience, never a second source of truth. Defensive: an
+        # unparseable or naive started_at yields None rather than breaking metering.
+        _completed_dt = datetime.now(timezone.utc)
+        try:
+            _duration_ms: Optional[int] = int(
+                (_completed_dt - datetime.fromisoformat(started_at)).total_seconds()
+                * 1000
+            )
+        except Exception:
+            _duration_ms = None
         record_event(
             "billing.run_completed",
             {
@@ -1766,7 +1780,8 @@ def _emit_billing_run_completed(
                 "pack_ids": [pack_id] if pack_id else [],
                 "deployment_type": deployment_type,
                 "started_at": started_at,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": _completed_dt.isoformat(),
+                "duration_ms": _duration_ms,
                 "seq": _seq,
                 "source": "run_pipeline",
             },

@@ -198,3 +198,80 @@ def test_offline_run_emits_billing_run_completed(monkeypatch, mode):
     assert (p["connected_system_count"] is None) or isinstance(p["connected_system_count"], int)
     assert p["run_id"] and p["org_id"]
     assert p["started_at"] and p["completed_at"]
+
+
+# ---------------------------------------------------------------------------
+# duration_ms — the promoted telemetry column (see telemetry.record_event, which
+# fills the duration_ms COLUMN from a payload key of the same name). started_at /
+# completed_at stay the authoritative record; duration_ms is DERIVED from them so
+# the column is populated here as it is on run.completed. It must therefore always
+# agree with them exactly, and must never break metering on a bad started_at.
+# ---------------------------------------------------------------------------
+def test_duration_ms_is_present_and_matches_the_timestamps(monkeypatch):
+    """duration_ms == completed_at - started_at, exactly (no drift, no second clock read)."""
+    import datetime as _dt
+
+    from discovery import runner
+
+    monkeypatch.setenv("MODEL_GENERATION_PROVIDER", "hosted")
+    monkeypatch.setattr("app.license_limits.count_connected_systems", lambda org: 1)
+    events = _capture(monkeypatch)
+
+    started = "2026-01-01T00:00:00+00:00"
+    runner._emit_billing_run_completed(
+        org_id="org-D",
+        run_id="run-D",
+        pack_id="service_cloud",
+        deployment_type=None,
+        started_at=started,
+    )
+
+    p = [pl for et, pl in events if et == "billing.run_completed"][0]
+    assert isinstance(p["duration_ms"], int)
+    expected = int(
+        (
+            _dt.datetime.fromisoformat(p["completed_at"])
+            - _dt.datetime.fromisoformat(p["started_at"])
+        ).total_seconds()
+        * 1000
+    )
+    # Exact, not approximate: completed_at and duration_ms are derived from ONE
+    # clock read, so a mismatch means someone reintroduced a second now() call.
+    assert p["duration_ms"] == expected
+    assert p["started_at"] == started
+
+
+@pytest.mark.parametrize(
+    "bad_started_at",
+    ["2026-01-01T00:00:00", "not-a-timestamp", "", None],
+    ids=["naive-no-tz", "garbage", "empty", "none"],
+)
+def test_duration_ms_degrades_to_none_and_never_breaks_metering(monkeypatch, bad_started_at):
+    """An unparseable/naive started_at yields duration_ms=None — the event is STILL
+    emitted. Metering must never raise into a discovery run."""
+    from discovery import runner
+
+    monkeypatch.setenv("MODEL_GENERATION_PROVIDER", "hosted")
+    monkeypatch.setattr("app.license_limits.count_connected_systems", lambda org: 0)
+    events = _capture(monkeypatch)
+
+    runner._emit_billing_run_completed(
+        org_id="org-E",
+        run_id="run-E",
+        pack_id="ncino",
+        deployment_type=None,
+        started_at=bad_started_at,
+    )
+
+    billing = [pl for et, pl in events if et == "billing.run_completed"]
+    assert len(billing) == 1, "the event must still be emitted"
+    assert billing[0]["duration_ms"] is None
+    assert billing[0]["started_at"] == bad_started_at
+
+
+def test_duration_ms_is_declared_on_the_payload_schema():
+    """The registered schema must declare duration_ms, so the field is part of the
+    event contract rather than an undeclared extra key."""
+    from app.telemetry import BillingRunCompletedPayload
+
+    assert "duration_ms" in BillingRunCompletedPayload.__annotations__

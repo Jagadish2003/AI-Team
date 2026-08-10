@@ -1100,7 +1100,11 @@ class BillingRunCompletedPayload(TypedDict, total=False):
     is the org's connected Integration-Hub entities (the pricing "one connected
     entity = one system" definition), NOT the number of source systems ingested by
     this run. pack_ids is a list (forward-compatible with multi-pack runs, P1).
-    deployment_type is the license topology stamped from L1.
+    deployment_type is the license topology stamped from L1. duration_ms is DERIVED
+    from started_at/completed_at (which stay authoritative — an invoice needs the
+    billing period, not just the elapsed time); it exists so record_event's promoted
+    column of the same name is populated here as it is on run.completed, and is a
+    query/index convenience, never a second source of truth.
 
     PII/secret guard: identifiers, mode, counts, pack ids, and timestamps only —
     never prompt/output text, tokens, or credentials.
@@ -1114,6 +1118,7 @@ class BillingRunCompletedPayload(TypedDict, total=False):
     deployment_type: NotRequired[Optional[str]]
     started_at: NotRequired[Optional[str]]
     completed_at: NotRequired[Optional[str]]
+    duration_ms: NotRequired[Optional[int]]
 
 
 class OpportunityLifecycleTransitionPayload(TypedDict, total=False):
