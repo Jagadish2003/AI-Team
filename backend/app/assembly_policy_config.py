@@ -32,6 +32,13 @@ is — the same fail-safe rule ``context_assembly`` already applies to provenanc
 (only an explicit ``observed`` earns observed precedence) and to freshness (undated
 context scores least-fresh).
 
+That rule is for CANDIDATES, not for the declaration. A rank-table KEY outside
+:data:`KNOWN_DIMENSION_VALUES` is refused at load, and keys are normalised the same
+way the lookup normalises the value it matches — so ``"Structured"`` is read as
+``structured`` rather than becoming a key nothing can match, which would have sorted
+structured records last, behind conversation, and inverted the very precedence the
+declaration was written to set.
+
 A missing or unparseable config RAISES rather than falling back to defaults: a
 deployment that believes it configured its precedence and did not is worse off than
 one told the file is broken. Loaded with an mtime cache so an edit is picked up
@@ -76,6 +83,27 @@ KNOWN_DIMENSIONS: Tuple[str, ...] = (
 TABLE_BACKED_DIMENSIONS: Dict[str, str] = {
     DIMENSION_ORIGIN: "origin_ranks",
     DIMENSION_SOURCE_TYPE: "source_type_ranks",
+}
+
+#: The values each rank table may be keyed on — the SAME enumerated-vocabulary rule
+#: already applied to dimension NAMES, extended to the values, because the two fail
+#: in opposite ways and only one of them was covered.
+#:
+#: A mistyped dimension name was always refused. A mistyped rank-table KEY was not:
+#: the key was stored verbatim while ``_rank_key`` looks the candidate's value up
+#: lower-cased, so ``"Structured"`` matched nothing, fell through to
+#: :meth:`DeclaredAssemblyPolicy.unknown_rank`, and sorted structured records LAST —
+#: behind conversation. That silently inverts the precedence this module exists to
+#: declare ("structured records outrank conversational content"), and on ``origin``,
+#: a hard budget tier, it would let inferred content displace observed.
+#:
+#: Keys are normalised (stripped, lower-cased) before matching, so casing in the
+#: config is no longer significant; a value outside the vocabulary is refused.
+#: Declaring a SUBSET is fine — an undeclared value legitimately sorts last via
+#: ``unknown_rank``; that is the fail-safe for candidates, not a licence for typos.
+KNOWN_DIMENSION_VALUES: Dict[str, Tuple[str, ...]] = {
+    DIMENSION_ORIGIN: ("observed", "inferred"),
+    DIMENSION_SOURCE_TYPE: ("structured", "prose", "code", "conversation"),
 }
 
 #: The source types the assembler understands. The three content types match the
@@ -210,18 +238,44 @@ def _require_mapping(raw: Any, where: str) -> Mapping[str, Any]:
     return raw
 
 
-def _rank_table(raw: Any, where: str) -> Dict[str, int]:
-    """Validate a declared rank table: string keys, integer ranks, non-empty."""
+def _rank_table(raw: Any, where: str, *, dimension: str) -> Dict[str, int]:
+    """Validate a declared rank table: known keys, integer ranks, non-empty.
+
+    Keys are normalised the SAME way ``context_assembly._rank_key`` normalises the
+    candidate value it looks up (stripped, lower-cased), so the config and the
+    lookup cannot disagree about what ``"Structured"`` means. An unrecognised key is
+    refused rather than stored: it could never match a candidate, so keeping it
+    would silently drop a precedence rule — exactly what refusing an unknown
+    dimension name already prevents on the other half of the declaration.
+    """
     table = _require_mapping(raw, where)
     if not table:
         raise AssemblyPolicyConfigError(f"{where} must declare at least one rank")
+    allowed = KNOWN_DIMENSION_VALUES.get(dimension, ())
     parsed: Dict[str, int] = {}
+    seen: Dict[str, str] = {}
     for key, value in table.items():
         if isinstance(value, bool) or not isinstance(value, int):
             raise AssemblyPolicyConfigError(
                 f"{where}[{key!r}] must be an integer rank, got {value!r}"
             )
-        parsed[str(key)] = int(value)
+        normalised = str(key).strip().lower()
+        if allowed and normalised not in allowed:
+            raise AssemblyPolicyConfigError(
+                f"{where}[{key!r}] is not a known {dimension!r} value; known values "
+                f"are {list(allowed)}. A key no candidate can match would sort that "
+                f"content LAST via unknown_rank rather than at the rank declared "
+                f"here, silently inverting the precedence it was meant to set, so it "
+                f"is refused rather than ignored."
+            )
+        if normalised in seen:
+            raise AssemblyPolicyConfigError(
+                f"{where} declares {seen[normalised]!r} and {key!r}, which are the "
+                f"same value once normalised ({normalised!r}). Keeping one and "
+                f"discarding the other would be an arbitrary choice about precedence."
+            )
+        seen[normalised] = str(key)
+        parsed[normalised] = int(value)
     return parsed
 
 
@@ -320,9 +374,13 @@ def parse_declared_policy(
             f"declaring both is ambiguous about whether it may displace."
         )
 
-    origin_ranks = _rank_table(data.get("origin_ranks", {}), "origin_ranks")
+    origin_ranks = _rank_table(
+        data.get("origin_ranks", {}), "origin_ranks", dimension=DIMENSION_ORIGIN
+    )
     source_type_ranks = _rank_table(
-        data.get("source_type_ranks", {}), "source_type_ranks"
+        data.get("source_type_ranks", {}),
+        "source_type_ranks",
+        dimension=DIMENSION_SOURCE_TYPE,
     )
     # Every table-backed dimension actually in use must have a usable table.
     for dimension, table_key in TABLE_BACKED_DIMENSIONS.items():
@@ -471,6 +529,7 @@ __all__ = [
     "DIMENSION_FRESHNESS",
     "DIMENSION_CANDIDATE_ID",
     "KNOWN_DIMENSIONS",
+    "KNOWN_DIMENSION_VALUES",
     "TABLE_BACKED_DIMENSIONS",
     "SOURCE_TYPE_STRUCTURED",
     "SOURCE_TYPE_PROSE",

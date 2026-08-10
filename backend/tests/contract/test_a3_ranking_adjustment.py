@@ -111,11 +111,15 @@ def _seed_enough_to_activate(org: str, detector: str = "HANDOFF_FRICTION", n: in
         _record_feedback(org, _identity(), "accept", detector=detector)
 
 
-def _run_with_opps(opps: List[Dict[str, Any]]) -> str:
-    from app.db import run_kv_set
-    from app.run_store import start_run_
+def _run_with_opps(org: str, opps: List[Dict[str, Any]]) -> str:
+    from app.db import run_kv_set, upsert_run
+    from app.run_store import read_run, start_run_
 
     run_id = start_run_({"pack": "service_cloud"})["runId"]
+    run = read_run(run_id)
+    run["org_id"] = org
+    run["orgId"] = org
+    upsert_run(run_id, run)
     run_kv_set("opps", run_id, opps)
     return run_id
 
@@ -168,7 +172,7 @@ class TestTheStateIsStored:
         client.post(f"{BASE}/recompute", headers=_auth(org))
         before = client.get(BASE, headers=_auth(org)).json()["groups"][0]
 
-        run_id = _run_with_opps([_opp(i) for i in range(5)])
+        run_id = _run_with_opps(org, [_opp(i) for i in range(5)])
         client.get(f"/api/runs/{run_id}/opportunities", headers=_auth(org))
         _record_feedback(org, _identity(), "dismiss")
         client.get(f"/api/runs/{run_id}/opportunities", headers=_auth(org))
@@ -233,7 +237,7 @@ class TestTheServedRankingAdjustsWithinTheCap:
         org = _org()
         _seed_enough_to_activate(org)
         client.post(f"{BASE}/recompute", headers=_auth(org))
-        run_id = _run_with_opps([_opp(i) for i in range(6)])
+        run_id = _run_with_opps(org, [_opp(i) for i in range(6)])
 
         served = client.get(
             f"/api/runs/{run_id}/opportunities", headers=_auth(org)
@@ -252,7 +256,7 @@ class TestTheServedRankingAdjustsWithinTheCap:
         org = _org()
         _seed_enough_to_activate(org)
         client.post(f"{BASE}/recompute", headers=_auth(org))
-        run_id = _run_with_opps([_opp(i) for i in range(12)])
+        run_id = _run_with_opps(org, [_opp(i) for i in range(12)])
 
         served = client.get(
             f"/api/runs/{run_id}/opportunities", headers=_auth(org)
@@ -279,7 +283,7 @@ class TestTheServedRankingAdjustsWithinTheCap:
         # favoured ones up and push the disfavoured ones down.
         opps = [_opp(i, detector="DISFAVOURED") for i in range(5)]
         opps += [_opp(i + 5, detector="FAVOURED") for i in range(5)]
-        run_id = _run_with_opps(opps)
+        run_id = _run_with_opps(org, opps)
 
         served = client.get(
             f"/api/runs/{run_id}/opportunities", headers=_auth(org)
@@ -308,7 +312,7 @@ class TestTheServedRankingAdjustsWithinTheCap:
         _seed_enough_to_activate(org)
         client.post(f"{BASE}/recompute", headers=_auth(org))
         opps = [_opp(i) for i in range(8)]
-        run_id = _run_with_opps(opps)
+        run_id = _run_with_opps(org, opps)
 
         body = client.get(f"{BASE}/base-order/{run_id}", headers=_auth(org)).json()
         assert [row["id"] for row in body["order"]] == [o["id"] for o in opps]
@@ -320,19 +324,22 @@ class TestTheServedRankingAdjustsWithinTheCap:
         The serve path applies a pre-existing display offset to impact/effort
         (``with_display_scores`` spreads bubbles on the matrix chart), so
         comparing the served score with the stored one would fail whether or not
-        this layer existed. Serving the same run to an org with no learning
-        state isolates exactly this layer's effect.
+        this layer existed. Serving the same opportunity payload to an org with
+        no learning state isolates exactly this layer's effect. Each org gets
+        its own run because run reads are org-scoped.
         """
         org, unlearned = _org(), _org()
         _seed_enough_to_activate(org)
         client.post(f"{BASE}/recompute", headers=_auth(org))
-        run_id = _run_with_opps([_opp(i, impact=9) for i in range(6)])
+        opps = [_opp(i, impact=9) for i in range(6)]
+        run_id = _run_with_opps(org, opps)
+        baseline_run_id = _run_with_opps(unlearned, opps)
 
         with_learning = client.get(
             f"/api/runs/{run_id}/opportunities", headers=_auth(org)
         ).json()
         without = client.get(
-            f"/api/runs/{run_id}/opportunities", headers=_auth(unlearned)
+            f"/api/runs/{baseline_run_id}/opportunities", headers=_auth(unlearned)
         ).json()
         baseline = {o["id"]: o for o in without}
         for item in with_learning:
@@ -346,7 +353,7 @@ class TestTheServedRankingAdjustsWithinTheCap:
         _seed_enough_to_activate(org)
         client.post(f"{BASE}/recompute", headers=_auth(org))
         opps = [_opp(i) for i in range(8)]
-        run_id = _run_with_opps(opps)
+        run_id = _run_with_opps(org, opps)
         client.get(f"/api/runs/{run_id}/opportunities", headers=_auth(org))
 
         stored = run_kv_get("opps", run_id)
@@ -359,7 +366,7 @@ class TestTheServedRankingAdjustsWithinTheCap:
         org = _org()
         _seed_enough_to_activate(org)
         client.post(f"{BASE}/recompute", headers=_auth(org))
-        run_id = _run_with_opps([_opp(i) for i in range(10)])
+        run_id = _run_with_opps(org, [_opp(i) for i in range(10)])
 
         body = client.get(f"{BASE}/preview/{run_id}", headers=_auth(org)).json()
         assert body["applied"] is True
@@ -387,7 +394,7 @@ class TestTheRoadmapIsAdjustedOnServeNotOnBuild:
         client.post(f"{BASE}/recompute", headers=_auth(org))
 
         opps = [_opp(i) for i in range(8)]
-        run_id = _run_with_opps(opps)
+        run_id = _run_with_opps(org, opps)
         run_kv_set("roadmap", run_id, build_roadmap(opps))
 
         client.get(f"/api/runs/{run_id}/roadmap", headers=_auth(org))
@@ -411,7 +418,7 @@ class TestTheRoadmapIsAdjustedOnServeNotOnBuild:
 
         opps = [_opp(i, detector="DISFAVOURED") for i in range(4)]
         opps += [_opp(i + 4, detector="FAVOURED") for i in range(4)]
-        run_id = _run_with_opps(opps)
+        run_id = _run_with_opps(org, opps)
         run_kv_set("roadmap", run_id, build_roadmap(opps))
 
         served = client.get(
@@ -439,7 +446,7 @@ class TestTheRoadmapIsAdjustedOnServeNotOnBuild:
         client.post(f"{BASE}/recompute", headers=_auth(org))
 
         opps = [_opp(i, detector="FAVOURED") for i in range(6)]
-        run_id = _run_with_opps(opps)
+        run_id = _run_with_opps(org, opps)
         roadmap = build_roadmap(opps)
         run_kv_set("roadmap", run_id, roadmap)
 
@@ -465,7 +472,7 @@ class TestAdjustmentNeverModifiesEvidenceConfidenceOrCorroboration:
         _seed_enough_to_activate(org)
         client.post(f"{BASE}/recompute", headers=_auth(org))
         opps = [_opp(i) for i in range(8)]
-        run_id = _run_with_opps(opps)
+        run_id = _run_with_opps(org, opps)
 
         served = client.get(
             f"/api/runs/{run_id}/opportunities", headers=_auth(org)
@@ -477,20 +484,23 @@ class TestAdjustmentNeverModifiesEvidenceConfidenceOrCorroboration:
     def test_scoring_fields_are_identical_with_and_without_learning(self, client):
         """The honest form of "adjustment changes nothing but order".
 
-        Both sides go through the identical serve path; only the learning state
-        differs. Anything that differs beyond ORDER and the ``_ranking``
-        annotation is this layer modifying a finding, which it must never do.
+        Both sides go through the identical serve path with identical run
+        payloads; only the learning state differs. Anything that differs beyond
+        ORDER and the ``_ranking`` annotation is this layer modifying a finding,
+        which it must never do.
         """
         org, unlearned = _org(), _org()
         _seed_enough_to_activate(org)
         client.post(f"{BASE}/recompute", headers=_auth(org))
-        run_id = _run_with_opps([_opp(i) for i in range(8)])
+        opps = [_opp(i) for i in range(8)]
+        run_id = _run_with_opps(org, opps)
+        baseline_run_id = _run_with_opps(unlearned, opps)
 
         with_learning = client.get(
             f"/api/runs/{run_id}/opportunities", headers=_auth(org)
         ).json()
         without = client.get(
-            f"/api/runs/{run_id}/opportunities", headers=_auth(unlearned)
+            f"/api/runs/{baseline_run_id}/opportunities", headers=_auth(unlearned)
         ).json()
 
         baseline = {o["id"]: o for o in without}
@@ -518,7 +528,7 @@ class TestColdStartThroughTheRealStack:
         _record_feedback(org, _identity(), "accept")
         client.post(f"{BASE}/recompute", headers=_auth(org))
         opps = [_opp(i) for i in range(8)]
-        run_id = _run_with_opps(opps)
+        run_id = _run_with_opps(org, opps)
 
         served = client.get(
             f"/api/runs/{run_id}/opportunities", headers=_auth(org)
@@ -529,7 +539,7 @@ class TestColdStartThroughTheRealStack:
         org = _org()
         _record_feedback(org, _identity(), "accept")
         client.post(f"{BASE}/recompute", headers=_auth(org))
-        run_id = _run_with_opps([_opp(i) for i in range(4)])
+        run_id = _run_with_opps(org, [_opp(i) for i in range(4)])
 
         body = client.get(f"{BASE}/preview/{run_id}", headers=_auth(org)).json()
         assert body["learningActive"] is False
@@ -578,7 +588,7 @@ class TestColdStartThroughTheRealStack:
     def test_an_org_that_never_recomputed_serves_base_order(self, client):
         org = _org()
         opps = [_opp(i) for i in range(6)]
-        run_id = _run_with_opps(opps)
+        run_id = _run_with_opps(org, opps)
         served = client.get(
             f"/api/runs/{run_id}/opportunities", headers=_auth(org)
         ).json()
@@ -606,7 +616,7 @@ class TestTwoOrgIsolation:
         client.post(f"{BASE}/recompute", headers=_auth(org_a))
 
         opps = [_opp(i) for i in range(10)]
-        run_id = _run_with_opps(opps)
+        run_id = _run_with_opps(org_b, opps)
         served_b = client.get(
             f"/api/runs/{run_id}/opportunities", headers=_auth(org_b)
         ).json()
