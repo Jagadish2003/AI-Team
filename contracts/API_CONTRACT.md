@@ -1,14 +1,280 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.24
+Version: v1.30
 Date: 2026-08-06
 
-> v1.24 - PR-fix pass (capped zero-displacement ranking adjustments).
-> `_ranking.adjusted` means the learned ranking layer applied to that finding,
-> even when `moved` is `0` because a configured cap kept the final position in
-> place. Such capped records may carry `reason`, and
-> `GET /api/learning/adjustment/explain/{runId}/{opportunityId}` explains them
-> instead of treating them as unadjusted. A finding with no learned adjustment
-> still carries no `reason`. Additive; existing `moved` semantics are unchanged.
+> v1.30 — 2.0-C4 T5 (Deprecation Lifecycle Audit): all three deprecation transitions
+> are audit events, and are readable as one trail. One new route and one new audit
+> event type; no existing response shape changes.
+>
+> **The gap this closes.** Migration (`pack_migration_applied` /
+> `pack_migration_reverted`, v1.28) and post-grace disable (`pack_deprecation_disabled`,
+> v1.29) already reached the audit log. **Deprecation itself did not** — a declaration
+> is a registry fact, and nothing recorded that a particular organisation had ever come
+> under it.
+>
+> **New audit event — `pack_deprecation_announced`.** Written when an org's pack
+> selection is resolved for a run while a deprecated pack is in it: the org-scoped
+> moment the deprecation actually bears on a customer. Payload: `pack_id`,
+> `pack_version`, `phase`, `reason`, `deprecated_on`, `grace_ends_on`,
+> `replacement_pack_id`, `fingerprint`.
+>
+> Emitted **once per (org, pack, declared terms)** — a repeat run is silent, but moving
+> the grace date, changing the replacement, or restating the reason announces again,
+> because that is materially different notice. A pack sliding from `grace` into
+> `grace_expired` is NOT new terms (that is the announced terms coming true, and
+> `pack_deprecation_disabled` records it).
+>
+> **New route — `GET /api/packs/deprecation/audit` (owner).**
+> Query: `packId` (optional), `limit` (1–1000, default 200).
+> Returns `{ orgId, packId, eventTypes[], transitions{}, entries[] }`, newest first.
+> Each entry is `{ id, eventType, transition, actorId, runId, packId, payload, at }`.
+>
+> `transitions` maps the three the story names to the audit event types that record
+> each — `deprecated` → `[pack_deprecation_announced]`, `migrated` →
+> `[pack_migration_applied, pack_migration_reverted]`, `retired` →
+> `[pack_deprecation_disabled]` — so a consumer does not hard-code that applied and
+> reverted are two halves of one transition.
+>
+> **Owner, deliberately** — the same bar as `GET /api/audit-log`, whose rows these are.
+> These events remain available there too; this route is the same data through a
+> narrower, transition-labelled lens. A read failure is an error, never an empty
+> `entries` list: an audit surface reporting "nothing happened" when it could not read
+> would mislead a reviewer.
+
+> v1.29 — 2.0-C4 T4 (Deprecation Grace Behaviour): a pack whose announced grace
+> period has ended is moved to safe-disabled and dropped from future runs. Additive
+> only — one new `reason` value on an existing field; no new routes and no shape
+> change.
+>
+> **A pack still INSIDE its grace is unaffected.** It activates, executes, and is
+> reported exactly as it was before the notice appeared. Nothing in this version
+> changes for it.
+>
+> **Extended shapes:**
+> - `excludedPacks[]` (on `LaunchResponse` and the run record) and `excluded_packs[]`
+>   (on `GET /api/run-health/packs`) — `reason` gains the value
+>   **`deprecation_grace_expired`** alongside the existing `pack_disabled`. `state`
+>   is `disabled` for both.
+> - `pack.execution_skipped` telemetry — the top-level `reason` is now derived from
+>   the exclusions present, so a mixed selection reports
+>   `"deprecation_grace_expired,pack_disabled"`. A homogeneous exclusion still
+>   reports exactly the single value it always did.
+>
+> **The two reasons are not interchangeable and a consumer must not collapse them.**
+> `pack_disabled` means the organisation turned the pack off and can turn it back on.
+> `deprecation_grace_expired` means the vendor retired it on the announced date —
+> re-enabling it does NOT bring it back (the next activation retires it again), and
+> the remedy is the replacement pack. A UI that labels both "disabled" sends the
+> operator to a control that cannot help them.
+>
+> The **409** from `POST /api/stack-builder/launch` and `POST /api/runs/{runId}/compute`
+> when every selected pack is excluded now names any retired packs separately and
+> points at migration rather than at re-enabling.
+>
+> The transition is an audit event (`pack_deprecation_disabled`) attributed to
+> `system:pack_deprecation`, and emits `pack.deprecation_disabled` telemetry. Nothing
+> historical is affected: runs, findings, and evidence produced while the pack was
+> supported are untouched and remain retrievable.
+
+> v1.28 — 2.0-C4 T3 (Pack Migration Assist): where a deprecated pack declares a
+> replacement, an org can migrate its saved run configuration onto it — previewed
+> first, applied only on confirmation, and reversible. Four entirely NEW routes; no
+> existing response shape changes, so a pre-v1.28 consumer is unaffected.
+>
+> **New routes** (all org-scoped from the authenticated context; a request body never
+> carries an org id):
+> - `GET /api/packs/{packId}/migration/preview` (**analyst+**) → `PackMigrationPlan`.
+>   Writes nothing.
+> - `POST /api/packs/{packId}/migration/apply` (**owner**) →
+>   `{ confirm: true, fingerprint?, reason? }` → `PackMigrationRecord`.
+> - `POST /api/packs/migrations/{migrationId}/revert` (**owner**) →
+>   `{ force?, reason? }` → `PackMigrationRecord`.
+> - `GET /api/packs/migrations` (**analyst+**) →
+>   `{ orgId, migrations: PackMigrationRecord[] }`, newest first.
+>
+> **New shape — `PackMigrationPlan`:**
+> `{ orgId, packId, packName, replacementPackId, replacementPackName, available,
+> applicable, reason, reasonCode, changes[], unmapped[], warnings[], deprecation
+> (`PackDeprecationNotice | null`), evaluatedOn, fingerprint }`.
+>
+> `reason` is the sentence to display; `reasonCode`
+> (`"not_deprecated" | "no_replacement_declared"`, empty when a migration IS
+> available) is the same thing machine-readable, so a consumer branches on the code
+> rather than matching on prose.
+>
+> Two words carry the meaning, and they are not the same word. `available` is "a
+> migration exists" (the pack is deprecated AND names a registered replacement);
+> `applicable` is "and this org's configuration actually references the pack".
+> **`available: false` is a 200 with a `reason`, not an error** — a surface has to
+> explain "this pack names no replacement" to the customer.
+>
+> - `changes[]`: `{ surface: "stack_builder_setup_state", field, previousValue,
+>   newValue, description }`. `previousValue` is carried so the migration can be
+>   reverted to exactly what was there. Migrated fields are the SELECTION fields
+>   only: `packId`, `packIds`, `templateId`, `templateIds`.
+> - `unmapped[]`: `{ surface, field, value, reason:
+>   "no_replacement_template" | "ambiguous_replacement_template", detail }` — a
+>   reference deliberately left alone. Reported, never silently skipped.
+> - `warnings[]`: `{ code, detail }` — `replacement_pack_disabled`,
+>   `replacement_pack_incompatible`, `template_contributions_need_review`,
+>   `grace_period_expired`, `deprecation_declaration_issues`. Advisory; none blocks.
+>
+> **New shape — `PackMigrationRecord`:**
+> `{ id, kind: "apply" | "revert", orgId, packId, replacementPackId, changes[],
+> unmapped[], warnings[], reason, actorId, at, fingerprint, revertsMigrationId,
+> reverted, revertedAt, revertedBy, changed }`. The ledger is APPEND-ONLY: a revert
+> adds a row and `reverted` on the original is derived from it, so both halves of the
+> decision stay readable.
+>
+> **`fingerprint` ties the preview to the apply.** Post back the fingerprint of the
+> plan that was displayed; if the configuration or the declaration moved in between,
+> the apply is refused with 409 rather than applying a change set nobody saw.
+>
+> **Status codes:** 400 `confirm` not true · 404 unknown pack or migration id ·
+> 409 nothing to migrate / stale fingerprint / already reverted / the target fields
+> were edited after the migration (use `force` to restore anyway) · 200 including an
+> apply with nothing to change, which reports `changed: false` (idempotent).
+>
+> A migration only affects FUTURE runs. Historical runs, findings, and evidence keep
+> the pack they were produced with; nothing is rewritten and nothing is deleted.
+
+> v1.27 — 2.0-C4 T2 (Pack Deprecation Notice Surfacing): a pack that is being
+> superseded now carries a notice at run configuration, in run health, and on its
+> findings, with the date it stops being supported and what replaces it. All fields
+> are additive; no pack ships a deprecation today, so every shape below is absent or
+> null on current responses and a pre-v1.27 consumer is unaffected.
+>
+> **A notice is present ONLY for a deprecated pack.** There is no "not deprecated"
+> object: the field is `null`/absent otherwise, so a consumer renders a notice or
+> renders nothing. Do not synthesise one.
+>
+> **New shape — `PackDeprecationNotice`** (identical on every surface, built once
+> server-side so the three surfaces cannot word it differently):
+> `{ packId, version, phase: "grace" | "grace_expired", label, statusLabel, reason,
+> deprecatedOn (YYYY-MM-DD), graceEndsOn (YYYY-MM-DD, "" ⇒ no removal date
+> announced), daysRemaining (number | null), replacementPackId ("" ⇒ none named),
+> replacementLabel, summary }`.
+>
+> `phase` is `grace` while the pack still runs normally and `grace_expired` once the
+> announced grace period has passed. An empty `graceEndsOn` never expires.
+>
+> **Extended shapes:**
+> - `GET /api/packs/state` — each pack row gains `deprecation`
+>   (`PackDeprecationNotice | null`; null for a live pack and for an orphaned row).
+> - `GET /api/run-health/packs` — each pack row gains `deprecated` (true, absent
+>   otherwise), `deprecation_phase`, `deprecation_label`, `deprecation_reason`,
+>   `deprecation_on`, `deprecation_ends_on` (null ⇒ no announced date),
+>   `deprecation_days_remaining`, `deprecation_replacement_pack_id`,
+>   `deprecation_replacement_label`, `deprecation_notice`.
+> - `OpportunityCandidate` — gains `packDeprecated` (true, absent otherwise),
+>   `packDeprecationPhase`, `packDeprecationLabel`, `packDeprecationNotice`, and —
+>   only when declared — `packDeprecationEndsOn`, `packDeprecationReplacementPackId`,
+>   `packDeprecationReplacementLabel`. Absent rather than empty, so a surface never
+>   renders a date or replacement with nothing after it.
+> - Run record / `pack_deprecations` run-scoped KV — gains `packDeprecations`, the
+>   deprecation position of each activated pack AS EVALUATED AT LAUNCH
+>   (`{ evaluatedOn, evaluated[], deprecated[], inGrace[], graceExpired[],
+>   replacements{}, packs[] }`). This is an AUDIT record: every display surface
+>   reports the LIVE position, because "is this pack still supported" is a question
+>   about now.
+>
+> Deprecation is a THIRD orthogonal fact beside pack state (2.0-C1) and certification
+> (2.0-C2). A pack can be active, current, certified, and deprecated at once; none of
+> those fields implies another. A deprecated pack in grace runs normally, so a
+> consumer must not present it as an error or as unhealthy.
+
+> v1.26 — 2.0-C3 T6 (Sandbox Validation): installing a pack runs its manifest
+> through validation and its fixtures through the harness, and **activation re-runs
+> both** against today's platform rather than trusting the install-time verdict.
+> Additive; no existing field changed meaning.
+>
+> **New endpoint**
+> - `GET /api/packs/installed/{packId}/validation` (**analyst+**) —
+>   `{ packId, packVersion, status, fixtureCount, validation }`. **404** when the
+>   pack is not installed. Analyst rather than viewer because the reasons quote
+>   partner-supplied manifest and fixture text.
+>
+> **`SandboxValidation`** (the `validation` object, also additive on every
+> `InstalledPack`): `ok` (boolean), `stage`
+> (`admission` | `validation` | `fixtures` | `lint` | `passed`), `reasons[]`,
+> `notes[]`, `caseCount`, `recordCount`, `durationMs`, `platformVersion`,
+> `checkedAt`, and `limits` (`maxCases`, `maxRecordsPerCase`, `maxTotalRecords`,
+> `maxFixtureBytes`, `timeoutSeconds`). `InstalledPack` also gains `fixtureCount`.
+> `validation` is **null** only for a record written before this version — an
+> absent verdict is reported as absent, never as a pass.
+>
+> **New status code** — **409** `sandbox_limit_exceeded` on install or activation:
+> the pack's fixtures are too large or too slow to judge within this deployment's
+> limits. Deliberately distinct from `validation_failed` — "too expensive to judge"
+> and "judged and found wrong" need different actions from the author.
+>
+> **Activation re-runs the gates.** `PUT .../activation` with `active: true` now
+> runs sandbox validation *before* compatibility and the certification floor, so a
+> pack that was installable last month can be refused today with specific reasons.
+> `active: false` runs no gates and is never blocked.
+
+> v1.25 — 2.0-C3 T4 (Pack Packaging & Installation): an authored ("partner") pack
+> installs from a **signed bundle**, gated by C1 compatibility and C2 certification
+> policy. Entirely new routes; no existing response shape changed.
+>
+> **New endpoints**
+> - `POST /api/packs/install` (**owner**, 201) — body
+>   `{ "bundleBase64": string, "activate"?: boolean }`. Returns the installed-pack
+>   record plus `compatibility` (the C1 verdict as evaluated at install) and
+>   `bundle` (`digest`, `keyId`, `fileCount`).
+> - `GET /api/packs/installed` (**viewer+**) — `{ packs: InstalledPack[], count }`.
+> - `PUT /api/packs/installed/{packId}/activation` (**owner**) — body
+>   `{ "active": boolean }`, the TARGET state, so the call is idempotent.
+>
+> **`InstalledPack`**: `packId`, `packName`, `packVersion`, `status`
+> (`installed` | `active` | `inactive`), `active` (boolean), `manifestFingerprint`,
+> `bundleDigest`, `publisher`, `signingKeyId`, `certificationLevel` (always
+> `community` — see below), `certificationLabel`, `requestedCertificationLevel`,
+> `revision`, `installedBy`, `createdAt`, `updatedAt` (v1.26 adds `validation`
+> and `fixtureCount`).
+>
+> **An authored pack is always `community`.** `requestedCertificationLevel` is what
+> the publisher ASKED for; only a CloudFulcrum signature (2.0-C2) grants a level. A
+> consumer must never render the requested level as a badge.
+>
+> **Status codes** — every gate refuses with the gate NAMED in
+> `detail.error`, and `detail.failures[]` lists the specific problems:
+> - **409** `bundle_unverified` (unsigned / tampered / untrusted publisher),
+>   `validation_failed` (manifest schema, author fixtures, or lint),
+>   `incompatible_with_platform`, `certification_policy_violation`,
+>   `reserved_pack_id`;
+> - **400** `bundleBase64` is not valid base64; **413** body above the size cap;
+> - **404** activating a pack that is not installed;
+> - **503** `certification_policy_unavailable` — the floor could not be READ, which
+>   is deliberately distinct from having determined non-compliance.
+>
+> **Withdrawal is never a delete.** `active: false` writes `status: "inactive"`; the
+> record, its manifest, and its bundle provenance remain readable.
+
+> v1.24 — 2.0-C2 T5 (Certification Expiry): a certification now expires on TWO
+> rules — the platform-version scope it was reviewed against, and the age of the
+> review itself. All fields are additive and optional.
+>
+> **Review-due FLAGS, it never revokes.** A due certification keeps its verified
+> `level`, still displays it, and still activates (including under a T4
+> "Certified only" policy). Consumers must not treat `reviewDue` as a downgrade.
+>
+> **Extended shapes:**
+> - `PackCertification` (every surface: `GET /api/packs/state`,
+>   `packCertifications` on the run record and executive report,
+>   `GET /api/packs/{packId}/certification/reviews`) gains `reviewDueDetail`
+>   (string | null — one sentence naming WHICH rule fired) and `reviewDueOn`
+>   (`YYYY-MM-DD` | null — when it falls due, so a surface can warn BEFORE the flag
+>   flips). The full verdict shape additionally carries `reviewDueReasons`
+>   (string[]; a certification can trip both rules at once).
+> - `GET /api/run-health/packs` — each pack row gains
+>   `certification_review_due_detail` and `certification_review_due_on`.
+> - `GET /api/packs/{packId}/certification/reviews` and the certification summary
+>   gain `reviewDueOn` (`Record<packId, YYYY-MM-DD>`).
+>
+> Review-due reason values: `reviewed_against_older_platform`,
+> `review_date_older_than_interval`, `reviewed_against_platform_version_undeclared`,
+> `review_date_unreadable`.
 
 > v1.23 — PR-fix pass (run-health checkpoint streams + adjustment rank scope).
 > Two additive fields that shipped in code without a contract entry, recorded
@@ -144,6 +410,185 @@ Date: 2026-08-06
 > `frontend/src/types/executiveReport.ts`, and
 > `frontend/src/types/analystReview.ts`; this version requires FE and BE lead
 > sign-off before merge.
+
+> v1.19 — 2.0-C2 T4 (Pack Certification Policy Control): an org can restrict which
+> certification levels may be activated, Owner-controlled and enforced at activation.
+> New routes plus additive fields; a pre-v1.19 consumer is unaffected, and an org
+> that sets no policy behaves exactly as before.
+>
+> **New routes** (`app/routes_pack_certification.py`):
+> - `GET /api/packs/certification/policy` (viewer+) — `PackCertificationPolicy` =
+>   `{ orgId, minimumLevel: "certified" | "partner" | "community", minimumLevelLabel,
+>   restricted (boolean), label, revision, reason, updatedBy, updatedAt }`. Viewer+
+>   because a user who cannot select a pack must be able to see the rule stopping
+>   them. **503** when the policy cannot be read — deliberately NOT "unrestricted".
+> - `PUT /api/packs/certification/policy` (**owner**) — body
+>   `{ minimumLevel, reason?: string }`. The floor is a MINIMUM, not a list: the
+>   levels are ordered, so an org accepting Partner necessarily accepts Certified.
+>   `"community"` lifts the restriction (a write, not a delete — the change stays on
+>   the audit trail). Idempotent; the response adds `previousMinimumLevel`,
+>   `changed`, and `levels`.
+>
+> **Extended responses:**
+> - `GET /api/packs/state` — gains `certificationPolicy`
+>   (`PackCertificationPolicy | null`; `null` means it could not be read, never
+>   "unrestricted"), and each `PackStateItem` gains `activationBlocked` (boolean) and
+>   `activationBlockedReason` (string | null). Advisory, so a selection surface can
+>   grey a pack out rather than 409 after a run is configured; the enforcement point
+>   is activation.
+> - `POST /api/stack-builder/launch` and `POST /api/runs/{runId}/compute` — may now
+>   return **409** when a selected pack is below the org's certification floor (the
+>   detail names each pack, the level it holds, and the level required), and **503**
+>   when the policy itself cannot be read. The policy gate FAILS CLOSED: unlike every
+>   other pack-lifecycle read, an unreadable policy refuses activation rather than
+>   assuming no restriction.
+
+> v1.18 — 2.0-C2 T3 (Pack Certification Surfacing): the certification LEVEL is now
+> reported wherever a pack is selected, activated, or attributed. Every field is
+> additive and optional; a pre-v1.18 consumer is unaffected, and a response served
+> before the field existed simply omits it.
+>
+> **One rule across every surface:** the reported `level` is the EFFECTIVE,
+> signature-verified level. A pack claiming Certified whose signature does not
+> verify is reported as `community` everywhere at once (2.0-C2 AC1), with
+> `declaredLevel` preserving the claim. Consumers must render `level`, never
+> `declaredLevel`.
+>
+> `PackCertification` = `{ packId, level: "certified" | "partner" | "community",
+> label, statusLabel, declaredLevel, reviewDue (boolean) }`.
+>
+> **Extended responses:**
+> - `GET /api/packs/state` — each `PackStateItem` gains `certification`
+>   (`PackCertification | null`). `null` for an ORPHANED row (a pack the registry no
+>   longer declares) or when the badge could not be resolved — never a guessed level.
+>   *Selection.*
+> - `POST /api/stack-builder/launch` — the run record and the run-scoped
+>   `pack_certifications` KV gain `packCertifications`
+>   (`Record<string, PackCertification>`), the level each activated pack held at
+>   launch. Audit record: display surfaces read the live level. *Activation.*
+> - `GET /api/run-health/packs` — each pack row gains `certification_level`,
+>   `certification_label`, and `certification_review_due`. Read LIVE, like
+>   `pack_state` and unlike the immutable execution fields. *Attribution.*
+> - `GET /api/runs/{runId}/opportunities` — `OpportunityCandidate` gains
+>   `packCertificationLevel`, `packCertificationLabel`, and
+>   `packCertificationReviewDue` (present only when due). Stamped at serve time via
+>   the shared display funnel, so it reaches list, decision, override, roadmap,
+>   executive-report, and blueprint alike. *Findings.*
+> - `GET /api/runs/{runId}/executive-report` — gains `packCertifications`
+>   (`PackCertification[]`), one entry per pack that contributed a finding, in order
+>   of first appearance. Frozen into the artifact at generation time. *Exports.*
+
+> v1.17 — 2.0-C2 T2 (Pack Certification Review Workflow): documents the internal,
+> checklist-driven certification review surface. Entirely NEW routes; no existing
+> response shape changes, so every pre-v1.17 consumer is unaffected.
+>
+> **What this surface does NOT do:** recording a review never changes a pack's
+> certification level. A pack is Certified only when a valid CloudFulcrum signature
+> over its metadata verifies (2.0-C2 T1 / AT-831). An approval returns the
+> declaration and canonical payload to be signed offline; the badge moves when that
+> signature ships.
+>
+> **New routes** (`app/routes_pack_certification.py`):
+> - `GET /api/packs/certification/criteria` (viewer+) — the review checklist:
+>   `{ platformVersion, requiredCriteria: string[], criteria: CriterionSpec[],
+>   levels: ["certified","partner"], decisions: ["approved","rejected"] }`, where
+>   `CriterionSpec` is `{ criterionId, label, description, required (boolean) }`.
+>   Viewer-readable on purpose — a reader who sees a Certified badge must be able to
+>   see what was checked.
+> - `POST /api/packs/{packId}/certification/reviews` (**owner**) — body
+>   `{ proposedLevel: "certified" | "partner", decision: "approved" | "rejected",
+>   criteria: { criterionId, outcome: "pass" | "fail" | "not_applicable",
+>   note?: string }[], scopeSummary: string, reviewerName?: string, notes?: string }`.
+>   **201** returns the recorded `CertificationReview`. The reviewer, pack version,
+>   platform version, and date are stamped SERVER-side and are not accepted from the
+>   body. **400** for a malformed checklist (unknown criterion, duplicate verdict,
+>   `not_applicable` with no note); **409** when the decision contradicts the
+>   checklist (approved with a required criterion missing or failed, or rejected with
+>   no reason); **404** for an unknown pack.
+> - `GET /api/packs/{packId}/certification/reviews` (analyst+) —
+>   `{ orgId, packId, certification, latestReview, reviews[] }`, newest-first.
+>   `certification` is the live signature-verified badge (AT-831), returned alongside
+>   the trail so an approved-but-unsigned pack cannot read as Certified.
+>
+> `CertificationReview` = `{ reviewId, orgId, packId, packVersion, revision,
+> reviewerId, reviewerName, reviewedAt, reviewedAgainstPlatformVersion,
+> proposedLevel, decision, approved (boolean), criteria[], passedCriteria: string[],
+> scopeSummary, notes, summary }`, plus `certificationDeclaration` and
+> `canonicalPayload` on an APPROVAL only (the material to be signed). The trail is
+> append-only — a later review adds a revision and never rewrites an earlier one.
+
+> v1.16 — 2.0-C1 (Pack Compatibility, Safe Disable & Rollback): documents the pack
+> LIFECYCLE surface. All fields are additive and optional; every pre-v1.16 consumer
+> is unaffected, and each field is absent on responses served before it existed.
+>
+> **New routes** (`app/routes_pack_state.py`):
+> - `GET /api/packs/state` (viewer+) — `{ orgId, packs: PackStateItem[] }`, where
+>   `PackStateItem` is `{ packId, packName, packVersion (string | null),
+>   state ("active" | "disabled"), revision (number), reason (string | null),
+>   updatedBy (string | null), updatedAt (string | null),
+>   pinnedVersion (string | null), effectiveVersion (string | null),
+>   availableVersions (string[]), registered (boolean) }`. `packVersion` is what the
+>   registry currently ships; `effectiveVersion` is what a run started NOW would
+>   execute and stamp; `availableVersions` are the rollback targets (empty ⇒ the pack
+>   cannot be rolled back). `registered: false` marks an ORPHANED row — lifecycle
+>   state for a pack no longer in the registry, retained so its history stays
+>   reachable (AT-829); its version fields are `null`.
+> - `PUT /api/packs/{packId}/state` (**owner**) — body `{ state: "active" |
+>   "disabled", reason?: string }`. Idempotent (target state, not a verb). 404 for an
+>   unknown pack.
+> - `PUT /api/packs/{packId}/version` (**owner**) — body `{ version: string | null,
+>   reason?: string }`; `null` clears the pin. **409** when the version has no
+>   archived artifact, naming the versions that are available.
+> - `GET /api/packs/{packId}/state/history` (analyst+) — `{ orgId, packId,
+>   registered, transitions[] }`, newest-first, each transition
+>   `{ id, revision, transition ("disable" | "enable" | "rollback" | "restore"),
+>   previous_state, resulting_state, previous_version, resulting_version, reason,
+>   actor_id, changed_at }`. Append-only: re-enabling does not erase the disable and
+>   restoring does not erase the rollback. Serves a REMOVED pack's retained history
+>   rather than 404-ing (AT-829); a genuinely unknown id is still 404.
+>
+> **Extended responses:**
+> - `GET /api/runs/{runId}/opportunities` — `OpportunityCandidate` gains
+>   `packState` (`"active" | "disabled"`) and `packStateLabel` (`string`), stamped at
+>   serve time when the producing pack is disabled TODAY. The existing
+>   `packVersion` still reports the version that produced the finding, so provenance
+>   is intact; a finding is never removed or rewritten when its pack is disabled
+>   (AT-827). Applies to every opportunity serve site sharing the display funnel
+>   (list, decision, override, roadmap, executive report, blueprint).
+> - `GET /api/run-health/packs` — each pack row gains `pack_state`
+>   (`"active" | "disabled"`, read LIVE, unlike the immutable execution fields),
+>   `pinned_version` (`string | null`) and `rolled_back` (`boolean`) (AT-828). The
+>   response gains `excluded_packs` (`{ packId, state, reason }[]`) — packs selected
+>   for the run that did not execute because the org has them disabled — and
+>   `pinned_pack_versions` (`Record<string, string>`), the pins THIS run used.
+> - `POST /api/stack-builder/launch` — `LaunchResponse` gains `excludedPacks`
+>   (`{ packId, state, reason }[]`). `packIds` already excludes them, so a caller
+>   ignoring the field still sees the truthful pack set; this names what was dropped.
+> - Both `POST /api/stack-builder/launch` and `POST /api/runs/{runId}/compute` may
+>   now return **409** when a selected pack declares an unmet platform-capability
+>   range (AT-826, the detail names the unmet requirement) or when EVERY selected
+>   pack is disabled (AT-827).
+> v1.25 - Run Health last-ingestion timestamp honesty.
+> `GET /api/run-health/connectors` keeps the same
+> `last_successful_ingestion` (`string | null`, optional) field, but the value
+> is now timestamp-only: telemetry timestamps, the connector metrics overlay's
+> `lastSuccessfulIngestionAt`, or a historical completed/partial run status whose
+> `perSystem`/`succeeded` data proves that connector ingested successfully. Human
+> display labels from connector `lastSynced` such as `"Just now"` are ignored
+> unless they are parseable timestamps, so the dashboard cannot show a stale
+> "Just now" after OAuth/configuration only. When no concrete checkpoint row
+> exists but such a successful ingestion timestamp exists, `checkpoint_age_seconds`
+> is derived from that timestamp while `checkpoint_position` and
+> `checkpoint_captured_at` remain null; this gives the UI a freshness age without
+> inventing a resettable cursor. No schema change.
+
+> v1.24 - PR-fix pass (capped zero-displacement ranking adjustments).
+> `_ranking.adjusted` means the learned ranking layer applied to that finding,
+> even when `moved` is `0` because a configured cap kept the final position in
+> place. Such capped records may carry `reason`, and
+> `GET /api/learning/adjustment/explain/{runId}/{opportunityId}` explains them
+> instead of treating them as unadjusted. A finding with no learned adjustment
+> still carries no `reason`. Additive; existing `moved` semantics are unchanged.
 
 > v1.15 — MSP-B13 (Cloud Connector Onboarding): added the multi-scope cloud
 > connector routes for `aws_events` / `azure_events` (T3 / AT-745 — create with

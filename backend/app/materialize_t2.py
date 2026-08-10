@@ -253,6 +253,13 @@ def _ingest_summary_from_payload(
     return per_system, succeeded, errors
 
 
+# Run-record fields owned by the PIPELINE, not by materialization: `update_run_step`
+# writes them directly to the stored payload as each stage runs, so a materialization
+# write must carry them forward rather than overwrite them with its stale copy.
+# See the comment in `_finalise`.
+_PIPELINE_OWNED_RUN_FIELDS = ("current_step", "failed_steps")
+
+
 def _finalise(
     run_id: str,
     run: Dict[str, Any],
@@ -280,12 +287,32 @@ def _finalise(
     _audit_prepend(run_id, _audit_event(audit_action))
     run["status"] = status
     run["updatedAt"] = db.now_iso()
-    # A materialised run (complete/partial) has finished the whole pipeline, so
-    # its stored current_step must read "complete" — otherwise this run_set (which
-    # writes the whole run dict, possibly carrying a stale earlier current_step)
-    # reverts the runner's own end-of-pipeline stamp, and the Discovery Progress
-    # UI shows an early step still spinning on an already-finished run. A failed
-    # run keeps the step it failed at.
+
+    # ── Do not clobber progress the PIPELINE wrote while we held a stale copy ──
+    #
+    # `run` was read once at the top of run_trackb_and_persist, before the pipeline
+    # ran. During the run, `db.update_run_step()` writes `current_step` and
+    # `failed_steps` STRAIGHT TO THE STORED PAYLOAD — they are never reflected back
+    # onto this in-memory dict. So writing the whole dict here reverts them.
+    #
+    # That is exactly the bug the `current_step` line below was added to patch, but
+    # it was patched for one field only: `failed_steps` kept being reset to its
+    # pre-run value (usually absent), so a run whose Salesforce ingest failed showed
+    # a red cross while running and then flipped every stage to a green tick the
+    # moment it materialised — the failure silently disappeared from the UI.
+    #
+    # Re-read the persisted payload and carry those pipeline-owned fields forward.
+    # Generalising it this way means a future field written by update_run_step is
+    # preserved automatically instead of becoming the same bug again.
+    persisted = db.run_get(run_id) or {}
+    for pipeline_owned in _PIPELINE_OWNED_RUN_FIELDS:
+        if pipeline_owned in persisted:
+            run[pipeline_owned] = persisted[pipeline_owned]
+
+    # A materialised run (complete/partial) has finished the whole pipeline, so its
+    # stored current_step must read "complete", or the Discovery Progress UI shows an
+    # early step still spinning on an already-finished run. A failed run keeps the
+    # step it failed at (carried forward from `persisted` above).
     if status in ("complete", "completed", "partial"):
         run["current_step"] = "complete"
     db.run_set(run_id, run)

@@ -2,6 +2,7 @@ import React from 'react';
 import { Activity, ShieldAlert } from 'lucide-react';
 import type { OutcomeReportSection } from '../../types/outcome';
 import { OutcomeNumberDisclosure } from './OutcomeNumberDisclosure';
+import OutcomeCaveatDetails from './OutcomeCaveatDetails';
 
 export default function ExecutiveOutcomeSection({
   section,
@@ -23,7 +24,9 @@ export default function ExecutiveOutcomeSection({
         </div>
         <div className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-bg/40 px-3 py-2 text-xs font-semibold text-muted">
           <ShieldAlert className="h-4 w-4 text-accent" aria-hidden />
-          {section.aggregates.caveatedMeasurementCount ? 'Caveats present' : 'No caveats'}
+          {section.aggregates.caveatedMeasurementCount
+            ? `${section.aggregates.caveatedMeasurementCount} caveated measurement${section.aggregates.caveatedMeasurementCount === 1 ? '' : 's'}`
+            : 'No caveats'}
         </div>
       </div>
 
@@ -42,6 +45,7 @@ export default function ExecutiveOutcomeSection({
                   <th className="py-2 pr-4 font-semibold">Signal</th>
                   <th className="py-2 pr-4 font-semibold">Movement</th>
                   <th className="py-2 pr-4 font-semibold">Projection</th>
+                  <th className="py-2 pr-4 font-semibold">Caveats</th>
                   <th className="py-2 pr-4 font-semibold">Run Pair</th>
                 </tr>
               </thead>
@@ -64,6 +68,9 @@ export default function ExecutiveOutcomeSection({
                       </td>
                       <td className="py-2 pr-4 text-muted">
                         {measurement.projectionValidation?.verdict ?? 'unknown'}
+                      </td>
+                      <td className="py-2 pr-4 align-top">
+                        <OutcomeCaveatDetails confounders={measurement.confounders} />
                       </td>
                       <td className="py-2 pr-4 font-mono text-xs text-muted">
                         {measurement.baselineRunId ?? 'n/a'} {'->'} {measurement.currentRunId ?? 'n/a'}

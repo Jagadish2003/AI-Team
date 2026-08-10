@@ -94,8 +94,15 @@ CREATE TABLE IF NOT EXISTS ranking_adjustment_history (
     actor_id              VARCHAR(128),
     config_version        VARCHAR(32),
     revision              INTEGER      NOT NULL DEFAULT 1,
+    -- Required for reset rows. It is a real column (as well as part of the JSON
+    -- record) so governance data entered in the UI is directly checkable.
+    reset_reason          TEXT,
     record                JSONB        NOT NULL,
-    recorded_at           TIMESTAMPTZ  NOT NULL
+    recorded_at           TIMESTAMPTZ  NOT NULL,
+    CONSTRAINT ck_ranking_adjustment_reset_reason CHECK (
+        change_kind <> 'reset'
+        OR (reset_reason IS NOT NULL AND BTRIM(reset_reason) <> '')
+    )
 )
 """
 

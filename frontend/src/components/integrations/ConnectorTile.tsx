@@ -29,6 +29,24 @@ const ENABLED_CONNECTOR_IDS = [
   'confluence', 'sharepoint',
 ];
 
+// Re-check just after the recorded expiry. The small margin avoids asking the
+// backend in the millisecond where its clock still considers the token valid.
+const EXPIRY_RECHECK_GRACE_MS = 250;
+const MAX_TIMEOUT_MS = 2_147_000_000;
+
+export function tokenExpiryRecheckDelay(
+  expiresAt: string | null | undefined,
+  nowMs = Date.now(),
+): number | null {
+  if (!expiresAt) return null;
+  const expiryMs = Date.parse(expiresAt);
+  if (!Number.isFinite(expiryMs)) return null;
+  return Math.min(
+    MAX_TIMEOUT_MS,
+    Math.max(0, expiryMs - nowMs + EXPIRY_RECHECK_GRACE_MS),
+  );
+}
+
 export default function ConnectorTile({
   connector,
   icon,
@@ -109,11 +127,42 @@ export default function ConnectorTile({
   // change arrives via the org event stream. Disabled (null key) unless the
   // connector is actually connected, so we never ask for a token that cannot
   // exist. A failure is non-fatal: the tile just renders without the status.
-  const { data: tokenStatusData } = useResource(
+  const { data: tokenStatusData, refetch: refetchTokenStatus } = useResource(
     isConnected && isEnabled ? cacheKeys.connectorTokenStatus(connector.id) : null,
-    () => fetchTokenStatus(connector.id),
+    () =>
+      connector.id === 'salesforce'
+        ? fetchTokenStatus(connector.id, { ensureValid: true })
+        : fetchTokenStatus(connector.id),
   );
   const tokenStatus: TokenStatus | null = tokenStatusData?.status ?? null;
+
+  // At expiry, ask for live status again. The backend either refreshes the token
+  // or returns refresh_failed, which changes this card to Reconnect before a
+  // discovery run can use the source. General cache polling remains a fallback
+  // for a provider revocation that occurs before the recorded expiry.
+  useEffect(() => {
+    if (
+      !isConnected ||
+      !isEnabled ||
+      (tokenStatus !== 'connected' && tokenStatus !== 'needs_refresh')
+    ) {
+      return;
+    }
+
+    const delay = tokenExpiryRecheckDelay(tokenStatusData?.expires_at);
+    if (delay === null) return;
+
+    const timer = window.setTimeout(() => {
+      void refetchTokenStatus();
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [
+    isConnected,
+    isEnabled,
+    tokenStatus,
+    tokenStatusData?.expires_at,
+    refetchTokenStatus,
+  ]);
 
   // R18-A3 T5 (AT-558): in a no-public-inbound deployment the browser
   // authorization-code flow can never complete (the provider redirect can't

@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ExecutiveReportPdfData } from '../utils/exportPdf';
 import type { OpportunityCandidate } from '../types/analystReview';
+import type { OutcomeReportSection } from '../types/outcome';
 
 // Subclass jsPDF so save() captures the instance instead of triggering a
 // browser download (which would fail in jsdom).
@@ -74,6 +75,56 @@ const DATA: ExecutiveReportPdfData = {
   runId: 'run_5a62abcd',
 };
 
+const OUTCOME_SECTION: OutcomeReportSection = {
+  schemaVersion: '1.0.0',
+  runId: 'run_current',
+  generatedFrom: 'stored_movement_records',
+  summary: 'One stored movement comparison is available.',
+  aggregates: {
+    actionedOpportunityCount: 1,
+    measuredOpportunityCount: 1,
+    measurementCount: 1,
+    caveatedMeasurementCount: 1,
+    materialCaveatMeasurementCount: 1,
+    byDirection: { improves: 1 },
+    byComparability: { weakly_comparable: 1 },
+    byProjectionValidation: { within_band: 1 },
+    numberRefs: [],
+  },
+  highlights: [
+    {
+      opportunityIdentity: 'opp_identity',
+      actionDate: '2026-07-01',
+      measuredAt: '2026-08-01T00:00:00Z',
+      baselineRunId: 'run_baseline',
+      currentRunId: 'run_current',
+      primaryMovement: {
+        signalName: 'approval delay',
+        baselineValue: 10,
+        currentValue: 8,
+        delta: -2,
+        direction: 'improves',
+      },
+      movements: [],
+      comparability: { verdict: 'weakly_comparable' },
+      projectionValidation: { verdict: 'within_band' },
+      confounderSummary: { count: 1, materialCount: 1 },
+      confounders: [
+        {
+          type: 'pack_version_change',
+          severity: 'material',
+          label: 'Pack version changed between measurements',
+          detail: {
+            implication: 'Updated detection logic may explain part of the movement',
+          },
+        },
+      ],
+      numberRefs: [],
+    },
+  ],
+  numberRefs: [],
+};
+
 function decodePdf(uri: string): string {
   const b64 = uri.substring(uri.indexOf('base64,') + 'base64,'.length);
   return atob(b64);
@@ -123,5 +174,20 @@ describe('downloadExecutiveReportPdf (real jsPDF)', () => {
     // "(IQ)" is the standalone wordmark run — the footer renders "AgentIQ ..."
     // (no standalone "IQ"), so this is specific to the fallback wordmark.
     expect(bytes).toContain('(IQ)');
+  });
+
+  it('prints each outcome caveat label and explanation in the PDF', async () => {
+    await downloadExecutiveReportPdf(
+      { ...DATA, outcomeSection: OUTCOME_SECTION },
+      {
+        filename: 'outcome-caveats.pdf',
+        footerText: 'AgentIQ Executive Report — Confidential',
+      },
+    );
+
+    const bytes = decodePdf(cap.pdf.output('datauristring'));
+    expect(bytes).toContain('Pack version changed between measurements');
+    expect(bytes).toContain('Updated detection logic may explain part of the');
+    expect(bytes).toContain('(movement.) Tj');
   });
 });

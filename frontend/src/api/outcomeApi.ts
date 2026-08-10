@@ -1,5 +1,6 @@
-import { apiGet } from '../lib/apiClient';
+import { apiGet, apiPost } from '../lib/apiClient';
 import type {
+  OpportunityLifecycle,
   OpportunityOutcomeView,
   OutcomePortfolioView,
 } from '../types/outcome';
@@ -39,4 +40,39 @@ export function fetchOpportunityOutcome(
   return apiGet<OpportunityOutcomeView>(
     `/api/outcomes/${encodeURIComponent(opportunityIdentity)}`,
   );
+}
+
+function lifecyclePath(opportunityIdentity: string, action?: string): string {
+  const base = `/api/opportunity-lifecycle/${encodeURIComponent(opportunityIdentity)}`;
+  return action ? `${base}/${action}` : base;
+}
+
+export function fetchOpportunityLifecycle(
+  opportunityIdentity: string,
+): Promise<OpportunityLifecycle> {
+  return apiGet<OpportunityLifecycle>(lifecyclePath(opportunityIdentity));
+}
+
+export function recordOpportunityAction(
+  opportunityIdentity: string,
+  actionDate: string,
+  note?: string,
+): Promise<OpportunityLifecycle> {
+  const trimmedNote = note?.trim();
+  return apiPost<OpportunityLifecycle>(lifecyclePath(opportunityIdentity, 'action'), {
+    actionDate,
+    ...(trimmedNote ? { note: trimmedNote } : {}),
+  });
+}
+
+export function dismissOpportunity(
+  opportunityIdentity: string,
+): Promise<OpportunityLifecycle> {
+  return apiPost<OpportunityLifecycle>(lifecyclePath(opportunityIdentity, 'dismiss'), {});
+}
+
+export function reopenOpportunity(
+  opportunityIdentity: string,
+): Promise<OpportunityLifecycle> {
+  return apiPost<OpportunityLifecycle>(lifecyclePath(opportunityIdentity, 'reopen'), {});
 }

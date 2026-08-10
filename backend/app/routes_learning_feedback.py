@@ -122,11 +122,13 @@ def post_feedback(
     ranked higher last month?".
     """
     try:
-        return record_feedback(
-            get_current_org_id(),
+        org_id = get_current_org_id()
+        actor_id = _get_user_id_from_token(token)
+        record = record_feedback(
+            org_id,
             opportunity_identity,
             body.action,
-            actor_id=_get_user_id_from_token(token),
+            actor_id=actor_id,
             reason_code=body.reasonCode,
             reason_detail=body.reasonDetail,
             detector_id=body.detectorId,
@@ -134,6 +136,14 @@ def post_feedback(
             signal_concept=body.signalConcept,
             run_id=body.runId,
         )
+        from .learning_adjustment_state import recompute_after_signal_change
+
+        recompute_after_signal_change(
+            org_id,
+            actor_id=actor_id,
+            trigger="learning_feedback",
+        )
+        return record
     except FeedbackError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

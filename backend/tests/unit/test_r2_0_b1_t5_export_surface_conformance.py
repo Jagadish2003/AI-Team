@@ -109,6 +109,26 @@ _EXPORT_ALLOWLIST: Dict[Tuple[str, str], str] = {
         "PROTECTED: the integration-verification report is guarded before "
         "--report-path is written."
     ),
+    # ── 2.0-C3 Skills SDK (Arc C) ────────────────────────────────────────────
+    # Surfaced by this sweep when the C arc merged in. All three write files, but
+    # none is a path by which TENANT content leaves the deployment, which is what
+    # AC5 governs.
+    ("discovery/packs/sdk/bundle.py", "extract_bundle"): (
+        "EXEMPT: this is an IMPORT, not an export — it unpacks a partner-supplied "
+        ".aiqpack INTO the deployment (signature-verified, zip-slip guarded, "
+        "size/count capped). Content moves inward; no tenant, run, or finding "
+        "content passes through it."
+    ),
+    ("discovery/packs/sdk/reference_docs.py", "sync_docs"): (
+        "EXEMPT: repo-maintenance tooling. Regenerates docs/partner/*.md from the "
+        "platform's OWN declarations (concepts, primitives, lint rules) so the "
+        "partner docs cannot drift. Reads no org, run, or finding data."
+    ),
+    ("discovery/packs/sdk/scaffold.py", "scaffold_pack"): (
+        "EXEMPT: author tooling. Writes a new pack project skeleton (pack.json + "
+        "fixtures + README) on a pack author's own machine from static templates. "
+        "Reads no org, run, or finding data."
+    ),
     ("discovery/seed/demo_seeder.py", "save"): (
         "EXEMPT: writes the demo seeder's OWN bookkeeping state (ids of the "
         "Salesforce/ServiceNow/Jira records it just created, plus a timestamp) "

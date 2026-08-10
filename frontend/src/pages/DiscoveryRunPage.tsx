@@ -5,7 +5,9 @@ import { InfoPanel } from "../components/common/InfoPanel";
 import LoadingPanel from "../components/common/LoadingPanel";
 import { Skeleton } from "../components/common/Skeleton";
 import PageShell from "../components/common/PageShell";
+import { useToast } from "../components/common/Toast";
 import TemplateRunNotice from "../components/discovery_run/TemplateRunNotice";
+import { checkConnectorExpiry } from "../services/connectorExpiry";
 import { useDiscoveryRunContext } from "../context/DiscoveryRunContext";
 import { useConnectorContext } from "../context/ConnectorContext";
 import { useSourceIntakeContext } from "../context/SourceIntakeContext";
@@ -892,6 +894,7 @@ export default function DiscoveryRunPage() {
     (location.state as { autoStart?: boolean } | null)?.autoStart === true;
   const { runId } = useRunContext();
   const { connectors } = useConnectorContext();
+  const { push } = useToast();
   const { uploadedFiles } = useSourceIntakeContext(); // T41-8: sampleWorkspaceEnabled removed
 
   const {
@@ -948,17 +951,54 @@ export default function DiscoveryRunPage() {
   const runScopedPath = (path: string) =>
     runId ? `${path}?runId=${runId}` : path;
 
+  // The connectors this run will actually ingest from. Kept as the connector
+  // OBJECTS (not just names) because the expiry guard below needs their ids, while
+  // the run inputs and the toast need their display names.
+  //
+  // Merge note: this block also carried a `displayPct` derived from
+  // `currentStep / DISCOVERY_STEPS.length`. That is the implementation `dev`
+  // deliberately replaced — see `stepProgressPercent` below, which divides the
+  // percentage across the ROWS ACTUALLY RENDERED rather than the canonical
+  // 14-step pipeline. Keeping both would have shadowed the newer one and been a
+  // duplicate declaration, so only the connector memo survives here.
+  const discoveryReadyConnectors = useMemo(
+    () => connectors.filter(isDiscoveryReadyConnector),
+    [connectors],
+  );
+
   const inputs = useMemo(() => {
-    const connectedSources = connectors
-      .filter(isDiscoveryReadyConnector)
-      .map((c) => c.name);
     return {
-      connectedSources,
+      connectedSources: discoveryReadyConnectors.map((c) => c.name),
       uploadedFiles: uploadedFiles.map((f) => f.name),
       sampleWorkspaceEnabled: false,
       mode: "live" as const,
     };
-  }, [connectors, uploadedFiles]); // T41-8: sampleWorkspaceEnabled removed
+  }, [discoveryReadyConnectors, uploadedFiles]); // T41-8: sampleWorkspaceEnabled removed
+
+  // Guarded start — the ONLY way this page starts a run.
+  //
+  // Previously all three start sites called `startRun(inputs)` directly, so this
+  // page had no token-expiry check at all: launching from here against an expired
+  // Salesforce token started a live run that 401'd per source
+  // (INVALID_SESSION_ID), degraded that source to no data, and still reported
+  // "Completed 100%". The Stack Builder path had the guard; this one did not.
+  //
+  // Routing every site through one wrapper is deliberate: a second unguarded call
+  // site is exactly how the gap appeared in the first place.
+  const startRunGuarded = useCallback(async () => {
+    const ids = discoveryReadyConnectors.map((c) => c.id);
+    const nameById = new Map(discoveryReadyConnectors.map((c) => [c.id, c.name]));
+    // Every id here is already an engaged (connected + configured + synced)
+    // connector, so the engaged set is the same list.
+    const { message } = await checkConnectorExpiry(ids, ids, {
+      displayName: (id) => nameById.get(id) ?? id,
+    });
+    if (message) {
+      push(message);
+      return;
+    }
+    await startRun(inputs);
+  }, [discoveryReadyConnectors, inputs, push, startRun]);
 
   // Fix Pack Sprint 7: read connected sources from run record when available.
   // Stack Builder runs store selectedSystemIds on the run record via the
@@ -1038,14 +1078,13 @@ export default function DiscoveryRunPage() {
 
   useEffect(() => {
     if (!runId && autoStartRequested && !loading && hasAtLeastOneSource) {
-      void startRun(inputs);
+      void startRunGuarded();
     }
   }, [
     runId,
     autoStartRequested,
     loading,
-    startRun,
-    inputs,
+    startRunGuarded,
     hasAtLeastOneSource,
   ]);
 
@@ -1128,7 +1167,7 @@ export default function DiscoveryRunPage() {
           }
           onAction={
             hasAtLeastOneSource
-              ? () => void startRun(inputs)
+              ? () => void startRunGuarded()
               : () => nav("/integration-hub")
           }
         >
@@ -1153,7 +1192,7 @@ export default function DiscoveryRunPage() {
               className="mt-4 rounded-md border border-accent/20 bg-accent/5 px-3 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
               onClick={() => {
                 if (runId) refetch();
-                else if (hasAtLeastOneSource) void startRun(inputs);
+                else if (hasAtLeastOneSource) void startRunGuarded();
               }}
             >
               Retry

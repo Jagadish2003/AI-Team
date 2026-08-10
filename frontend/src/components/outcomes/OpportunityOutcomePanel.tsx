@@ -5,6 +5,7 @@ import { cacheKeys } from '../../lib/cacheKeys';
 import { useResource } from '../../lib/dataCache';
 import type { OpportunityOutcomeView } from '../../types/outcome';
 import { OutcomeNumberDisclosure } from './OutcomeNumberDisclosure';
+import OutcomeCaveatDetails from './OutcomeCaveatDetails';
 
 function statusText(view: OpportunityOutcomeView): string {
   if (view.latestMeasurement) {
@@ -45,7 +46,8 @@ export default function OpportunityOutcomePanel({
         {data?.caveatedMeasurementCount ? (
           <div className="flex shrink-0 items-center gap-2 rounded-md border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-semibold text-amber-700 dark:text-amber-300">
             <ShieldAlert className="h-4 w-4" aria-hidden />
-            Caveats present
+            {data.caveatedMeasurementCount} caveated measurement
+            {data.caveatedMeasurementCount === 1 ? '' : 's'}
           </div>
         ) : null}
       </div>
@@ -70,6 +72,7 @@ export default function OpportunityOutcomePanel({
                   <th className="py-2 pr-4 font-semibold">Measured At</th>
                   <th className="py-2 pr-4 font-semibold">Comparability</th>
                   <th className="py-2 pr-4 font-semibold">Projection</th>
+                  <th className="py-2 pr-4 font-semibold">Caveats</th>
                   <th className="py-2 pr-4 font-semibold">Run Pair</th>
                 </tr>
               </thead>
@@ -87,6 +90,9 @@ export default function OpportunityOutcomePanel({
                     <td className="py-2 pr-4 text-muted">
                       {measurement.projectionValidation?.verdict ?? 'unknown'}
                     </td>
+                    <td className="py-2 pr-4 align-top">
+                      <OutcomeCaveatDetails confounders={measurement.confounders} />
+                    </td>
                     <td className="py-2 pr-4 font-mono text-xs text-muted">
                       {measurement.baselineRunId ?? 'n/a'} {'->'} {measurement.currentRunId ?? 'n/a'}
                     </td>
@@ -95,10 +101,6 @@ export default function OpportunityOutcomePanel({
               </tbody>
             </table>
           </div>
-        </div>
-      ) : data?.emptyState ? (
-        <div className="border-t border-border px-5 py-4 text-sm text-muted">
-          {data.emptyState.message}
         </div>
       ) : null}
     </section>

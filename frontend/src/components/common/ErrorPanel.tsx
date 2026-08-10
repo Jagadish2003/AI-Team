@@ -13,24 +13,17 @@ export default function ErrorPanel({
 }) {
   return (
     <div className="flex min-h-[min(620px,75vh)] items-center justify-center px-4">
-      
-      <div className="w-full max-w-lg rounded-2xl 
-        border border-red-400/20 
-        bg-gradient-to-br from-red-500/10 to-red-500/5 
-        backdrop-blur-xl 
-        shadow-xl shadow-red-900/20 
-        px-6 py-8 text-center space-y-5 sm:px-8
-        transition-all duration-300"
+      <div
+        role="alert"
+        className="w-full max-w-lg space-y-5 rounded-2xl border border-red-500/30 bg-panel px-6 py-8 text-center shadow-xl shadow-black/10 transition-all duration-300 dark:border-red-400/20 dark:bg-gradient-to-br dark:from-red-500/10 dark:to-red-500/5 dark:shadow-red-900/20 sm:px-8"
       >
         <div className="flex justify-center">
-          <div className="p-3 rounded-full bg-red-500/20">
-            <AlertCircle className="text-red-400 w-7 h-6" />
+          <div className="rounded-full bg-red-500/10 p-3 text-red-500 dark:bg-red-500/20 dark:text-red-400">
+            <AlertCircle className="h-6 w-7" />
           </div>
         </div>
-        <h2 className="text-xl font-semibold text-red-100/70">
-          {title}
-        </h2>
-        <p className="text-sm text-red-100/80 leading-relaxed whitespace-pre-wrap">
+        <h2 className="text-xl font-semibold text-text">{title}</h2>
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted">
           {message}
         </p>
         {onRetry && (

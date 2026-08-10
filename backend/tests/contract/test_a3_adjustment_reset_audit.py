@@ -172,7 +172,11 @@ class TestOwnerGovernanceSurface:
             == 403
         )
         assert (
-            client.post(f"{BASE}/reset", headers=_auth(org, VIEWER_TOKEN)).status_code
+            client.post(
+                f"{BASE}/reset",
+                headers=_auth(org, VIEWER_TOKEN),
+                json={"reason": "viewer must not reset"},
+            ).status_code
             == 403
         )
 
@@ -195,6 +199,14 @@ class TestOwnerGovernanceSurface:
 
 
 class TestResetNeutralisesTheCurrentState:
+    def test_reset_refuses_a_missing_or_blank_audit_reason(self, client):
+        org = _org()
+        assert client.post(f"{BASE}/reset", headers=_auth(org)).status_code == 422
+        blank = client.post(
+            f"{BASE}/reset", headers=_auth(org), json={"reason": "   "}
+        )
+        assert blank.status_code == 400
+
     def test_reset_returns_state_to_neutral_and_appends_history(self, client):
         org = _org()
         _seed_opposing_state(client, org)
@@ -214,6 +226,7 @@ class TestResetNeutralisesTheCurrentState:
         assert body["groupsReset"] == len(before["groups"])
         assert body["opportunitiesAffected"] > 0
         assert body["previousState"] == before["groups"]
+        assert body["reason"] == "owner requested neutral ranking"
 
         after = client.get(BASE, headers=_auth(org)).json()
         assert after["groups"], "reset should leave inspectable neutral rows"
@@ -221,8 +234,23 @@ class TestResetNeutralisesTheCurrentState:
         assert all(group["learningActive"] is False for group in after["groups"])
 
         history = client.get(f"{BASE}/history", headers=_auth(org)).json()
-        assert any(row["changeKind"] == "reset" for row in history)
+        reset_history = [row for row in history if row["changeKind"] == "reset"]
+        assert reset_history
+        assert all(
+            row["resetReason"] == "owner requested neutral ranking"
+            for row in reset_history
+        )
         assert any(row["changeKind"] in {"activated", "recomputed"} for row in history)
+
+        with closing(db.connect()) as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    "SELECT DISTINCT reset_reason FROM ranking_adjustment_history "
+                    "WHERE org_id = %s AND change_kind = 'reset'",
+                    (org,),
+                )
+                stored_reasons = {row[0] for row in cur.fetchall()}
+        assert stored_reasons == {"owner requested neutral ranking"}
 
     def test_reset_restores_served_rankings_to_base_order(self, client):
         org = _org()
@@ -237,7 +265,11 @@ class TestResetNeutralisesTheCurrentState:
         ).json()
         assert [item["id"] for item in adjusted] != [item["id"] for item in opps]
 
-        client.post(f"{BASE}/reset", headers=_auth(org))
+        client.post(
+            f"{BASE}/reset",
+            headers=_auth(org),
+            json={"reason": "restore base order"},
+        )
         neutral = client.get(
             f"/api/runs/{run_id}/opportunities", headers=_auth(org)
         ).json()
@@ -248,7 +280,11 @@ class TestAuditAndTelemetryRegistration:
     def test_recompute_and_reset_both_write_audit_events(self, client):
         org = _org()
         _seed_opposing_state(client, org)
-        client.post(f"{BASE}/reset", headers=_auth(org))
+        client.post(
+            f"{BASE}/reset",
+            headers=_auth(org),
+            json={"reason": "audit reset"},
+        )
 
         rows = _audit_rows(org)
         kinds = [row["payload"]["change_kind"] for row in rows]

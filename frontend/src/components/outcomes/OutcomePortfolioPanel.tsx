@@ -5,6 +5,7 @@ import { cacheKeys } from '../../lib/cacheKeys';
 import { useResource } from '../../lib/dataCache';
 import type { OutcomePortfolioView } from '../../types/outcome';
 import { OutcomeNumberDisclosure } from './OutcomeNumberDisclosure';
+import OutcomeCaveatDetails from './OutcomeCaveatDetails';
 
 function runPair(measurement?: {
   baselineRunId?: string | null;
@@ -52,7 +53,8 @@ export default function OutcomePortfolioPanel() {
         {aggregates?.caveatedMeasurementCount ? (
           <div className="flex shrink-0 items-center gap-2 rounded-md border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-semibold text-amber-700 dark:text-amber-300">
             <ShieldAlert className="h-4 w-4" aria-hidden />
-            Caveats present
+            {aggregates.caveatedMeasurementCount} caveated measurement
+            {aggregates.caveatedMeasurementCount === 1 ? '' : 's'}
           </div>
         ) : null}
       </div>
@@ -100,8 +102,10 @@ export default function OutcomePortfolioPanel() {
                         'Not measured'
                       )}
                     </td>
-                    <td className="py-2 pr-4 text-muted">
-                      {item.caveatedMeasurementCount ? 'Caveated' : 'Clean'}
+                    <td className="py-2 pr-4 align-top">
+                      <OutcomeCaveatDetails
+                        confounders={item.latestMeasurement?.confounders}
+                      />
                     </td>
                     <td className="py-2 pr-4 font-mono text-xs text-muted">
                       {runPair(item.latestMeasurement)}

@@ -120,7 +120,11 @@ def get_bulk_provenance(body: BulkProvenanceRequest) -> Dict[str, Any]:
 
 @router.post(
     APPLY_MERGES_PATH,
-    dependencies=[Depends(require_role("analyst"))],
+    # require_auth is listed explicitly (not left implicit via require_role's own
+    # Depends(require_auth)) so the full signature/expiry/blocklist check is a
+    # declared dependency of this write route, matching the read routes and
+    # surviving any future refactor of require_role.
+    dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
 def apply_merges(
     body: ApplyMergesRequest,

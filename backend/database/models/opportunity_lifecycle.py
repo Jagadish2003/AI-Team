@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS opportunity_lifecycle (
     -- The human-supplied date the change was deployed. NULL in every state that
     -- has no recorded action; never defaulted (see opportunity_lifecycle_states).
     action_date           DATE,
+    -- The customer-entered description of the agent/process that was deployed.
+    -- Kept on current state for the normal UI read and copied into append-only
+    -- history so reopening can clear current state without erasing the record.
+    action_note           TEXT,
     actioned_by           VARCHAR(128),
     actioned_at           TIMESTAMPTZ,
     revision              INTEGER      NOT NULL DEFAULT 0,
@@ -46,6 +50,10 @@ CREATE TABLE IF NOT EXISTS opportunity_lifecycle (
     updated_by            VARCHAR(128),
     created_at            TIMESTAMPTZ  NOT NULL,
     updated_at            TIMESTAMPTZ  NOT NULL,
+    CONSTRAINT ck_opp_lifecycle_measurable_action_date CHECK (
+        state NOT IN ('actioned', 'monitoring', 'measured', 'stalled')
+        OR action_date IS NOT NULL
+    ),
     PRIMARY KEY (org_id, opportunity_identity)
 )
 """
@@ -104,6 +112,7 @@ OPPORTUNITY_LIFECYCLE_COLUMNS: tuple[str, ...] = (
     "opportunity_identity",
     "state",
     "action_date",
+    "action_note",
     "actioned_by",
     "actioned_at",
     "revision",
