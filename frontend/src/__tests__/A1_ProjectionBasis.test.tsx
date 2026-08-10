@@ -174,7 +174,7 @@ describe('2.0-A1 T3 projection computation basis surfaces', () => {
     expect(basis).toHaveTextContent('Strong Evidence');
   });
 
-  it('shows a clear wider-band warning when evidence is thin', () => {
+  it('keeps thin-evidence warning language in Projection Band, not duplicated in Basis', () => {
     render(
       <OpportunityDetail
         opp={{ ...OPPORTUNITY, projection: THIN_PROJECTION }}
@@ -183,8 +183,11 @@ describe('2.0-A1 T3 projection computation basis surfaces', () => {
     );
 
     expect(screen.getByTestId('projection-basis-panel')).toHaveTextContent('Thin Evidence');
-    expect(screen.getByTestId('projection-thin-evidence-warning')).toHaveTextContent(
+    expect(screen.getByTestId('projection-basis-panel')).not.toHaveTextContent(
       'projection band is wider because evidence is limited',
+    );
+    expect(screen.getByTestId('projection-band-rationale')).toHaveTextContent(
+      'Evidence is limited',
     );
   });
 
@@ -201,7 +204,7 @@ describe('2.0-A1 T3 projection computation basis surfaces', () => {
     expect(basis).toHaveTextContent('strong evidence');
   });
 
-  it('renders summary-level projection basis in Executive Report quick wins', () => {
+  it('renders summary-level projection basis without the thin-evidence warning in Executive Report quick wins', () => {
     render(
       <MemoryRouter>
         <TopQuickWins
@@ -216,7 +219,7 @@ describe('2.0-A1 T3 projection computation basis surfaces', () => {
     expect(basis).toHaveTextContent('baseline 201.6');
     expect(basis).toHaveTextContent('signal Reassignment hops');
     expect(basis).toHaveTextContent('thin evidence');
-    expect(screen.getByText(/projection band is wider because evidence is limited/i))
-      .toBeInTheDocument();
+    expect(screen.queryByText(/projection band is wider because evidence is limited/i))
+      .not.toBeInTheDocument();
   });
 });

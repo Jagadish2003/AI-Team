@@ -183,6 +183,20 @@ def register_trace_graph_routes(app) -> None:
         """
         run = _require_run(run_id)
 
+        # Org ownership is checked BEFORE any run-scoped opportunity data is read.
+        # _load_trace re-checks (defence in depth), but reading the opps KV blob
+        # first would pull another tenant's full opportunity list into this
+        # request's context before the org gate fired. A cross-org request gets the
+        # same available:false answer, now without touching the other org's data.
+        try:
+            from app.middleware.tenancy import get_current_org_id
+            request_org_id = get_current_org_id()
+        except Exception:  # noqa: BLE001 — no tenancy context => defer to _load_trace
+            request_org_id = None
+        run_org_id = _run_org_id(run)
+        if run_org_id is not None and request_org_id is not None and run_org_id != request_org_id:
+            return TraceGraphResponse(runId=run_id, oppId=opp_id, available=False)
+
         stored_opp = _find_stored_opp(run_id, opp_id)
         if stored_opp is None:
             raise HTTPException(

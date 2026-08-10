@@ -1,0 +1,29 @@
+{
+  "name": "real friction, but under every floor: nothing fires",
+  "description": "The same shapes as the busy case, one step below each detector's aggregation floor: three identical resolutions (the floor is four), two aged incidents (the floor is five), one alert/incident pair (the floor is five), and no dependency graph to traverse. A detector that fires here fires on noise, which is the failure a positive-only suite never catches.",
+  "asOf": "2026-06-30T00:00:00Z",
+  "signal": {
+    "records": [
+      {"concept": "resolution_signature", "record_id": "INC-8001", "source_system": "servicenow", "observed_at": "2026-06-08T09:00:00Z", "signature": "clear_stuck_batch", "actor_group": "billing-ops", "entity_reference": "svc-billing", "state": "closed"},
+      {"concept": "resolution_signature", "record_id": "INC-8002", "source_system": "servicenow", "observed_at": "2026-06-15T09:00:00Z", "signature": "clear_stuck_batch", "actor_group": "billing-ops", "entity_reference": "svc-billing", "state": "closed"},
+      {"concept": "resolution_signature", "record_id": "INC-8003", "source_system": "servicenow", "observed_at": "2026-06-22T09:00:00Z", "signature": "clear_stuck_batch", "actor_group": "billing-ops", "entity_reference": "svc-billing", "state": "closed"},
+
+      {"concept": "incident_workflow", "record_id": "INC-8101", "source_system": "servicenow", "observed_at": "2026-06-01T09:00:00Z", "opened_at": "2026-05-20T09:00:00Z", "last_state_change_at": "2026-06-01T09:00:00Z", "actor_group": "billing-ops", "artifact": "billing-queue", "entity_reference": "svc-billing", "state": "open"},
+      {"concept": "incident_workflow", "record_id": "INC-8102", "source_system": "servicenow", "observed_at": "2026-06-02T09:00:00Z", "opened_at": "2026-05-21T09:00:00Z", "last_state_change_at": "2026-06-02T09:00:00Z", "actor_group": "billing-ops", "artifact": "billing-queue", "entity_reference": "svc-billing", "state": "open"},
+
+      {"concept": "operational_event", "record_id": "ALM-8201", "source_system": "aws", "observed_at": "2026-06-24T08:00:00Z", "signature": "v1:billing-latency", "entity_reference": "svc-billing", "state": "active"},
+      {"concept": "incident_workflow", "record_id": "INC-8202", "source_system": "servicenow", "observed_at": "2026-06-24T08:30:00Z", "opened_at": "2026-06-24T08:30:00Z", "last_state_change_at": "2026-06-24T08:30:00Z", "actor_group": "billing-ops", "artifact": "billing-queue", "entity_reference": "svc-billing", "state": "open"},
+
+      {"concept": "cmdb_dependency", "record_id": "CI-DB-CORE-9", "source_system": "servicenow", "observed_at": "2026-06-30T00:00:00Z", "entity_reference": "db-core", "artifact": "cmdb", "state": "operational"}
+    ]
+  },
+  "expect": {
+    "detectors": {
+      "repeated_manual_resolution": {"fires": false},
+      "service_desk_queue_ageing": {"fires": false},
+      "shared_dependency_concentration": {"fires": false},
+      "alert_to_incident_pairing": {"fires": false}
+    },
+    "findingCount": 0
+  }
+}

@@ -696,6 +696,54 @@ def _run_trackb_and_persist(
         )
 
 
+def _gate_pack_activation(
+    run_id: str, run: Dict[str, Any], body: "ComputeRequest"
+) -> None:
+    """Resolve pack activation before compute starts (2.0-C1 T1 + T2).
+
+    Resolves the SAME effective selection ``_run_trackb_and_persist`` resolves —
+    the launch record's ``packIds`` plus the request's ``pack_ids``/``pack`` — so
+    the synchronous check and the background execution can never disagree about
+    which packs were selected.
+
+    Refuses with HTTP 409 when a pack is incompatible (AT-826 / AC1) or when EVERY
+    selected pack is disabled (AT-827). A disabled pack alongside runnable ones is
+    excluded, not refused — the runner re-resolves the same decision and drops it,
+    so it cannot execute (AC2).
+    """
+    from .middleware.tenancy import get_current_org_id_optional
+    from .pack_activation import AllPacksDisabledError, resolve_activatable_packs
+    from .pack_certification_policy import (
+        PackCertificationPolicyUnavailable,
+        PackCertificationPolicyViolation,
+    )
+    from discovery.packs.pack_compatibility import PackIncompatibleError
+    from discovery.packs.pack_config import normalize_pack_ids
+
+    selected_pack_ids = normalize_pack_ids(
+        list(_pack_ids_for_run(run) or [])
+        + list(body.pack_ids or [])
+        + ([body.pack] if body.pack else [])
+    )
+    org_id = (
+        _org_id_for_run(run, get_current_org_id_optional() or "default") or "default"
+    )
+    try:
+        resolve_activatable_packs(
+            org_id=org_id, pack_ids=selected_pack_ids, run_id=run_id
+        )
+    except PackCertificationPolicyUnavailable as exc:
+        # Fail closed: a policy that cannot be read is not an absent policy.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (
+        AllPacksDisabledError,
+        PackIncompatibleError,
+        # 2.0-C2 T4 (AT-834 / AC3): a pack below this org's certification floor.
+        PackCertificationPolicyViolation,
+    ) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 def register_sprint4_t1_routes(app: FastAPI) -> None:
     """Register Sprint 4 T1 endpoints on the existing FastAPI app."""
 
@@ -704,11 +752,25 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
         response_model=ComputeResponse,
         dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
     )
-    async def compute_run(run_id: str, body: ComputeRequest, background_tasks: BackgroundTasks) -> ComputeResponse:
+    async def compute_run(
+        run_id: str,
+        body: ComputeRequest,
+        background_tasks: BackgroundTasks,
+        token: str = Depends(require_auth),
+    ) -> ComputeResponse:
         # Ensure run exists. db.run_get should raise 404; keep defensive for alternate impls.
         run = db.run_get(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+
+        # 2.0-C1 T1 (AT-826 / AC1): the SECOND activation edge. A run may be
+        # computed without ever passing through /stack-builder/launch (direct
+        # compute callers, replays of an older run record), so the same gate runs
+        # here against the same effective selection _run_trackb_and_persist will
+        # use — the launch record's packIds plus whatever this request supplied.
+        # Refused synchronously with 409 so no background task is ever queued for
+        # an incompatible pack and the status is not flipped to "running".
+        _gate_pack_activation(run_id, run, body)
 
         # SN-CONNECT-1 + JIRA-CONNECT-1: run connector health checks at run start.
         # Results stored in KV — S1 reads these to show Live/Fixture badges.
@@ -720,6 +782,40 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
                 db.run_kv_set("connector_health", run_id, connector_health)
         except Exception as _e:
             logger.warning("Connector health check failed (non-blocking): %s", _e)
+
+        # This is the THIRD run-start edge and the only one that recorded nothing.
+        # /stack-builder/launch audits RUN_STARTED and routes_sprint4_t2 emits it for
+        # its own path, but a run computed directly here — a direct API caller, or a
+        # recompute of an existing run record — left no trace of who started it or
+        # what it was pointed at. Emitted BEFORE the background task is queued, so a
+        # failure inside the run cannot lose the record of it being started; `source`
+        # distinguishes this edge from the Stack Builder one in the trail.
+        #
+        # This also makes the audit-conformance ratchet honest for this route. The
+        # sweep already saw it reach log_event, but only through the C4 deprecation
+        # announcement inside _gate_pack_activation — which fires only when a pack is
+        # actually being deprecated, so an ordinary compute wrote nothing. Dropping
+        # the KNOWN_AUDIT_GAPS entry without this would have claimed coverage the
+        # route did not have.
+        try:
+            from .middleware.audit import OUTCOME_SUCCESS, RUN_STARTED, log_event
+            from .rbac import _get_user_id_from_token
+
+            log_event(
+                RUN_STARTED,
+                run_id=run_id,
+                user_id=_get_user_id_from_token(token),
+                target=run_id,
+                pack_id=body.pack,
+                pack_ids=list(body.pack_ids or []),
+                system_count=len(body.systems or []),
+                systems=list(body.systems or []),
+                mode=body.mode,
+                source="compute",
+                outcome=OUTCOME_SUCCESS,
+            )
+        except Exception:  # noqa: BLE001 — audit must never fail the action (D4 T1).
+            logger.warning("Run-start audit failed (non-blocking) run=%s", run_id)
 
         # Mark status running and return immediately.
         _set_status(run_id, "running", counts={"opportunities": 0, "evidence": 0})

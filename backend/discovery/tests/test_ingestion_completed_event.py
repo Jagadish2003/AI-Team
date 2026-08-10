@@ -1,9 +1,9 @@
 """
 ``ingestion.completed`` — the connector-agnostic ingestion-completion event.
 
-Run Health's "Last ingestion" had exactly two sources: ``db.ingestor_completed``
-(emitted only by the native DB ingestors) and the ``lastSynced`` display string
-written by ``app/connector_metrics.py`` for three hardcoded connector ids. Every
+Run Health's "Last ingestion" had no connector-agnostic completion fact:
+``db.ingestor_completed`` covered only native DB ingestors, while legacy
+connector-metric overlays covered a few hardcoded connector ids. Every
 change-based connector completed ingestion successfully and had nothing to display.
 
 The shared change-based runner is the single completion path every

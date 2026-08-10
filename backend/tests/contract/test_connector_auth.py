@@ -2221,6 +2221,52 @@ def test_delete_token_unreachable_revocation_still_returns_204(client):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("status_code", "body", "expected"),
+    [
+        (200, {"DailyApiRequests": {}}, True),
+        (401, [{"errorCode": "INVALID_SESSION_ID"}], False),
+        (400, [{"errorCode": "INVALID_SESSION_ID"}], False),
+        (503, {"error": "unavailable"}, None),
+    ],
+)
+async def test_salesforce_access_token_probe_distinguishes_invalid_from_unavailable(
+    status_code,
+    body,
+    expected,
+):
+    """Only Salesforce evidence of an invalid session should demand Reconnect."""
+    from app.routes_connector_auth import _probe_salesforce_access_token
+
+    transport = _MockTransport(status_code, body)
+    result = await _probe_salesforce_access_token(
+        "https://example.my.salesforce.com",
+        "secret-access-token",
+        _transport=transport,
+    )
+
+    assert result is expected
+    assert transport.last_request is not None
+    assert transport.last_request.url.path == "/services/data/v59.0/limits/"
+    assert transport.last_request.headers["authorization"] == "Bearer secret-access-token"
+
+
+@pytest.mark.anyio
+async def test_salesforce_access_token_probe_fails_open_on_network_timeout():
+    """A network problem is unknown, not an instruction to reconnect."""
+    from app.routes_connector_auth import _probe_salesforce_access_token
+
+    assert (
+        await _probe_salesforce_access_token(
+            "https://example.my.salesforce.com",
+            "secret-access-token",
+            _transport=_TimeoutTransport(),
+        )
+        is None
+    )
+
+
 def test_token_status_returns_needs_auth_when_no_token(client):
     """token-status returns needs_auth when no token is stored (AC14)."""
     resp = client.get(
@@ -2247,6 +2293,51 @@ def test_token_status_returns_connected_for_fresh_token(client):
     _clear_credentials()
 
 
+def test_token_status_ensure_valid_catches_revoked_fresh_salesforce_session(client):
+    """A provider-revoked token must show Reconnect before discovery starts.
+
+    The stored expiry is deliberately two hours away: this pins the reported bug
+    where Integration Hub showed Connected until ingestion received Salesforce's
+    first INVALID_SESSION_ID response.
+    """
+    from app.auth.vault import store_token as _store_token_vault
+
+    with _patch.dict(_os.environ, _vault_env()):
+        _store_token_vault(
+            _AUTH_ORG_ID,
+            "salesforce",
+            _token_response(access_token="revoked-but-fresh", expires_in=7200),
+        )
+        with _patch(
+            "app.live_ingest_credentials.get_connector_instance_url",
+            return_value="https://example.my.salesforce.com",
+        ), _patch(
+            "app.routes_connector_auth._probe_salesforce_access_token",
+            new_callable=_AsyncMock,
+            return_value=False,
+        ) as mock_probe:
+            resp = client.get(
+                "/api/connectors/salesforce/token-status?ensure_valid=true",
+                headers=_AUTH_HEADERS,
+            )
+
+        # The persisted flag makes every later status read show Reconnect too;
+        # ingestion no longer has to fail first to create this state.
+        later = client.get(
+            "/api/connectors/salesforce/token-status",
+            headers=_AUTH_HEADERS,
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "refresh_failed"
+    assert later.json()["status"] == "refresh_failed"
+    mock_probe.assert_awaited_once_with(
+        "https://example.my.salesforce.com",
+        "revoked-but-fresh",
+    )
+    _clear_credentials()
+
+
 def test_token_status_returns_needs_refresh_when_within_threshold(client):
     """token-status returns needs_refresh when token expires within REFRESH_THRESHOLD_SECONDS (AC14)."""
     from app.auth.vault import store_token as _store_token_vault
@@ -2261,6 +2352,40 @@ def test_token_status_returns_needs_refresh_when_within_threshold(client):
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "needs_refresh"
+    _clear_credentials()
+
+
+def test_token_status_ensure_valid_checks_refresh_before_launch(client):
+    """The launch-time status read verifies a near-expiry refresh token."""
+    from app.auth import ConnectorNotAuthenticatedError
+    from app.auth.vault import (
+        REFRESH_THRESHOLD_SECONDS,
+        store_token as _store_token_vault,
+    )
+
+    with _patch.dict(_os.environ, _vault_env()):
+        _store_token_vault(
+            _AUTH_ORG_ID,
+            "salesforce",
+            _token_response(expires_in=60),
+        )
+        with _patch(
+            "app.routes_connector_auth.get_token",
+            new_callable=_AsyncMock,
+            side_effect=ConnectorNotAuthenticatedError(_AUTH_ORG_ID, "salesforce"),
+        ) as mock_refresh:
+            resp = client.get(
+                "/api/connectors/salesforce/token-status?ensure_valid=true",
+                headers=_AUTH_HEADERS,
+            )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "refresh_failed"
+    mock_refresh.assert_awaited_once_with(
+        _AUTH_ORG_ID,
+        "salesforce",
+        min_validity_seconds=REFRESH_THRESHOLD_SECONDS,
+    )
     _clear_credentials()
 
 
@@ -2314,17 +2439,13 @@ def test_token_status_returns_needs_auth_for_expired_token(client):
     _clear_credentials()
 
 
-def test_token_status_expired_with_refresh_token_is_refreshable(client):
-    """An expired access token that STILL holds a refresh token reports
-    needs_refresh (the vault silently refreshes it on next use) — NOT needs_auth.
-
-    This is the fix for connectors appearing to require a manual reconnect every
-    time their short-lived access token lapses (ServiceNow ~30 min, Salesforce /
-    Jira ~1 h): as long as a refresh token is held, the source stays connected.
-    """
+def test_token_status_expired_with_valid_refresh_token_recovers_before_run(client):
+    """The status check refreshes an expired token before discovery starts."""
     from datetime import timedelta
+    from types import SimpleNamespace
     from app.auth.vault import store_token as _store_token_vault
 
+    refreshed_expiry = datetime.now(timezone.utc) + timedelta(hours=2)
     with _patch.dict(_os.environ, _vault_env()):
         resp_dict = {
             "access_token": "expired-tok",
@@ -2332,13 +2453,58 @@ def test_token_status_expired_with_refresh_token_is_refreshable(client):
             "expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
         }
         _store_token_vault(_AUTH_ORG_ID, "salesforce", resp_dict)
-        resp = client.get(
-            "/api/connectors/salesforce/token-status",
-            headers=_AUTH_HEADERS,
-        )
+        with _patch(
+            "app.routes_connector_auth.get_token",
+            new_callable=_AsyncMock,
+            return_value=SimpleNamespace(expires_at=refreshed_expiry),
+        ) as mock_refresh:
+            resp = client.get(
+                "/api/connectors/salesforce/token-status",
+                headers=_AUTH_HEADERS,
+            )
 
     assert resp.status_code == 200
-    assert resp.json()["status"] == "needs_refresh"
+    assert resp.json()["status"] == "connected"
+    assert resp.json()["expires_at"] == refreshed_expiry.isoformat()
+    mock_refresh.assert_awaited_once_with(
+        _AUTH_ORG_ID,
+        "salesforce",
+        min_validity_seconds=0,
+    )
+    assert resp.headers["cache-control"] == "no-store"
+    _clear_credentials()
+
+
+def test_token_status_expired_with_rejected_refresh_requires_reconnect(client):
+    """A rejected refresh is visible before launch, not after a degraded run."""
+    from datetime import timedelta
+    from app.auth import ConnectorNotAuthenticatedError
+    from app.auth.vault import store_token as _store_token_vault
+
+    expired_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    with _patch.dict(_os.environ, _vault_env()):
+        _store_token_vault(
+            _AUTH_ORG_ID,
+            "salesforce",
+            {
+                "access_token": "expired-tok",
+                "refresh_token": "rejected-refresh",
+                "expires_at": expired_at.isoformat(),
+            },
+        )
+        with _patch(
+            "app.routes_connector_auth.get_token",
+            new_callable=_AsyncMock,
+            side_effect=ConnectorNotAuthenticatedError(_AUTH_ORG_ID, "salesforce"),
+        ):
+            resp = client.get(
+                "/api/connectors/salesforce/token-status",
+                headers=_AUTH_HEADERS,
+            )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "refresh_failed"
+    assert resp.json()["expires_at"] == expired_at.isoformat()
     _clear_credentials()
 
 

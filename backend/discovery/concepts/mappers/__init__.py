@@ -44,6 +44,7 @@ A mapper must not INVENT. Three rules, each enforced by a test rather than asser
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Tuple
 
@@ -52,9 +53,49 @@ try:
 except ModuleNotFoundError:  # project-root execution uses backend as package
     from backend.discovery.concepts import model as m
 
+logger = logging.getLogger(__name__)
+
 
 class MapperError(ValueError):
     """A mapper is registered wrongly, or asked to map a record it cannot."""
+
+
+def _enforce_no_approximation(connector_id: str, concept: str, produced: Any) -> None:
+    """Runtime enforcement of AC5's "never silently approximated" at the mapper's
+    own output — the single choke point every registry-mediated mapping passes.
+
+    ``gaps.assert_no_approximation`` was previously wired ONLY in the fixture test,
+    so a new mapper added without a golden-fixture case could populate a field its
+    connector declares ABSENT in production indefinitely, undetected — a pack author
+    treating that field as unavailable per the conformance registry would then be
+    silently wrong. Calling it here means the moment any caller invokes a mapper
+    through the registry (``get_mapper(...)(...)``), an approximation raises.
+
+    ``gaps`` imports ``MAPPERS`` from this module, so the import is LAZY to avoid a
+    cycle. An ``ApproximationError`` propagates (the whole point); a conformance
+    LOOKUP failure (e.g. a mapper whose connector has no conformance declaration, so
+    nothing is declared absent and there is nothing to approximate) degrades to a
+    debug log rather than breaking the mapping.
+    """
+    if produced is None:
+        return
+    try:
+        from discovery.concepts import gaps
+    except ModuleNotFoundError:  # pragma: no cover - import-style shim
+        from backend.discovery.concepts import gaps
+    items = produced if isinstance(produced, (list, tuple)) else (produced,)
+    for item in items:
+        if item is None:
+            continue
+        try:
+            gaps.assert_no_approximation(connector_id, concept, item)
+        except gaps.ApproximationError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a missing decl must not break mapping
+            logger.debug(
+                "no-approximation check skipped for %s/%s: %s",
+                connector_id, concept, exc,
+            )
 
 
 @dataclass(frozen=True)
@@ -69,7 +110,12 @@ class ConceptMapper:
     name: str
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        return self.fn(*args, **kwargs)
+        produced = self.fn(*args, **kwargs)
+        # AC5 runtime guard: a mapper must never populate a field its connector
+        # declared ABSENT. Enforced at the invocation choke point, not only in the
+        # fixture test, so a new mapper cannot approximate in production undetected.
+        _enforce_no_approximation(self.connector_id, self.concept, produced)
+        return produced
 
 
 #: (connector_id, concept) → mapper. Populated by the decorator below.

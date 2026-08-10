@@ -41,7 +41,9 @@ def _incident(
     org_id: str = "org-a",
     ci_ref: str | None = _CI_SYS_ID,
     affected_ci: str | None = None,
-    event_signatures: list[str] | None = None,
+    # A plain list is the offline/fixture shape; a dict is the live
+    # `sysparm_display_value=all` envelope ServiceNow returns.
+    event_signatures: list[str] | dict | None = None,
     resolved_at: str = "2026-07-10 12:00:00",
 ) -> dict:
     sys_id = f"incident-sys-{number:04d}"
@@ -244,6 +246,54 @@ def test_no_speculative_event_link_from_non_signature_text():
 
     assert record.event_signature_link["status"] == STATUS_NOT_AVAILABLE
     assert record.event_signature_link["event_signatures"] == []
+
+
+# ── live ServiceNow shapes, and telling the two unlinked cases apart ─────────
+
+def test_a_multi_value_link_survives_the_display_value_all_envelope():
+    """Live ingestion reads the incident with ``sysparm_display_value=all``, which
+    wraps EVERY field as ``{"value": …, "display_value": …}``. For a multi-value
+    column the list is under ``value``; before the unwrap the reader saw a Mapping,
+    matched neither list nor tuple, and dropped the link silently."""
+    envelope = {
+        "value": [_EVENT_SIGNATURE],
+        "display_value": _EVENT_SIGNATURE,
+    }
+    record = _find(*_three(event_signatures=envelope), cmdb=_cmdb(_ci_item()))[0]
+
+    link = record.event_signature_link
+    assert link["status"] == STATUS_JOINED
+    assert link["linked"] is True
+    assert link["event_signatures"] == [_EVENT_SIGNATURE]
+
+
+def test_an_absent_link_field_and_an_unparseable_one_report_different_reasons():
+    """Both stay unlinked — the join is soft and the verdict is unchanged — but a
+    malformed upstream link must not be indistinguishable from an absent one."""
+    absent = _find(*_three(), cmdb=_cmdb(_ci_item()))[0].event_signature_link
+    junk = _find(
+        *_three(event_signatures=["portal outage"]), cmdb=_cmdb(_ci_item())
+    )[0].event_signature_link
+
+    assert absent["status"] == junk["status"] == STATUS_NOT_AVAILABLE
+    assert absent["linked"] is junk["linked"] is False
+    assert absent["reason"] == "no_event_link"
+    assert junk["reason"] == "event_link_parse_failed"
+
+
+def test_an_empty_multi_value_envelope_is_reported_as_a_parse_failure():
+    """A column present on the incident but carrying nothing usable is an upstream
+    problem worth naming, not the same as never having been linked.
+
+    (Live ingestion drops an empty envelope rather than storing it, so this is the
+    detector-level contract for a payload that still carries one.)
+    """
+    record = _find(
+        *_three(event_signatures={"value": [], "display_value": ""}),
+        cmdb=_cmdb(_ci_item()),
+    )[0]
+
+    assert record.event_signature_link["reason"] == "event_link_parse_failed"
 
 
 # ── evidence trace shape, determinism, privacy, org-scope ────────────────────

@@ -376,6 +376,45 @@ class TestActionedOpportunityProducesAMovementRecord:
         assert result["measured"] == 1
         assert identity in result["measuredIdentities"]
 
+    def test_a_stored_measurement_advances_the_visible_lifecycle(self):
+        from app.opportunity_lifecycle import get_lifecycle, get_lifecycle_history
+        from app.opportunity_movement import get_movement, measure_movements_for_run
+
+        org, identity = _org(), _identity()
+        run = _full_setup(org, identity)
+
+        result = measure_movements_for_run(org, run)
+        assert result["measured"] == 1
+        record = get_movement(org, identity, run)
+        assert record is not None
+
+        expected_state = {
+            VERDICT_COMPARABLE: "measured",
+            VERDICT_WEAK: "monitoring",
+            VERDICT_NOT_COMPARABLE: "stalled",
+        }[record["comparability"]["verdict"]]
+        assert get_lifecycle(org, identity)["state"] == expected_state
+        history = get_lifecycle_history(org, identity)
+        assert any(item["toState"] == "monitoring" for item in history)
+
+    def test_a_terminal_measurement_gap_marks_the_lifecycle_stalled(self):
+        from app.opportunity_lifecycle import get_lifecycle
+        from app.opportunity_movement import (
+            SKIP_NO_CURRENT_SIGNALS,
+            measure_movements_for_run,
+        )
+
+        org, identity = _org(), _identity()
+        _freeze_baseline(org, identity, "run_baseline")
+        _action(org, identity)
+        _instance(org, identity, "run_post_without_signal", days_ago=20)
+
+        result = measure_movements_for_run(org, "run_post_without_signal")
+
+        assert result["measured"] == 0
+        assert result["skipReasons"][SKIP_NO_CURRENT_SIGNALS] == 1
+        assert get_lifecycle(org, identity)["state"] == "stalled"
+
 
 # ---------------------------------------------------------------------------
 # AC5 — no outcome without action; absence is not zero

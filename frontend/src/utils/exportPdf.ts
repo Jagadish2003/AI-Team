@@ -13,16 +13,19 @@
  *
  * jsPDF is imported dynamically so it stays code-split out of the main bundle.
  */
+import type { PackCertification } from '../types/packCertification';
 import type { OpportunityCandidate } from '../types/analystReview';
 import type { OutcomeReportSection } from '../types/outcome';
 import { buildMatrixSvg, LIGHT_MATRIX_PALETTE } from './matrixLayout';
 import { LEADERSHIP_ACTIONS } from '../components/executive_report/KeyInsights';
-import {
-  isThinProjectionEvidence,
-  projectionBasisSummary,
-} from '../components/projection/ProjectionBasis';
+import { projectionBasisSummary } from '../components/projection/ProjectionBasis';
 import { recommendationHeadline } from '../components/projection/ProjectionRecommendation';
 import { showRelease2ArcAUi } from '../config/releaseFlags';
+import {
+  outcomeCaveatExplanation,
+  outcomeCaveatLabel,
+  outcomeCaveatSeverity,
+} from './outcomeCaveats';
 
 export interface ExecutiveReportPdfData {
   confidence: string;
@@ -41,6 +44,12 @@ export interface ExecutiveReportPdfData {
   userName?: string | null;
   generatedAt: string;
   runId?: string | null;
+  /**
+   * 2.0-C2 T3 (AT-833 / AC2): the certification level of every pack that produced
+   * a claim in this report, in order of first appearance. Rendered under the
+   * title so a board paper says which level of pack produced its claims.
+   */
+  packCertifications?: PackCertification[];
   outcomeSection?: OutcomeReportSection | null;
 }
 
@@ -306,6 +315,23 @@ export async function downloadExecutiveReportPdf(
     'normal',
     MUTED,
   );
+  // 2.0-C2 T3 (AT-833 / AC2): provenance of the CLAIMS, not of the document —
+  // stated on the export itself so a reader quoting a finding downstream can say
+  // which level of pack produced it without going back to the product.
+  const certifications = data.packCertifications ?? [];
+  if (certifications.length > 0) {
+    wrapped(
+      `Produced by: ${certifications
+        .map(
+          (item) =>
+            `${item.packId} (${item.label}${item.reviewDue ? ', review due' : ''})`,
+        )
+        .join(' · ')}`,
+      9,
+      'normal',
+      MUTED,
+    );
+  }
   y += 3.5;
   setDraw(ACCENT);
   pdf.setLineWidth(0.6);
@@ -429,6 +455,20 @@ export async function downloadExecutiveReportPdf(
         'normal',
         MUTED,
       );
+      (measurement.confounders ?? []).forEach((caveat) => {
+        const explanation = outcomeCaveatExplanation(caveat);
+        wrapped(
+          [
+            `Caveat (${outcomeCaveatSeverity(caveat)}): ${outcomeCaveatLabel(caveat)}`,
+            explanation ? `Why this matters: ${explanation}` : null,
+          ]
+            .filter(Boolean)
+            .join('. ') + '.',
+          8.5,
+          'normal',
+          MUTED,
+        );
+      });
     });
     y += 5;
   }
@@ -440,9 +480,6 @@ export async function downloadExecutiveReportPdf(
   } else {
     data.quickWins.forEach((o) => {
       const basisSummary = showRelease2ArcAUi ? projectionBasisSummary(o.projection) : null;
-      const thinEvidenceText = showRelease2ArcAUi && isThinProjectionEvidence(o.projection)
-        ? 'Thin evidence - projection band is wider because evidence is limited.'
-        : null;
       // 2.0-A1 T5: the export carries the same intervention-language statement
       // the screens show. AC3 covers exports explicitly, and a PDF is the
       // artefact most likely to be quoted in a board paper.
@@ -453,11 +490,8 @@ export async function downloadExecutiveReportPdf(
       const basisLines = basisSummary
         ? (pdf.splitTextToSize(sanitize(basisSummary), CW - 10) as string[])
         : [];
-      const thinLines = thinEvidenceText
-        ? (pdf.splitTextToSize(sanitize(thinEvidenceText), CW - 10) as string[])
-        : [];
       const extraH =
-        (recommendationLines.length + basisLines.length + thinLines.length) *
+        (recommendationLines.length + basisLines.length) *
           lineHeight(8) +
         2;
       const qcH = 14 + extraH;
@@ -484,13 +518,6 @@ export async function downloadExecutiveReportPdf(
       if (basisLines.length > 0) {
         setFont(8, 'normal', MUTED);
         basisLines.forEach((ln) => {
-          pdf.text(ln, MX + 5, basisY);
-          basisY += lineHeight(8);
-        });
-      }
-      if (thinLines.length > 0) {
-        setFont(8, 'normal', MUTED);
-        thinLines.forEach((ln) => {
           pdf.text(ln, MX + 5, basisY);
           basisY += lineHeight(8);
         });

@@ -91,6 +91,15 @@ def _to_iso(value: Any) -> Optional[str]:
     return str(value)
 
 
+def _valid_timestamp_iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        value = value.isoformat()
+    dt = _parse_iso(value)
+    return dt.isoformat() if dt is not None else None
+
+
 def _age_seconds(value: Any) -> Optional[int]:
     dt = _parse_iso(value if isinstance(value, str) else _to_iso(value))
     if dt is None:
@@ -154,6 +163,95 @@ def _latest_by(events: List[Any], predicate) -> Optional[Any]:
 
 
 # ── Connectors panel ────────────────────────────────────────────────────────
+
+def _connector_aliases(connector_id: str) -> set[str]:
+    cid = str(connector_id or "").strip().lower()
+    aliases = {cid} if cid else set()
+    if cid == "salesforce":
+        aliases.update({"ncino", "salesforce_ncino", "salesforce_pss", "salesforce_sc"})
+    elif cid == "jira":
+        aliases.add("jira_confluence")
+    elif cid == "jira_confluence":
+        aliases.update({"jira", "confluence"})
+    return aliases
+
+
+def _succeeded_systems_match(connector_id: str, systems: Any) -> bool:
+    aliases = _connector_aliases(connector_id)
+    if not aliases or not isinstance(systems, (list, tuple, set)):
+        return False
+    for system in systems:
+        sid = str(system or "").strip().lower()
+        if sid in aliases or (connector_id == "salesforce" and sid.startswith("salesforce_")):
+            return True
+    return False
+
+
+def _per_system_succeeded(connector_id: str, per_system: Any) -> bool:
+    if not isinstance(per_system, dict):
+        return False
+    success_states = {"ok", "success", "succeeded", "complete", "completed"}
+    for alias in _connector_aliases(connector_id):
+        value = per_system.get(alias)
+        status = value.get("status") if isinstance(value, dict) else value
+        if str(status or "").strip().lower() in success_states:
+            return True
+    if connector_id == "salesforce":
+        for key, value in per_system.items():
+            if not str(key or "").strip().lower().startswith("salesforce_"):
+                continue
+            status = value.get("status") if isinstance(value, dict) else value
+            if str(status or "").strip().lower() in success_states:
+                return True
+    return False
+
+
+def _run_connector_ingestion_times(org_id: str) -> Dict[str, str]:
+    """Best-effort historical fallback from materialized run status.
+
+    Older Salesforce/ServiceNow/Jira runs wrote connector metrics but did not
+    stamp the connector record with a timestamp. Their run status still records
+    per-system success, so Run Health can recover a real completion time without
+    falling back to display labels such as "Just now".
+    """
+    out: Dict[str, str] = {}
+    for run in db.tenancy_get_runs(org_id):
+        run_id = run.get("id")
+        if not run_id:
+            continue
+        status_kv = db.run_kv_get("status", run_id, {}) or {}
+        if not isinstance(status_kv, dict):
+            status_kv = {}
+        raw_status = str(status_kv.get("status") or run.get("status") or "").lower()
+        if raw_status not in {"complete", "completed", "done", "partial"}:
+            continue
+        completed_at = (
+            _valid_timestamp_iso(run.get("completedAt"))
+            or _valid_timestamp_iso(status_kv.get("updatedAt"))
+            or _valid_timestamp_iso(run.get("updatedAt"))
+        )
+        if not completed_at:
+            continue
+        for connector_id in (
+            "salesforce",
+            "servicenow",
+            "jira",
+            "jira_confluence",
+            "slack",
+            "teams",
+            "confluence",
+            "sharepoint",
+            "github",
+        ):
+            if connector_id in out and out[connector_id] >= completed_at:
+                continue
+            if _succeeded_systems_match(connector_id, status_kv.get("succeeded")):
+                out[connector_id] = completed_at
+                continue
+            if _per_system_succeeded(connector_id, status_kv.get("perSystem")):
+                out[connector_id] = completed_at
+    return out
+
 
 def _auth_mode(org_id: str, connector_id: str) -> Optional[str]:
     """oauth | static | None — read from the credential vault kind, never the
@@ -267,6 +365,7 @@ def _connector_entry(
     ingest_events: List[Any],
     health_events: List[Any],
     completion_events: Optional[List[Any]] = None,
+    run_ingestion_times: Optional[Dict[str, str]] = None,
 ) -> Optional[Dict[str, Any]]:
     connector_id = record.get("id")
     if not connector_id:
@@ -313,13 +412,25 @@ def _connector_entry(
         completion_events or [], lambda e: getattr(e, "connector_id", None) == connector_id
     )
     last_successful_ingestion = _newest_timestamp(last_ingest_event, last_completion_event)
-    # Falls back to the connector record's lastSynced overlay when NEITHER channel
-    # has recorded a completion — the pre-existing behaviour for the connectors that
-    # do not run on the change-based path (salesforce / servicenow / jira).
+    if last_successful_ingestion is None:
+        last_successful_ingestion = (
+            _valid_timestamp_iso(record.get("lastSuccessfulIngestionAt"))
+            or _valid_timestamp_iso(record.get("last_successful_ingestion_at"))
+        )
+    if last_successful_ingestion is None and run_ingestion_times:
+        last_successful_ingestion = _valid_timestamp_iso(
+            run_ingestion_times.get(str(connector_id))
+        )
+    # Last resort for legacy rows that stored a timestamp in lastSynced.
     if last_successful_ingestion is None:
         synced = record.get("lastSynced")
         if isinstance(synced, str) and synced not in ("", "—", "-"):
             last_successful_ingestion = synced
+    # Run Health renders this through Date formatting. Reject labels such as
+    # "Just now"; connector cards may use them, but this API field is timestamp
+    # or null.
+    if last_successful_ingestion is not None:
+        last_successful_ingestion = _valid_timestamp_iso(last_successful_ingestion)
 
     # Last error: newest health-check event whose payload status is an error, or a
     # completed ingestion that reported degraded records.
@@ -355,6 +466,13 @@ def _connector_entry(
         checkpoint_captured_at = None
         checkpoint_position = None
         checkpoint_streams = None
+    checkpoint_age_seconds = _age_seconds(checkpoint_captured_at)
+    if checkpoint_age_seconds is None and last_successful_ingestion:
+        # Some legacy/run-level connectors do not publish a resumable checkpoint
+        # row. Use the proven ingestion completion time as their freshness age so
+        # the dashboard still answers "how long since this source advanced?"
+        # without inventing a resettable checkpoint position.
+        checkpoint_age_seconds = _age_seconds(last_successful_ingestion)
 
     return {
         "connector_id": connector_id,
@@ -365,7 +483,7 @@ def _connector_entry(
         "last_successful_ingestion": last_successful_ingestion,
         "checkpoint_position": checkpoint_position,
         "checkpoint_captured_at": checkpoint_captured_at,
-        "checkpoint_age_seconds": _age_seconds(checkpoint_captured_at),
+        "checkpoint_age_seconds": checkpoint_age_seconds,
         "checkpoint_streams": checkpoint_streams,
         "last_error": last_error,
     }
@@ -380,11 +498,17 @@ def connectors_view(org_id: str) -> List[Dict[str, Any]]:
     # The connector-agnostic completion channel (emitted by the shared change-based
     # ingestion runner for every ChangeBasedIngestor).
     completion_events = _safe_range(org_id, "ingestion.completed")
+    run_ingestion_times = _run_connector_ingestion_times(org_id)
 
     out: List[Dict[str, Any]] = []
     for record in records:
         entry = _connector_entry(
-            org_id, record, ingest_events, health_events, completion_events
+            org_id,
+            record,
+            ingest_events,
+            health_events,
+            completion_events,
+            run_ingestion_times,
         )
         if entry is not None:
             out.append(entry)
@@ -629,6 +753,7 @@ def _packs_view_multi(
 
     primary_pack_id = str(latest.get("packId") or "")
     run_executed = latest.get("executedDetectorIds")
+    run_pins = _run_pinned_versions(run_id, latest)
 
     packs_out: List[Dict[str, Any]] = []
     for meta in run_packs:
@@ -675,10 +800,174 @@ def _packs_view_multi(
                 "evaluated_count": event_payload.get("evaluated_count"),
                 "not_evaluated_count": event_payload.get("not_evaluated_count"),
                 "executed_at": executed_at,
+                # 2.0-C1 T2 (AC5): the pack's state TODAY. The row above still
+                # reports exactly what executed (immutable run fields); this says
+                # whether the pack that produced it is still running. A pack
+                # disabled after this run reads "disabled" here while its
+                # execution record is untouched.
+                "pack_state": _current_pack_state(org_id, pack_id),
+                # 2.0-C1 T3 (AC5): the version this run was PINNED to, if any.
+                # `pack_version` above is what actually executed — for a pinned run
+                # they are the same value, and this field is what says the version
+                # was a deliberate rollback rather than the shipped default.
+                "pinned_version": run_pins.get(pack_id),
+                "rolled_back": pack_id in run_pins,
+                # 2.0-C2 T3 (AT-833 / AC2): the pack's certification level, shown
+                # wherever a pack is attributed. Live, for the same reason
+                # `pack_state` is.
+                **_certification_fields(pack_id),
+                # 2.0-C4 T2 (AT-843 / AC1): the deprecation notice, with the date
+                # support ends and what replaces it. Live, same reason again.
+                **_deprecation_fields(pack_id),
             }
         )
 
-    return {"run_id": run_id, "packs": packs_out}
+    return {
+        "run_id": run_id,
+        "packs": packs_out,
+        "excluded_packs": _excluded_packs_for_run(run_id, latest),
+        "pinned_pack_versions": run_pins,
+    }
+
+
+def _deprecation_fields(pack_id: str) -> Dict[str, Any]:
+    """The deprecation fields for a packs-panel row (2.0-C4 T2 / AT-843 / AC1).
+
+    *"orgs using a deprecated pack see it ... in run health ... with the date it
+    stops being supported and what replaces it."* Run health is where an operator
+    looks when a run's output surprises them, so a pack that is on its way out has
+    to say so here — with the date and the replacement, not just a flag.
+
+    Read LIVE, like ``_current_pack_state`` and ``_pack_certification`` and unlike
+    every immutable execution field on the row: "is this pack still supported, and
+    until when" is a question about now. The run record's ``packDeprecations``
+    snapshot is the audit record of what was true at launch.
+
+    A pack that is not deprecated contributes NO fields — the panel shows a notice
+    or shows nothing. Same treatment for a pack the registry no longer declares
+    (see ``_pack_certification`` for why resolving it to the default pack would be
+    actively wrong on an attribution panel), and the whole thing is fail-soft.
+    """
+    try:
+        from discovery.packs.pack_config import PACK_REGISTRY
+        from discovery.packs.pack_deprecation import deprecation_notice
+
+        if pack_id not in PACK_REGISTRY:
+            return {}
+        notice = deprecation_notice(pack_id)
+    except Exception:  # noqa: BLE001
+        return {}
+    if not notice:
+        return {}
+    return {
+        "deprecated": True,
+        "deprecation_phase": notice["phase"],
+        "deprecation_label": notice["statusLabel"],
+        "deprecation_reason": notice["reason"],
+        "deprecation_on": notice["deprecatedOn"],
+        # The date support ends. None when no removal date has been announced —
+        # stated as null rather than omitted, because "deprecated with no end date
+        # yet" is a real answer and the panel should be able to say it.
+        "deprecation_ends_on": notice["graceEndsOn"] or None,
+        "deprecation_days_remaining": notice["daysRemaining"],
+        "deprecation_replacement_pack_id": notice["replacementPackId"] or None,
+        "deprecation_replacement_label": notice["replacementLabel"] or None,
+        "deprecation_notice": notice["summary"],
+    }
+
+
+def _certification_fields(pack_id: str) -> Dict[str, Any]:
+    """The three additive certification fields for a packs-panel row."""
+    badge = _pack_certification(pack_id)
+    if not badge:
+        return {}
+    return {
+        "certification_level": badge["level"],
+        "certification_label": badge["label"],
+        "certification_review_due": bool(badge.get("reviewDue")),
+        # 2.0-C2 T5 (AT-835): WHY the review is due, and the date it falls due — so
+        # the panel can say what to do about it, and can warn before it happens.
+        "certification_review_due_detail": badge.get("reviewDueDetail"),
+        "certification_review_due_on": badge.get("reviewDueOn"),
+    }
+
+
+def _pack_certification(pack_id: str) -> Dict[str, Any]:
+    """This pack's CURRENT certification badge (2.0-C2 T3 / AT-833 / AC2).
+
+    Read live, like ``_current_pack_state`` and unlike every immutable execution
+    field on the row: "what level is this pack" is a question about now. A badge that
+    no longer verifies must stop reading as Certified here at the same moment it does
+    on the findings — the run record's ``packCertifications`` snapshot is the audit
+    record of what it was at launch.
+
+    Fail-soft to an empty dict; the caller omits the fields rather than guessing.
+    """
+    try:
+        from discovery.packs.pack_certification import certification_badge
+        from discovery.packs.pack_config import PACK_REGISTRY
+
+        # A pack the registry no longer declares has NO badge to report. Left to
+        # `get_pack()`'s resolve-to-default rule this row would wear the default
+        # pack's badge — attributing service_cloud's certification to a pack that is
+        # gone, on a panel whose whole job is accurate attribution. Same decision as
+        # `pack_state_view`'s orphaned rows (AT-829): state what is still known.
+        if pack_id not in PACK_REGISTRY:
+            return {}
+        return certification_badge(pack_id)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _current_pack_state(org_id: str, pack_id: str) -> str:
+    """This org's CURRENT state for a pack (2.0-C1 T2 / AC5).
+
+    Unlike every other field in the packs panel — which comes from immutable run
+    fields precisely so a later pack change cannot rewrite history — this one is
+    deliberately read LIVE, because "is this pack still running?" is a question
+    about now, not about the run. Fail-soft: an unreadable state store reports
+    ``active`` rather than blanking the panel.
+    """
+    from .pack_state import STATE_ACTIVE, STATE_DISABLED, disabled_pack_ids_safe
+
+    return STATE_DISABLED if pack_id in disabled_pack_ids_safe(org_id) else STATE_ACTIVE
+
+
+def _run_pinned_versions(run_id: str, run: Dict[str, Any]) -> Dict[str, str]:
+    """``{pack_id: version}`` this RUN executed at a rolled-back version.
+
+    A historical fact about the run, read from the run record (the runner persists
+    it), NOT from the org's current pin — a rollback that happened after this run
+    must not make the run look as though it used the pinned version (2.0-C1 AC3:
+    nothing is rewritten retroactively).
+    """
+    from_run = run.get("pinnedPackVersions")
+    if isinstance(from_run, dict) and from_run:
+        return {str(k): str(v) for k, v in from_run.items() if k and v}
+    try:
+        stored = db.run_kv_get("pinned_pack_versions", run_id, {}) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(stored, dict):
+        return {}
+    return {str(k): str(v) for k, v in stored.items() if k and v}
+
+
+def _excluded_packs_for_run(run_id: str, run: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Packs selected for this run that did not execute because they are disabled.
+
+    Read from the run record first, then the run-scoped KV the launch edge and the
+    runner both write. Reported so an analyst seeing fewer packs than they selected
+    gets the reason instead of an unexplained gap (2.0-C1 AC5).
+    """
+    from_run = run.get("excludedPacks")
+    if isinstance(from_run, list) and from_run:
+        return [row for row in from_run if isinstance(row, dict)]
+    try:
+        stored = db.run_kv_get("excluded_packs", run_id, []) or []
+    except Exception:  # noqa: BLE001
+        return []
+    return [row for row in stored if isinstance(row, dict)]
 
 
 def packs_view(org_id: str) -> Dict[str, Any]:
@@ -696,11 +985,21 @@ def packs_view(org_id: str) -> Dict[str, Any]:
     """
     latest = _latest_run(org_id)
     if latest is None:
-        return {"run_id": None, "packs": []}
+        return {
+            "run_id": None,
+            "packs": [],
+            "excluded_packs": [],
+            "pinned_pack_versions": {},
+        }
 
     run_id = str(latest.get("id") or "")
     if not run_id:
-        return {"run_id": None, "packs": []}
+        return {
+            "run_id": None,
+            "packs": [],
+            "excluded_packs": [],
+            "pinned_pack_versions": {},
+        }
 
     run_packs = latest.get("packs")
     if isinstance(run_packs, list) and run_packs:
@@ -720,8 +1019,16 @@ def packs_view(org_id: str) -> Dict[str, Any]:
         or db.run_kv_get("pack_id", run_id, None)
         or ""
     )
+    # Historical fact about THIS run — resolved once and reused below.
+    run_pins = _run_pinned_versions(run_id, latest)
+
     if not pack_id:
-        return {"run_id": run_id, "packs": []}
+        return {
+            "run_id": run_id,
+            "packs": [],
+            "excluded_packs": _excluded_packs_for_run(run_id, latest),
+            "pinned_pack_versions": run_pins,
+        }
 
     run_detectors = latest.get("executedDetectorIds")
     event_detectors = event_payload.get("detector_ids")
@@ -746,7 +1053,14 @@ def packs_view(org_id: str) -> Dict[str, Any]:
     if not execution_exists:
         # A selected pack is not proof that its detectors ran. A run that failed
         # during ingestion must not be presented as a successful pack execution.
-        return {"run_id": run_id, "packs": []}
+        # The excluded list is still reported — "this pack was skipped because it is
+        # disabled" is exactly the explanation an empty packs list needs.
+        return {
+            "run_id": run_id,
+            "packs": [],
+            "excluded_packs": _excluded_packs_for_run(run_id, latest),
+            "pinned_pack_versions": run_pins,
+        }
 
     detector_count = len(detectors)
     if not detectors and event_payload.get("detector_count") is not None:
@@ -766,8 +1080,18 @@ def packs_view(org_id: str) -> Dict[str, Any]:
                 "evaluated_count": event_payload.get("evaluated_count"),
                 "not_evaluated_count": event_payload.get("not_evaluated_count"),
                 "executed_at": execution_recorded_at,
+                # 2.0-C1 T2/T3 (AC5) — see _current_pack_state / _run_pinned_versions.
+                "pack_state": _current_pack_state(org_id, pack_id),
+                "pinned_version": run_pins.get(pack_id),
+                "rolled_back": pack_id in run_pins,
+                # 2.0-C2 T3 (AT-833 / AC2) — see _pack_certification.
+                **_certification_fields(pack_id),
+                # 2.0-C4 T2 (AT-843 / AC1) — see _deprecation_fields.
+                **_deprecation_fields(pack_id),
             }
         ],
+        "excluded_packs": _excluded_packs_for_run(run_id, latest),
+        "pinned_pack_versions": run_pins,
     }
 
 

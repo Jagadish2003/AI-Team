@@ -11,7 +11,7 @@ server. Two interchangeable paths are provided (pick one):
   into a single [`provision.sql`](provision.sql) — regenerate it whenever
   migrations change (see *Regenerating the SQL bundle*).
 
-Both produce the **same 28-table schema** plus the core reference seed
+Both produce the **same 54-table schema** plus the core reference seed
 (connectors, mappings, permissions, uploads).
 
 ## Why the schema comes from more than just migrations
@@ -22,7 +22,7 @@ defect this bundle fixes. The three sources:
 
 | Source | Tables |
 |---|---|
-| Alembic migrations (`backend/migrations`) | `telemetry_events`, `signal_snapshots`, `entities`, `users`, `login_attempts`, `orgs`, `entity_relationships`, `causal_hypotheses`, `audit_log`, `workspace_members`, `org_licenses`, `license_registry`, `issuance_audit` (+ `alembic_version`) |
+| Alembic migrations (`backend/migrations`) | Versioned native tables, including A1 projection instances, A2 lifecycle/baseline/movement records, A3 feedback/ranking state and history (+ `alembic_version`) |
 | `seed_loader.py` (`{id,payload}` tables) | `connectors`, `uploads`, `runs`, `evidence`, `mappings`, `permissions`, `opportunities`, `audit_events`, `executive_reports`, `run_events`, `kv` |
 | Lazy runtime creators (materialised up front by these scripts) | `credentials`, `nonces`, `oauth_nonces` |
 
@@ -83,11 +83,13 @@ $env:DATABASE_URL = "postgresql://agentiq:<password>@<DB_HOST>:5432/agentiq"
 ```
 
 What it does (idempotent, never drops anything):
-1. `alembic upgrade head` — native tables + version stamp.
-2. `seed_loader.py --no-reset` — `{id,payload}` tables + core reference seed
-   (`--no-seed` creates the tables only).
-3. Materialises the lazy-only tables (`credentials`, `nonces`, `oauth_nonces`).
-4. Prints the resulting table inventory and `alembic_version`.
+1. Materialises the `{id,payload}` core tables without seed rows, so migrations
+   can extend/protect `runs` and `kv` on a clean install.
+2. Runs `alembic upgrade head` for native tables + version stamp.
+3. Optionally upserts the core reference seed (`--no-seed` skips these rows).
+4. Materialises the lazy-only tables (`credentials`, `nonces`, `oauth_nonces`).
+5. Re-applies history privileges, then verifies the A1/A2/A3 tables, keys,
+   indexes, migration head, and application-role privileges.
 
 You can also call the underlying script directly:
 `python database/provision/provision_schema.py [--no-seed]`.
@@ -107,7 +109,7 @@ psql -h <DB_HOST> -p 5432 -U postgres -d <DB_NAME> -v ON_ERROR_STOP=1 -f provisi
 ```
 
 - [`provision.sql`](provision.sql) — creates the `agentiq` role + schema grants,
-  then all 28 tables (including `org_licenses`, `license_registry`,
+  then all 54 tables (including `org_licenses`, `license_registry`,
   `issuance_audit`), indexes, sequences, the core
   reference seed (connectors, mappings, permissions, uploads) as idempotent
   `INSERT … ON CONFLICT DO NOTHING`, and the `alembic_version` stamp (so a later
@@ -124,10 +126,21 @@ psql -h <DB_HOST> -p 5432 -U postgres -d <DB_NAME> -v ON_ERROR_STOP=1 -f provisi
 ## Verification (either path)
 
 ```sql
-SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';  -- 28
-SELECT version_num FROM alembic_version;                                       -- current head
+SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';  -- 54
+SELECT version_num FROM alembic_version;                                       -- 0050
 SELECT count(*) FROM connectors;                                               -- > 0 if seeded
 ```
+
+For the full A1 -> A2 -> A3 contract, run the read-only checker:
+
+```bash
+cd backend
+python database/provision/a1_a3_readiness.py --target all
+```
+
+It reads `DEV_DATABASE_URL` and `PROD_DATABASE_URL`, prints no connection string
+or password, and exits non-zero if either database cannot store projections,
+track outcomes, learn from them, or preserve the related history.
 
 Then point the backend at `DATABASE_URL` and start it. On first start the app
 seeds the dev/owner workspace member and creates anything still missing.
