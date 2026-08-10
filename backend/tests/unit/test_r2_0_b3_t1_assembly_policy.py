@@ -175,6 +175,86 @@ def test_ac1_an_unranked_source_type_sorts_last_never_first():
     assert _order(blank) == ["chat", "blank"]
 
 
+# ── rank-table KEYS are validated too, not just dimension names ─────────────
+#
+# The dimension NAME half was always refused (test_an_unknown_dimension_is_refused_
+# at_load). The VALUE half was not: a key was stored verbatim while the lookup
+# normalises the candidate's value, so a mis-cased key matched nothing and fell
+# through to unknown_rank — sorting that content LAST rather than at the rank the
+# operator declared, which is the precedence silently inverted.
+
+
+def test_a_mis_cased_rank_key_still_sets_the_precedence_it_declares():
+    """``"Structured"`` must mean ``structured``, not "nothing, so sort last".
+
+    This is the regression that matters: before normalising, this declaration
+    dropped structured records BELOW conversation — the exact inversion of the
+    principle the file exists to state.
+    """
+    declaration = _declared(
+        source_type_ranks={"Structured": 0, "Prose": 1, "CODE": 2, "conversation": 3}
+    )
+    assert dict(declaration.source_type_ranks) == {
+        "structured": 0, "prose": 1, "code": 2, "conversation": 3,
+    }
+
+    candidates = [
+        Candidate("chat", "evidence", "observed", confidence=0.9, source_type="conversation"),
+        Candidate("rec", "evidence", "observed", confidence=0.9, source_type="structured"),
+    ]
+    assert _order(candidates, declaration) == ["rec", "chat"]
+
+
+def test_a_mis_cased_origin_key_still_sets_its_tier():
+    """Origin is a HARD budget tier, so a mis-cased key there is worse than a soft
+    mis-ranking: observed content would have been displaced by inferred guesses."""
+    declaration = _declared(origin_ranks={"Observed": 0, "INFERRED": 1})
+    assert dict(declaration.origin_ranks) == {"observed": 0, "inferred": 1}
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        {"structual": 0, "prose": 1},          # transposed letters
+        {"structured": 0, "chat": 1},          # plausible-but-wrong synonym
+        {"structured": 0, "": 1},              # empty key
+    ],
+)
+def test_an_unknown_rank_key_is_refused_at_load(table):
+    """A key no candidate can ever match is a typo, and refusing it is the same rule
+    the loader already applies to dimension names. Left in, it would silently drop
+    the precedence rule the operator thought they wrote."""
+    with pytest.raises(apc.AssemblyPolicyConfigError, match="not a known"):
+        _declared(source_type_ranks=table)
+
+
+def test_keys_that_collide_once_normalised_are_refused():
+    """Keeping one and discarding the other would be an arbitrary precedence choice,
+    so the ambiguity is reported rather than resolved by dict iteration order."""
+    with pytest.raises(apc.AssemblyPolicyConfigError, match="same value once normalised"):
+        _declared(source_type_ranks={"structured": 0, "Structured": 1})
+
+
+def test_declaring_a_subset_of_the_vocabulary_is_still_allowed():
+    """Validation targets typos, not partial declarations: an undeclared type
+    legitimately sorts last via unknown_rank, which is the documented fail-safe."""
+    declaration = _declared(source_type_ranks={"structured": 0, "prose": 1})
+    assert dict(declaration.source_type_ranks) == {"structured": 0, "prose": 1}
+    assert declaration.unknown_rank("source_type") == 2
+
+
+def test_the_shipped_declaration_uses_only_known_values():
+    """The vocabulary is derived from what the assembler can actually produce, so
+    the file we ship must satisfy it — otherwise the guard is calibrated wrongly."""
+    declaration = apc.load_declared_policy()
+    for dimension, table in (
+        (apc.DIMENSION_ORIGIN, declaration.origin_ranks),
+        (apc.DIMENSION_SOURCE_TYPE, declaration.source_type_ranks),
+    ):
+        allowed = set(apc.KNOWN_DIMENSION_VALUES[dimension])
+        assert set(table) <= allowed, f"{dimension} declares values outside {allowed}"
+
+
 # ── hard tiers vs soft preferences ──────────────────────────────────────────
 
 
