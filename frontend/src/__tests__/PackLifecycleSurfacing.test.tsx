@@ -31,8 +31,15 @@ const api = vi.hoisted(() => ({
 const auth = vi.hoisted(() => ({ role: "owner" as "owner" | "analyst" | "viewer" }));
 
 vi.mock("../api/runHealthApi", () => api);
+// Both hooks are mocked, and both must stay mocked. A whole-module factory
+// REPLACES the module, so any export it omits is undefined at the call site —
+// the OpportunityDetail tests below render the source-trace panel, which reads
+// the viewer role through useAuthOptional, and omitting it fails the render
+// rather than degrading. Same identity for both so a role change here applies
+// wherever the component tree reads it.
 vi.mock("../context/AuthContext", () => ({
   useAuth: () => ({ user: { email: "health@example.com", role: auth.role } }),
+  useAuthOptional: () => ({ user: { email: "health@example.com", role: auth.role } }),
 }));
 vi.mock("../context/RunContext", () => ({
   useRunContext: () => ({ runId: "run_test_001" }),

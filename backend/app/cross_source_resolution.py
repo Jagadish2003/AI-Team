@@ -82,6 +82,30 @@ TIER_EXPLICIT_REFERENCE = "explicit_reference"
 TIER_ALIAS_MAPPING = "alias_mapping"
 TIER_NAME_SIMILARITY = "name_similarity"
 
+#: Tier 4 — a LEADING-WORD name match ("Payment Operations" vs "Payment
+#: Escalations"). Deliberately its OWN tier rather than a loosening of tier 3,
+#: and OFF unless a deployment opts in via ``ResolutionPolicy.name_prefix_words``.
+#:
+#: Why a separate tier. Tier 3's exactness is depended on elsewhere — most
+#: importantly ``app.corroboration_identity_gate``, which consults a tier-3
+#: re-derivation before letting a finding reach HIGH. Widening tier 3 would let a
+#: finding be elevated on a shared first word, which is a confidence claim the
+#: evidence cannot support. Keeping this separate means every existing consumer of
+#: tier 3 keeps the guarantee it was written against.
+#:
+#: Why it exists at all. Some deployments cannot align names across systems: an
+#: operational ServiceNow assignment group and a Salesforce queue may be
+#: differently named by real organisational history, and renaming either is not
+#: available to the people who need the match reviewed. For those cases this
+#: proposes the pair for a HUMAN to judge — never merges it.
+#:
+#: The cost is real and is why it ships disabled: leading-word matching is
+#: combinatorial. Measured on one real org, the word "case" appears in 61 entity
+#: names (1,830 candidate pairs) and "test" in 60 (1,770). A review queue nobody
+#: can finish is a review queue nobody uses, so the corroborating-relationship
+#: requirement and ``max_proposals`` cap both still apply, undiminished.
+TIER_NAME_PREFIX = "name_prefix_similarity"
+
 #: Rank of each tier — LOWER is stronger. The engine consults tiers in this
 #: order and the first one to produce a decision wins; a weaker tier can never
 #: override a stronger one's answer.
@@ -89,6 +113,7 @@ TIER_RANK: Dict[str, int] = {
     TIER_EXPLICIT_REFERENCE: 1,
     TIER_ALIAS_MAPPING: 2,
     TIER_NAME_SIMILARITY: 3,
+    TIER_NAME_PREFIX: 4,
 }
 
 TIERS_BY_RANK: Tuple[str, ...] = tuple(sorted(TIER_RANK, key=lambda t: TIER_RANK[t]))
@@ -120,6 +145,9 @@ STATUS_UNRESOLVED = "unresolved"  # nothing matched
 CONFIDENCE_EXPLICIT_REFERENCE = 1.0
 CONFIDENCE_ALIAS_MAPPING = 0.95
 CONFIDENCE_NAME_SIMILARITY = 0.7
+#: Tier 4. Strictly below tier 3: a shared leading word is weaker evidence than a
+#: whole matching name, and the number a reviewer sees should say so.
+CONFIDENCE_NAME_PREFIX = 0.5
 CONFIDENCE_AMBIGUOUS = 0.6
 CONFIDENCE_NONE = 0.0
 
@@ -326,6 +354,31 @@ class ResolutionPolicy:
     require_corroborating_relationship: bool = True
     require_cross_source_for_name_tier: bool = True
     max_proposals: int = 10
+    #: Tier 4 opt-in: how many LEADING words of the canonical name must match for
+    #: a pair to be PROPOSED. ``0`` (the default) disables the tier entirely, so
+    #: every existing deployment behaves exactly as before.
+    #:
+    #: This field can only make the engine propose MORE, which is why it is the
+    #: one exception to this class's "only ever more conservative" rule — and why
+    #: it is stated here rather than hidden. It still cannot move anything across
+    #: the auto-merge boundary: :data:`TIER_NAME_PREFIX` is absent from
+    #: :data:`AUTO_MERGE_TIERS`, so :func:`action_for_tier` can only ever return
+    #: ``ACTION_PROPOSE`` for it, and ``entity_merge._RULE_FOR_TIER`` has no rule
+    #: for it either. Two independent gates, neither reachable from config.
+    #:
+    #: 1 matches on the first word alone — the loosest setting, and the one that
+    #: floods a queue fastest. Prefer 2 where the names allow it.
+    name_prefix_words: int = 0
+    #: Tier 4 only: require the shared observed neighbour. SEPARATE from
+    #: ``require_corroborating_relationship`` so tier 3 keeps its own requirement
+    #: untouched whatever tier 4 is set to.
+    #:
+    #: Turning this OFF removes the only evidence tier 4 has beyond the words
+    #: themselves, so every pair sharing a leading word becomes a proposal. On one
+    #: measured org that is ~3,600 proposals from the words "case" and "test"
+    #: alone. ``max_proposals`` becomes the only thing standing between a reviewer
+    #: and an unusable queue — set it deliberately if you disable this.
+    name_prefix_require_corroboration: bool = True
 
 
 DEFAULT_POLICY = ResolutionPolicy()
@@ -346,6 +399,7 @@ def confidence_for_tier(tier: str) -> float:
         TIER_EXPLICIT_REFERENCE: CONFIDENCE_EXPLICIT_REFERENCE,
         TIER_ALIAS_MAPPING: CONFIDENCE_ALIAS_MAPPING,
         TIER_NAME_SIMILARITY: CONFIDENCE_NAME_SIMILARITY,
+        TIER_NAME_PREFIX: CONFIDENCE_NAME_PREFIX,
     }.get(tier, CONFIDENCE_NONE)
 
 
@@ -669,6 +723,128 @@ def _alias_matches(
     return matches
 
 
+def _leading_words(canonical_name: str, count: int) -> str:
+    """The first ``count`` words of a canonical name, or "" when there are fewer.
+
+    A name SHORTER than the required prefix yields "" and therefore never matches:
+    with ``count=2``, "payment" cannot be said to agree with "payment operations"
+    on two words, and treating it as agreement would be inventing a match.
+
+    A name of EXACTLY ``count`` words does match — so with ``count=1`` an entity
+    called "Payment" is a candidate against "Payment Operations". That is
+    deliberate: it is a real question a reviewer might answer yes to, and
+    suppressing it would be an arbitrary carve-out. The volume it invites is held
+    down by the corroborating-relationship requirement and ``max_proposals``, not
+    by refusing to ask.
+    """
+    words = canonical_name.split()
+    if count <= 0 or len(words) < count:
+        return ""
+    return " ".join(words[:count])
+
+
+def _name_prefix_matches(
+    subject: ResolutionEntity,
+    candidates: Sequence[ResolutionEntity],
+    relationship_index: RelationshipIndex,
+    policy: ResolutionPolicy,
+) -> Tuple[List[ResolutionMatch], List[Dict[str, Any]]]:
+    """Tier 4 — LEADING-WORD name match, PROPOSED only, opt-in.
+
+    Runs only when ``policy.name_prefix_words > 0``. Every guard tier 3 applies
+    still applies here — cross-source, corroborating observed relationship,
+    proposal-only — because the looser the name rule, the more the other
+    constraints are doing to keep the queue answerable.
+
+    Pairs whose names match EXACTLY are skipped: they are tier 3's business and
+    would already have returned a decision before this tier is consulted.
+    """
+    words = policy.name_prefix_words
+    if words <= 0:
+        return [], []
+
+    subject_prefix = _leading_words(subject.canonical_name, words)
+    if not subject_prefix:
+        return [], []
+
+    proposals: List[ResolutionMatch] = []
+    skipped: List[Dict[str, Any]] = []
+
+    for candidate in candidates:
+        if candidate.canonical_name == subject.canonical_name:
+            continue  # tier 3's job, already decided above
+        if _leading_words(candidate.canonical_name, words) != subject_prefix:
+            continue
+        # CROSS-SOURCE ONLY, and deliberately not configurable. 2.0-B2 is a
+        # cross-source story, and a same-source leading-word match is not a
+        # near-miss on that — it is a different question with a much worse
+        # signal-to-noise ratio. Allowing it (briefly, behind a flag) produced
+        # "Test Case 10" against "Test Case 40" and "STRS Disability Review 1"
+        # against "…Review 3": numbered variants of one record type, where
+        # confirming either would permanently merge two unrelated records. 696
+        # such pairs in one org.
+        #
+        # Duplicate groups WITHIN one system is a real data-quality question, but
+        # it wants its own surface and its own rules (a numeric-suffix guard, at
+        # minimum) rather than borrowing a cross-source review queue.
+        if candidate.source_system == subject.source_system:
+            skipped.append({
+                "entity_id": candidate.entity_id,
+                "source_system": candidate.source_system,
+                "reason": REASON_SAME_SOURCE,
+            })
+            continue
+
+        shared = relationship_index.shared(subject.entity_id, candidate.entity_id)
+        if policy.name_prefix_require_corroboration and not shared:
+            skipped.append({
+                "entity_id": candidate.entity_id,
+                "source_system": candidate.source_system,
+                "reason": REASON_NO_CORROBORATION,
+            })
+            continue
+
+        proposals.append(
+            ResolutionMatch(
+                target=candidate,
+                tier=TIER_NAME_PREFIX,
+                # Structurally ACTION_PROPOSE: TIER_NAME_PREFIX is not in
+                # AUTO_MERGE_TIERS, so this branch cannot return a merge.
+                action=action_for_tier(TIER_NAME_PREFIX),
+                confidence=confidence_for_tier(TIER_NAME_PREFIX),
+                reason=(
+                    f"first {words} word(s) of the name match across sources "
+                    f"(\"{subject_prefix}\")"
+                    + (
+                        " with a corroborating observed relationship"
+                        if shared
+                        else " with NO corroborating relationship — the names are "
+                        "the only evidence"
+                    )
+                    + " — the FULL names differ, so this is a weaker signal than "
+                    "an exact match and needs human confirmation"
+                ),
+                evidence={
+                    "matched_prefix": subject_prefix,
+                    "prefix_words": words,
+                    "subject_name": subject.canonical_name,
+                    "target_name": candidate.canonical_name,
+                    # Same shape tier 3 emits — the UI reads
+                    # {relationship_type, entity_id}, and handing it the raw
+                    # (type, id) tuples rendered a bare "Both" with both values
+                    # blank on every card.
+                    "corroborating_relationships": [
+                        {"relationship_type": rel, "entity_id": other}
+                        for rel, other in shared
+                    ],
+                },
+            )
+        )
+
+    proposals.sort(key=lambda m: m.target.entity_id)
+    return proposals[: max(0, policy.max_proposals)], skipped
+
+
 def _name_similarity_matches(
     subject: ResolutionEntity,
     candidates: Sequence[ResolutionEntity],
@@ -867,6 +1043,31 @@ def resolve_entity(
             considered=considered,
         )
 
+    # Tier 4 — leading-word match. Consulted LAST and only when a deployment has
+    # opted in (policy.name_prefix_words > 0), so an exact match always wins and
+    # the default engine is unchanged.
+    prefix_proposals, prefix_skipped = _name_prefix_matches(
+        subject, eligible, relationship_index or EMPTY_RELATIONSHIP_INDEX, policy
+    )
+    if prefix_skipped:
+        considered["prefix_matches_not_proposed"] = prefix_skipped
+
+    if prefix_proposals:
+        return ResolutionDecision(
+            subject=subject,
+            status=STATUS_PROPOSED,
+            tier=TIER_NAME_PREFIX,
+            confidence=CONFIDENCE_NAME_PREFIX,
+            merge_target=None,   # never — TIER_NAME_PREFIX is not an auto-merge tier
+            matches=tuple(prefix_proposals),
+            proposals=tuple(prefix_proposals),
+            reason=(
+                f"{len(prefix_proposals)} leading-word candidate(s) proposed for "
+                "confirmation — the full names differ, so this is never auto-merged"
+            ),
+            considered=considered,
+        )
+
     return ResolutionDecision(
         subject=subject,
         status=STATUS_UNRESOLVED,
@@ -1023,6 +1224,8 @@ __all__ = [
     "STATUS_UNRESOLVED",
     "CONFIDENCE_EXPLICIT_REFERENCE",
     "CONFIDENCE_ALIAS_MAPPING",
+    "CONFIDENCE_NAME_PREFIX",
+    "TIER_NAME_PREFIX",
     "CONFIDENCE_NAME_SIMILARITY",
     "CONFIDENCE_AMBIGUOUS",
     "METADATA_CROSS_REFERENCES",
