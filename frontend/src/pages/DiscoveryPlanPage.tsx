@@ -9,6 +9,7 @@ import PackMigrationAssist from '../components/common/PackMigrationAssist';
 import {
   certificationsByPackId,
   deprecationsByPackId,
+  isCertificationPolicyIndeterminate,
   fetchPackStates,
 } from '../api/packStateApi';
 import type { PackCertification } from '../types/packCertification';
@@ -304,6 +305,11 @@ export default function DiscoveryPlanPage({
   const [certificationPolicy, setCertificationPolicy] =
     useState<PackCertificationPolicy | null>(null);
   const [blockedPacks, setBlockedPacks] = useState<Record<string, string>>({});
+  // The policy read can FAIL, and that is not the same as "nothing is blocked".
+  // The annotation is fail-soft while the activation gate fails closed, so without
+  // this every pack rendered activatable and the launch then returned 503 with
+  // nothing on screen explaining why. Indeterminate is shown as indeterminate.
+  const [policyUnavailable, setPolicyUnavailable] = useState(false);
   // 2.0-C4 T2 (AT-843 / AC1): deprecation notices for the packs this run may
   // activate. Run configuration is the surface that matters most for a deprecation
   // — it is the moment someone is about to build a run on a pack that is going
@@ -320,6 +326,7 @@ export default function DiscoveryPlanPage({
         setPackCertifications(certificationsByPackId(response));
         setPackDeprecations(deprecationsByPackId(response));
         setCertificationPolicy(response.certificationPolicy ?? null);
+        setPolicyUnavailable(isCertificationPolicyIndeterminate(response));
         setBlockedPacks(
           Object.fromEntries(
             (response.packs ?? [])
@@ -336,6 +343,10 @@ export default function DiscoveryPlanPage({
         setPackCertifications({});
         setPackDeprecations({});
         setCertificationPolicy(null);
+        // Cleared rather than set: this branch is the whole request failing, which
+        // is a broader and more visible failure than the policy store alone being
+        // unreadable. Clearing also stops a stale advisory surviving a retry.
+        setPolicyUnavailable(false);
         setBlockedPacks({});
       });
     return () => {
@@ -438,6 +449,16 @@ export default function DiscoveryPlanPage({
               label="Template"
               value={templateLabel}
             />
+            {policyUnavailable && (
+              <p
+                data-testid="certification-policy-unavailable"
+                className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-700"
+              >
+                This organisation’s pack certification policy could not be read, so
+                pack eligibility cannot be shown. Launching may be refused until the
+                policy is available again.
+              </p>
+            )}
             {certificationPolicy?.restricted && (
               <p
                 data-testid="certification-policy-banner"

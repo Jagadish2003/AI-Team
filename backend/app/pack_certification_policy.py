@@ -82,6 +82,14 @@ DEFAULT_MINIMUM_LEVEL = LEVEL_COMMUNITY
 #: Levels an org may set as its floor — the same three, ordered.
 POLICY_LEVELS: List[str] = list(CERTIFICATION_LEVELS)
 
+#: Whether the policy behind a DISPLAYED activation-eligibility annotation could be
+#: read. Reported on every row so a surface can distinguish "nothing blocks this
+#: pack" from "we do not know", which is the difference the display path used to
+#: swallow. Nothing gates on these values — the gate reads the policy itself and
+#: fails closed (:func:`assert_selection_permitted`).
+POLICY_STATUS_AVAILABLE = "available"
+POLICY_STATUS_UNAVAILABLE = "unavailable"
+
 
 class PackCertificationPolicyError(ValueError):
     """The requested minimum level is not a legal certification level."""
@@ -547,17 +555,47 @@ def annotate_activation_blocked(
     better experience than a 409 after the user has configured a whole run.
 
     Fail-soft HERE and only here — this is the display path, not the gate. An
-    unreadable policy leaves the rows unannotated; the enforcement point still
+    unreadable policy never blocks a row on this path; the enforcement point still
     refuses (:func:`assert_selection_permitted`), so a surfacing hiccup can never
     become a way past the policy.
+
+    But fail-soft must not mean fail-SILENT. Leaving the rows bare made
+    "the policy permits everything" and "we could not read the policy"
+    indistinguishable: ``activationBlocked`` was simply absent, a selection surface
+    filtering on it found nothing, and every pack rendered as activatable while
+    each activation attempt returned 503 with nothing on screen explaining why.
+    The gate is right to fail closed and the display is right to fail soft — the
+    defect was that the two disagreed in a way the operator could not see.
+
+    So an indeterminate policy is stated rather than implied:
+    ``activationPolicyStatus`` is :data:`POLICY_STATUS_UNAVAILABLE` and
+    ``activationBlocked`` is left ABSENT, because ``False`` would assert an
+    eligibility we could not establish and ``True`` would block packs a readable
+    policy might well permit. Unknown is a third answer, and this is the field that
+    carries it.
     """
     try:
         policy = get_certification_policy(org_id)
     except PackCertificationPolicyUnavailable:
-        return [dict(row) for row in rows]
+        logger.warning(
+            "certification policy unreadable for org %s; pack activation "
+            "eligibility is reported as indeterminate. The activation gate still "
+            "fails closed, so activation will be refused until the policy store "
+            "is readable.",
+            org_id,
+        )
+        return [
+            {**row, "activationPolicyStatus": POLICY_STATUS_UNAVAILABLE}
+            for row in rows
+        ]
     if not policy.restricted:
         return [
-            {**row, "activationBlocked": False, "activationBlockedReason": None}
+            {
+                **row,
+                "activationPolicyStatus": POLICY_STATUS_AVAILABLE,
+                "activationBlocked": False,
+                "activationBlockedReason": None,
+            }
             for row in rows
         ]
 
@@ -577,6 +615,7 @@ def annotate_activation_blocked(
         annotated.append(
             {
                 **row,
+                "activationPolicyStatus": POLICY_STATUS_AVAILABLE,
                 "activationBlocked": blocked,
                 "activationBlockedReason": reason,
             }
@@ -622,6 +661,8 @@ __all__ = [
     "DEFAULT_MINIMUM_LEVEL",
     "InMemoryPackCertificationPolicyStore",
     "POLICY_LEVELS",
+    "POLICY_STATUS_AVAILABLE",
+    "POLICY_STATUS_UNAVAILABLE",
     "PackCertificationPolicy",
     "PackCertificationPolicyError",
     "PackCertificationPolicyStore",
