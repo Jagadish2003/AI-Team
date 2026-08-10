@@ -554,6 +554,25 @@ def get_issue_metrics(
         )
 
     normalized_issues: List[Dict[str, Any]] = []
+    # Resolve each project KEY to its human-readable display NAME from the issues'
+    # own project objects (Jira returns ``{"key": "PAYOPS", "name": "Payments
+    # Operations", ...}``). The key is an identifier, not a name — every other
+    # source names its entities by their display name (ServiceNow the CI/group
+    # name, Salesforce the record name), so the Jira project name is what the
+    # entity extractor should use for the team/project entity, keeping the key as
+    # the stable source id. Falls back to the key when no issue carries a name.
+    project_names: Dict[str, str] = {}
+    for issue in all_issues:
+        proj = (issue.get("fields") or {}).get("project")
+        if isinstance(proj, dict):
+            pkey = str(proj.get("key") or "").strip()
+            pname = str(proj.get("name") or "").strip()
+            if pkey and pname:
+                project_names.setdefault(pkey, pname)
+    primary_project_name = (
+        project_names.get(keys[0]) if len(keys) == 1 else None
+    ) or project_label
+
     for issue in all_issues:
         fields = issue.get("fields") or {}
         normalized = {
@@ -573,6 +592,8 @@ def get_issue_metrics(
     return {
         "total_issues_90d": total,
         "project": project_label,
+        "project_name": primary_project_name,
+        "project_names": project_names,
         "project_key": project_label,
         "project_keys": keys,
         "salesforce_label_count": salesforce_label_count,

@@ -700,14 +700,21 @@ def _extract_jira_entities(
     entities: List[Entity] = []
     issue_metrics = jira_data.get("issue_metrics") or {}
 
-    # Team: project name (one per Jira project in the fixture)
-    project_name = _safe_str(issue_metrics.get("project"))
-    if project_name:
+    # Team/Project: named by the project's human-readable DISPLAY NAME, not its
+    # key. The key is an identifier (e.g. "PAYOPS"); naming the entity by it made
+    # a Jira team un-matchable against every other source (which names entities by
+    # their display name) and was inconsistent with the per-issue project
+    # extraction below (which already uses the name). ``project_name`` is carried
+    # by the live ingest; it falls back to the key when absent (offline fixtures,
+    # or a project no issue named), so this changes nothing when no name is known.
+    project_key_label = _safe_str(issue_metrics.get("project"))
+    project_display = _safe_str(issue_metrics.get("project_name")) or project_key_label
+    if project_display:
         try:
             e = resolve_or_create_entity(
                 org_id=org_id,
                 entity_type="team",
-                display_name=project_name,
+                display_name=project_display,
                 source_system="jira",
                 source_record_id=None,
                 run_id=run_id,
@@ -715,13 +722,13 @@ def _extract_jira_entities(
             )
             _append_entity(entities, e)
         except Exception as exc:
-            logger.warning("Jira team extraction failed for %s: %s", project_name, exc)
+            logger.warning("Jira team extraction failed for %s: %s", project_display, exc)
 
         try:
             e = resolve_or_create_entity(
                 org_id=org_id,
                 entity_type="project",
-                display_name=project_name,
+                display_name=project_display,
                 source_system="jira",
                 source_record_id=_safe_str(issue_metrics.get("project_key")),
                 run_id=run_id,
@@ -729,7 +736,7 @@ def _extract_jira_entities(
             )
             _append_entity(entities, e)
         except Exception as exc:
-            logger.warning("Jira project extraction failed for %s: %s", project_name, exc)
+            logger.warning("Jira project extraction failed for %s: %s", project_display, exc)
 
     # Issues: Object (issue key), Person (assignee, reporter)
     for issue in issue_metrics.get("issues", []) or []:
