@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 import discovery.ingest.confluence as confluence_mod
 import discovery.ingest.java_app as java_mod
+import discovery.ingest.sharepoint as sharepoint_mod
+import discovery.ingest.sharepoint_content as sharepoint_content_mod
 import discovery.ingest.slack as slack_mod
 
 from app.retrieval import default_resolvers as resolvers
@@ -279,3 +281,194 @@ def test_resolver_returns_none_for_malformed_artifact_id(monkeypatch):
 
     monkeypatch.setattr(slack_mod, "SlackIngestor", FakeSlackIngestor)
     assert resolvers._resolve_slack("org_1", "no-separator") is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SharePoint — ONE registered resolver serves THREE artifact-id namespaces
+#
+# refresh.get_content_resolver dispatches on source_system alone, and both the
+# reach connector (driveItems) and sharepoint_content (pages/lists) index under
+# source_system='sharepoint'. Before this was handled, the resolver understood
+# only the reach shape: every page and list resolved to None → 'no_content' →
+# mark_failed → parked 'failed' with chunks left is_stale=TRUE and excluded from
+# default retrieval. change_runner emits artifact_changed AFTER the synchronous
+# hand-off has already written fresh chunks, so this hit a page's FIRST indexing.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SP_PAGE = {
+    "id": "pg-runbook",
+    "title": "Deployment Runbook",
+    "webUrl": "https://contoso.sharepoint.com/sites/eng/SitePages/runbook.aspx",
+    "lastModifiedDateTime": "2026-07-09T10:00:00Z",
+    "canvasLayout": {
+        "horizontalSections": [
+            {
+                "columns": [
+                    {
+                        "webparts": [
+                            {"innerHtml": "<h2>Restart</h2><p>Run the failover script.</p>"}
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+}
+
+_SP_LIST = {
+    "id": "lst-approvals",
+    "displayName": "Change Approvals",
+    "webUrl": "https://contoso.sharepoint.com/sites/eng/Lists/Approvals",
+    "lastModifiedDateTime": "2026-07-09T11:00:00Z",
+    "items": [
+        {"fields": {"Title": "CR-42", "Summary": "Firewall change", "Modified": "x"}}
+    ],
+}
+
+
+def _fake_content_ingestor(monkeypatch, *, sites=None, pages=None, lists=None):
+    """Install a SharePointContentIngestor whose source reads are fixtures.
+
+    ``_accessible_sites`` is overridden rather than its two underlying reach calls
+    so the fake needs no DB; the real ``build_content_artifact`` (render → record →
+    artifact) is exercised end to end.
+    """
+    granted = sites if sites is not None else [{"id": "S-eng", "displayName": "Engineering"}]
+
+    class FakeContentIngestor(sharepoint_content_mod.SharePointContentIngestor):
+        def __init__(self):
+            # Never construct the real reach ingestor — nothing here uses it.
+            super().__init__(ingestor=SimpleNamespace())
+
+        def _accessible_sites(self, org_id):
+            assert org_id == "org_1"
+            return list(granted)
+
+        def _raw_pages(self, org_id, site_id):
+            return list((pages or {}).get(site_id, []))
+
+        def _raw_lists(self, org_id, site_id):
+            return list((lists or {}).get(site_id, []))
+
+    monkeypatch.setattr(
+        sharepoint_content_mod, "SharePointContentIngestor", FakeContentIngestor
+    )
+
+
+def test_sharepoint_resolver_returns_rendered_page_artifact(monkeypatch):
+    """A ':page:' id resolves to the SAME structure-preserving prose the direct
+    hand-off produces — headings intact, so the substrate's prose policy can split
+    on them — never a metadata-only stub."""
+    _fake_content_ingestor(monkeypatch, pages={"S-eng": [_SP_PAGE]})
+
+    artifact = resolvers._resolve_sharepoint("org_1", "S-eng:page:pg-runbook")
+
+    assert isinstance(artifact, ContentArtifact)
+    assert artifact.source_system == "sharepoint"
+    assert artifact.source_artifact == "S-eng:page:pg-runbook"
+    assert artifact.content_type == "prose"
+    assert artifact.content == (
+        "# Deployment Runbook\n\n## Restart\n\nRun the failover script."
+    )
+    assert artifact.source_timestamp == "2026-07-09T10:00:00Z"
+    assert artifact.provenance["content_kind"] == "page"
+    assert artifact.provenance["site_name"] == "Engineering"
+    assert artifact.provenance["page_id"] == "pg-runbook"
+    assert artifact.provenance["origin"] == "observed"
+
+
+def test_sharepoint_resolver_returns_rendered_list_artifact(monkeypatch):
+    """A ':list:' id resolves through the same chain; SharePoint system columns
+    (``Modified``) stay out of the indexed text."""
+    _fake_content_ingestor(monkeypatch, lists={"S-eng": [_SP_LIST]})
+
+    artifact = resolvers._resolve_sharepoint("org_1", "S-eng:list:lst-approvals")
+
+    assert isinstance(artifact, ContentArtifact)
+    assert artifact.source_artifact == "S-eng:list:lst-approvals"
+    assert artifact.content == "# Change Approvals\n\n## CR-42\n\nFirewall change"
+    assert artifact.provenance["content_kind"] == "list"
+    assert artifact.provenance["list_id"] == "lst-approvals"
+    assert "Modified" not in artifact.content
+
+
+def test_sharepoint_resolver_still_resolves_reach_drive_item(monkeypatch):
+    """REGRESSION: the reach '{site}/{drive}:{item}' path had no coverage at all
+    before the page/list namespaces were added, so this pins it against the
+    refactor of the id parse."""
+    class FakeReachIngestor(sharepoint_mod.SharePointIngestor):
+        def _raw_items(self, org_id, library):
+            assert library == {"site_id": "S-eng", "id": "b-docs"}
+            return [
+                {
+                    "id": "f400",
+                    "name": "runbook.docx",
+                    "file": {"mimeType": "application/vnd.openxmlformats"},
+                    "webUrl": "https://contoso.sharepoint.com/f400",
+                    "lastModifiedDateTime": "2026-07-09T09:00:00Z",
+                    "parentReference": {"path": "/drive/root:/Ops"},
+                    "lastModifiedBy": {"user": {"displayName": "A. Engineer"}},
+                }
+            ]
+
+    monkeypatch.setattr(sharepoint_mod, "SharePointIngestor", FakeReachIngestor)
+
+    artifact = resolvers._resolve_sharepoint("org_1", "S-eng/b-docs:f400")
+
+    assert isinstance(artifact, ContentArtifact)
+    assert artifact.source_artifact == "S-eng/b-docs:f400"
+    assert "runbook.docx" in artifact.content
+    assert artifact.provenance["item_id"] == "f400"
+
+
+def test_sharepoint_resolver_refuses_page_in_ungranted_site(monkeypatch):
+    """R18-A5 §4 — scope is re-verified at depth. A site that has lost its grant (or
+    left the org's saved selection) resolves to None: the artifact keeps its
+    existing state rather than being re-read from a site we may no longer read."""
+    _fake_content_ingestor(
+        monkeypatch,
+        sites=[{"id": "S-other", "displayName": "Other"}],
+        pages={"S-eng": [_SP_PAGE]},
+    )
+
+    assert resolvers._resolve_sharepoint("org_1", "S-eng:page:pg-runbook") is None
+
+
+def test_sharepoint_resolver_returns_none_for_unknown_page(monkeypatch):
+    """A page id no longer present in a granted site resolves to None — removal is
+    remove_artifact's job, not a resolver's, so nothing is fabricated."""
+    _fake_content_ingestor(monkeypatch, pages={"S-eng": [_SP_PAGE]})
+
+    assert resolvers._resolve_sharepoint("org_1", "S-eng:page:pg-gone") is None
+
+
+def test_sharepoint_content_ids_parse_without_colliding_with_drive_items():
+    """The ':page:'/':list:' infix is what distinguishes the namespaces; a reach
+    driveItem id carries neither and must fall through to the driveItem branch."""
+    assert resolvers._parse_sharepoint_content_id("S-eng:page:pg-1") == (
+        "S-eng",
+        "page",
+        "pg-1",
+    )
+    assert resolvers._parse_sharepoint_content_id("S-eng:list:lst-1") == (
+        "S-eng",
+        "list",
+        "lst-1",
+    )
+    assert resolvers._parse_sharepoint_content_id("S-eng/b-docs:f400") is None
+    assert resolvers._parse_sharepoint_content_id("no-separator") is None
+
+
+def test_sharepoint_declares_both_backing_modules():
+    """Both connectors serving source_system='sharepoint' must be import-checked at
+    startup. A lazily-imported second module would fail INSIDE the resolver, which
+    surfaces as no_content/resolver_error and parks the row — the exact silent
+    failure the registration-time check exists to prevent."""
+    assert set(resolvers._RESOLVER_MODULES["sharepoint"]) == {
+        "discovery.ingest.sharepoint",
+        "discovery.ingest.sharepoint_content",
+    }
+    # Every entry is a tuple, so the registration loop never iterates a bare string.
+    assert all(
+        isinstance(mods, tuple) for mods in resolvers._RESOLVER_MODULES.values()
+    )

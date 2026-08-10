@@ -3116,7 +3116,7 @@ def run(
                     sn_by_detector=sn_by_detector,
                     jira_by_detector=jira_by_detector,
                     run_timestamp_iso=_run_ts_iso,
-                    source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data, teams_data, java_data, dotnet_data],
+                    source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data, teams_data, java_data, dotnet_data, confluence_data, sharepoint_data],
                 )
             except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
                 logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)

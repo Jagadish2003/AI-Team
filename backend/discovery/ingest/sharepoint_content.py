@@ -639,6 +639,75 @@ def content_artifacts(records: List[Dict[str, Any]]) -> List[ContentArtifact]:
     return artifacts
 
 
+def build_content_artifact(
+    ingestor: "SharePointContentIngestor",
+    org_id: str,
+    site_id: str,
+    kind: str,
+    native_id: str,
+) -> Optional[ContentArtifact]:
+    """Re-read ONE page/list and build its substrate artifact, or ``None``.
+
+    The single public seam the retrieval-freshness resolver
+    (``app.retrieval.default_resolvers._resolve_sharepoint``) uses to turn a queued
+    ``"{site_id}:page:{page_id}"`` / ``"{site_id}:list:{list_id}"`` artifact id back
+    into current content. It reuses the EXACT render + record + provenance chain the
+    direct hand-off (:func:`ingest_sharepoint_content`) uses — ``_page_work`` /
+    ``_list_work`` → ``_to_record`` → :func:`record_to_artifact` — so an
+    async refresh produces the same structure-preserving prose as the synchronous
+    path, never a metadata-only stub. Mirrors
+    ``confluence_content.build_content_artifact`` (R18-A5 / AT-603).
+
+    Without this the resolver could not parse the ``:page:`` / ``:list:`` namespace
+    at all: it returned ``None`` for every one, the worker recorded ``no_content``
+    and parked the row ``failed`` after its retry budget, and the chunks stayed
+    ``is_stale = TRUE`` — excluded from default retrieval — permanently. Because
+    ``change_runner`` emits ``artifact_changed`` AFTER the hand-off already wrote
+    fresh chunks, that applied to a page's FIRST indexing, not just to edits.
+
+    Scope is re-verified here (R18-A5 §4 "permissions re-verified at depth"):
+    the site must still be granted AND still inside the org's saved site selection,
+    resolved through :meth:`SharePointContentIngestor._accessible_sites` — which is
+    also where ``site_name`` comes from, so provenance matches the hand-off's.
+    A site that has since lost its grant resolves to ``None`` (the artifact keeps
+    its existing state; removal is ``remove_artifact``'s job, not a resolver's).
+    """
+    if kind not in ("page", "list"):
+        return None
+    site_id = str(site_id or "").strip()
+    native_id = str(native_id or "").strip()
+    if not site_id or not native_id:
+        return None
+
+    site = next(
+        (
+            candidate
+            for candidate in ingestor._accessible_sites(org_id)
+            if str(candidate.get("id") or "") == site_id
+        ),
+        None,
+    )
+    if site is None:
+        return None
+    site_name = str(site.get("displayName") or site.get("name") or "")
+
+    if kind == "page":
+        source = ingestor._raw_pages(org_id, site_id)
+        build_work = ingestor._page_work
+    else:
+        source = ingestor._raw_lists(org_id, site_id)
+        build_work = ingestor._list_work
+
+    for item in source:
+        if str(item.get("id") or "").strip() != native_id:
+            continue
+        work = build_work(site_id, site_name, item)
+        if work is None:
+            return None
+        return record_to_artifact(ingestor._to_record(work))
+    return None
+
+
 @dataclass
 class SharePointContentResult:
     """Outcome of one :func:`ingest_sharepoint_content` run — read + hand-off totals."""

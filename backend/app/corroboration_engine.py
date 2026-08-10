@@ -615,6 +615,14 @@ def build_corroboration_run_data(
                 "corroboration block was found"
             )
 
+    # SharePoint carries the same documentation-source shape as Confluence
+    # ({activity, cross_references, estates}). Carried through so a rule can read
+    # it; no rule consumes it today, so this changes no verdict on its own.
+    if "sharepoint" in connected:
+        sharepoint = _find_corroboration_block("sharepoint", payloads)
+        if sharepoint:
+            data["sharepoint"] = sharepoint
+
     if "slack" in connected:
         slack = _find_corroboration_block("slack", payloads)
         if slack:

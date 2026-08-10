@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import importlib
 import logging
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from app.retrieval import refresh
 from app.retrieval.ingest import ContentArtifact
@@ -44,9 +44,13 @@ def register_default_content_resolvers() -> None:
     """
     registered = 0
     for source_system, resolver in _DEFAULT_RESOLVERS.items():
-        module_name = _RESOLVER_MODULES[source_system]
+        module_name = ""
         try:
-            _import_module(module_name)
+            # Every backing module must import — a source system served by more
+            # than one connector (sharepoint) is only registered when ALL of them
+            # do. ``module_name`` holds the failing one for the warning below.
+            for module_name in _RESOLVER_MODULES[source_system]:
+                _import_module(module_name)
         except Exception:  # noqa: BLE001 — a module-level failure of any kind
             logger.warning(
                 "retrieval freshness: NOT registering content resolver for %r — "
@@ -175,7 +179,58 @@ def _resolve_confluence(org_id: str, source_artifact: str) -> Optional[ContentAr
     return None
 
 
+#: The page/list content-id infixes, mapped to the content kind they denote.
+_SHAREPOINT_CONTENT_INFIXES = (("page", ":page:"), ("list", ":list:"))
+
+
+def _parse_sharepoint_content_id(source_artifact: str) -> Optional[Tuple[str, str, str]]:
+    """Split a page/list content id into ``(site_id, kind, native_id)``, else ``None``.
+
+    Page-native content ids are ``"{site_id}:page:{page_id}"`` /
+    ``"{site_id}:list:{list_id}"`` (``sharepoint_content._page_artifact_id`` /
+    ``_list_artifact_id``); the reach connector's driveItem ids are
+    ``"{site_id}/{drive_id}:{item_id}"`` and carry no such infix. The two namespaces
+    are therefore distinguishable by inspection rather than by guessing, which is
+    what lets ONE registered ``"sharepoint"`` resolver serve both.
+    """
+    for kind, infix in _SHAREPOINT_CONTENT_INFIXES:
+        site_id, sep, native_id = source_artifact.partition(infix)
+        if sep and site_id and native_id:
+            return site_id, kind, native_id
+    return None
+
+
 def _resolve_sharepoint(org_id: str, source_artifact: str) -> Optional[ContentArtifact]:
+    """Resolve any SharePoint artifact id — page, list, or reach driveItem.
+
+    ``refresh.get_content_resolver`` dispatches on ``source_system`` ALONE, and both
+    the reach connector and ``sharepoint_content`` index under
+    ``source_system='sharepoint'``, so this one resolver must understand every id
+    shape that reaches the substrate under that name.
+
+    Page/list ids are checked FIRST: ``partition(":")`` on ``"S-eng:page:pg-x"``
+    yields a container with no ``"/"``, so the driveItem branch rejected every
+    page and list — returning ``None`` → ``no_content`` → ``mark_failed`` → parked
+    ``failed`` with the chunks left ``is_stale = TRUE`` and excluded from default
+    retrieval. Since ``change_runner`` emits ``artifact_changed`` AFTER the
+    synchronous hand-off has already written fresh chunks, that hit a page's FIRST
+    indexing, not merely an edit.
+    """
+    content_id = _parse_sharepoint_content_id(source_artifact)
+    if content_id is not None:
+        site_id, kind, native_id = content_id
+        content_mod = _import_module("discovery.ingest.sharepoint_content")
+        ingestor = content_mod.SharePointContentIngestor()
+        return content_mod.build_content_artifact(
+            ingestor, org_id, site_id, kind, native_id
+        )
+    return _resolve_sharepoint_drive_item(org_id, source_artifact)
+
+
+def _resolve_sharepoint_drive_item(
+    org_id: str, source_artifact: str
+) -> Optional[ContentArtifact]:
+    """Resolve a reach-path driveItem id ``"{site_id}/{drive_id}:{item_id}"``."""
     container, sep, item_id = source_artifact.partition(":")
     site_id, slash, drive_id = container.partition("/")
     if not sep or not slash or not site_id or not drive_id or not item_id:
@@ -311,16 +366,27 @@ _DEFAULT_RESOLVERS: Dict[str, Resolver] = {
     "dotnet_app": _resolve_dotnet_app,
 }
 
-# The connector module each resolver re-extracts through. Imported once at
+# The connector module(s) each resolver re-extracts through. Imported once at
 # registration time so a missing/broken module disqualifies its resolver with one
 # startup warning instead of failing silently on every refresh attempt.
-_RESOLVER_MODULES: Dict[str, str] = {
-    "slack": "discovery.ingest.slack",
-    "teams": "discovery.ingest.teams",
-    "confluence": "discovery.ingest.confluence",
-    "sharepoint": "discovery.ingest.sharepoint",
-    "java_app": "discovery.ingest.java_app",
-    "dotnet_app": "discovery.ingest.dotnet_app",
+#
+# A value may name SEVERAL modules when one source system is served by more than
+# one connector: 'sharepoint' resolves BOTH the reach connector's driveItem ids and
+# the page-native content ids, so both modules must be proven importable up front.
+# Deferring the second to a lazy in-resolver import would reproduce exactly the
+# failure this map exists to prevent — an ImportError inside the resolver body
+# surfaces as ``resolver_error``/``no_content``, burning a retry per tick until the
+# row parks ``failed`` with its chunks stale, which is silent.
+_RESOLVER_MODULES: Dict[str, Tuple[str, ...]] = {
+    "slack": ("discovery.ingest.slack",),
+    "teams": ("discovery.ingest.teams",),
+    "confluence": ("discovery.ingest.confluence",),
+    "sharepoint": (
+        "discovery.ingest.sharepoint",
+        "discovery.ingest.sharepoint_content",
+    ),
+    "java_app": ("discovery.ingest.java_app",),
+    "dotnet_app": ("discovery.ingest.dotnet_app",),
 }
 
 
