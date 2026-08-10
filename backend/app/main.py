@@ -239,6 +239,14 @@ async def lifespan(app: FastAPI):
     # clear ValueError before the first model call (T2-AC4).
     from .model_gateway import validate_provider_config
     validate_provider_config()
+    # 2.0-C3 T4: report a malformed PACK_BUNDLE_TRUSTED_KEYS now rather than on the
+    # first install attempt. Never raises — a deployment that installs no authored
+    # packs must not be blocked from booting by a variable it does not use.
+    try:
+        from discovery.packs.sdk.bundle import validate_trusted_keys_config
+        validate_trusted_keys_config()
+    except Exception:  # pragma: no cover - diagnostics must never block startup
+        logger.warning("pack bundle trust-anchor validation skipped", exc_info=True)
     # T2-S12-A: surface Oracle/PostgreSQL driver install issues at startup.
     _verify_db_driver_imports()
     # Ensure the temporal signal_snapshots table exists. A fresh dev.db is built

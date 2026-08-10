@@ -469,10 +469,39 @@ class TestAC10NonBlockingAndApply:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestCOR04Confluence:
-    def test_confluence_gap_for_covenant_elevates(self):
+    def test_confluence_gap_fires_and_is_reported(self):
+        """The rule fires, contributes its source chip, and is visible to a reader."""
         result = _evaluate(confluence={"covenant_documentation_present": False})
         assert "COR-04" in result.rule_ids
+        assert "Confluence (no process documentation)" in result.corroboration_sources
+
+    def test_confluence_gap_alone_does_not_elevate(self):
+        """Documentation SUPPORTS, it does not LEAD.
+
+        Confluence is `documentation_system` in every industry and template that
+        lists it (ROLE_WEIGHT 0.6, below the 0.80 lead threshold), so a configured
+        run has never let COR-04 elevate unaided. An unconfigured run used to,
+        because the neutral fallback assumed weight 1.0 — so the same evidence gave
+        HIGH or MEDIUM depending only on whether Stack Builder had been completed.
+
+        The rule is now the same either way. It matters most here of all, because
+        COR-04's evidence is an ABSENCE: "no runbook was found" is also exactly what
+        a broken index looks like, so it is the last basis that should reach HIGH on
+        its own.
+        """
+        result = _evaluate(confluence={"covenant_documentation_present": False})
+        assert result.elevated_confidence == "MEDIUM"
+
+    def test_confluence_gap_contributes_alongside_a_lead_source(self):
+        """Supporting is not the same as ignored: with ServiceNow leading, the
+        finding reaches HIGH and Confluence is still credited on it."""
+        result = _evaluate(
+            confluence={"covenant_documentation_present": False},
+            servicenow_incidents=[_sn_incident()],
+        )
         assert result.elevated_confidence == "HIGH"
+        assert "COR-04" in result.rule_ids
+        assert "Confluence (no process documentation)" in result.corroboration_sources
 
     def test_confluence_present_does_not_fire(self):
         result = _evaluate(confluence={"covenant_documentation_present": True})
@@ -576,9 +605,11 @@ class TestDetectorLinkage:
 class TestRuleRegistry:
     def test_all_rules_defined(self):
         # R17-A3 added COR-09 (Java operational corroboration); R17-A4 added COR-10
-        # (its .NET counterpart).
-        assert len(CORROBORATION_RULES) == 10
-        for i in range(1, 11):
+        # (its .NET counterpart). COR-11/COR-12 are the documentation
+        # cross-reference rules — the first rules to read the markers Confluence and
+        # SharePoint have always extracted, and COR-12 is the first SharePoint rule.
+        assert len(CORROBORATION_RULES) == 12
+        for i in range(1, 13):
             assert f"COR-{i:02d}" in CORROBORATION_RULES
 
     def test_slack_only_and_single_source_never_elevate(self):
@@ -663,7 +694,9 @@ class TestRunnerCorroborationWiring:
 
         assert "COR-04" in result.rule_ids
         assert "Confluence (no process documentation)" in result.corroboration_sources
-        assert result.elevated_confidence == "HIGH"
+        # The rule fires and is reported, but documentation does not LEAD — see
+        # TestCOR04Confluence.test_confluence_gap_alone_does_not_elevate.
+        assert result.elevated_confidence == "MEDIUM"
 
     def test_runner_data_builder_passes_slack_only_without_elevation(self):
         run_data = build_corroboration_run_data(
@@ -844,3 +877,122 @@ class TestRunnerCorroborationWiring:
 
         assert "confluence" not in run_data
         assert "Confluence is connected but no recognized" in caplog.text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COR-11 / COR-12 — documentation that CITES the corroborating record
+#
+# Both connectors have always extracted cross_references (ServiceNow/Jira/GitHub
+# markers from Confluence page titles and SharePoint file names) and nothing ever
+# read them. These rules read them.
+#
+# Note what is deliberately NOT a rule: "documentation exists about this process".
+# An approvals page is no evidence that approvals are slow, and nearly every org
+# has documentation about nearly every process — such a rule would fire on almost
+# everything and mean almost nothing. An EXPLICIT id match is different in kind.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _doc_run_data(*, confluence_refs=None, sharepoint_refs=None, incident_number="INC-4821"):
+    rd = _run_data(
+        systems=("salesforce", "servicenow", "confluence", "sharepoint"),
+        servicenow_incidents=[{**_sn_incident(), "number": incident_number}],
+    )
+    if confluence_refs is not None:
+        rd["confluence"] = {"cross_references": confluence_refs}
+    if sharepoint_refs is not None:
+        rd["sharepoint"] = {"cross_references": sharepoint_refs}
+    return rd
+
+
+def _evaluate_doc(**kw):
+    return evaluate_corroboration(
+        detector_id=COVENANT,
+        pack_id="ncino",
+        run_data=_doc_run_data(**kw),
+        run_timestamp=RUN_TS,
+        org_id="demo-org",
+    )
+
+
+class TestCOR11And12DocumentationCrossReference:
+    def test_confluence_reference_to_a_linked_incident_fires(self):
+        result = _evaluate_doc(
+            confluence_refs=[{"system": "servicenow", "ref": "INC-4821"}]
+        )
+        assert "COR-11" in result.rule_ids
+        assert "Confluence (references the same record)" in result.corroboration_sources
+
+    def test_sharepoint_reference_to_a_linked_incident_fires(self):
+        result = _evaluate_doc(
+            sharepoint_refs=[{"system": "servicenow", "ref": "INC-4821"}]
+        )
+        assert "COR-12" in result.rule_ids
+        assert "SharePoint (references the same record)" in result.corroboration_sources
+
+    def test_reference_matching_is_case_and_separator_insensitive(self):
+        """INC-4821, inc4821 and 'INC 4821' are one incident written three ways."""
+        for ref in ("inc4821", "INC 4821", "inc-4821"):
+            result = _evaluate_doc(confluence_refs=[{"system": "servicenow", "ref": ref}])
+            assert "COR-11" in result.rule_ids, ref
+
+    def test_a_near_miss_reference_does_not_corroborate(self):
+        """Nothing fuzzier than normalisation: INC-48 must not match INC-4821."""
+        result = _evaluate_doc(confluence_refs=[{"system": "servicenow", "ref": "INC-48"}])
+        assert "COR-11" not in result.rule_ids
+
+    def test_reference_to_an_unrelated_record_does_not_corroborate(self):
+        result = _evaluate_doc(confluence_refs=[{"system": "servicenow", "ref": "INC-9999"}])
+        assert "COR-11" not in result.rule_ids
+
+    def test_no_references_does_not_fire(self):
+        result = _evaluate_doc(confluence_refs=[])
+        assert "COR-11" not in result.rule_ids
+
+    def test_documentation_alone_cannot_reach_high(self):
+        """The role-weight ceiling, applied to the new rules exactly as to COR-04.
+
+        Reaching documentation-only takes a little setting up, because COR-11 needs
+        a linked record to match against and that record usually fires COR-01 too.
+        The realistic case is an incident OUTSIDE the 30-day corroboration window:
+        ServiceNow no longer corroborates, but the page citing it is still there.
+        Documentation then stands alone — and stays MEDIUM.
+        """
+        run_data = _run_data(
+            systems=("salesforce", "servicenow", "confluence"),
+            servicenow_incidents=[
+                {**_sn_incident(ts=_outside_window_ts()), "number": "INC-4821"}
+            ],
+            confluence={"cross_references": [{"system": "servicenow", "ref": "INC-4821"}]},
+        )
+        result = evaluate_corroboration(
+            detector_id=COVENANT,
+            pack_id="ncino",
+            run_data=run_data,
+            run_timestamp=RUN_TS,
+            org_id="demo-org",
+        )
+        assert "COR-01" not in result.rule_ids     # stale incident: no lead source
+        assert "COR-11" in result.rule_ids         # the citation still corroborates
+        assert result.elevated_confidence == "MEDIUM"
+
+    def test_documentation_is_credited_on_an_elevation_another_source_leads(self):
+        result = _evaluate_doc(
+            confluence_refs=[{"system": "servicenow", "ref": "INC-4821"}]
+        )
+        # ServiceNow (COR-01) leads; the documentation rule rides along and is shown.
+        assert result.elevated_confidence == "HIGH"
+        assert "COR-01" in result.rule_ids
+        assert "COR-11" in result.rule_ids
+        assert "Confluence (references the same record)" in result.corroboration_sources
+
+    def test_new_rules_are_registered_with_their_systems_and_labels(self):
+        from app.corroboration_engine import _CORROBORATION_RULE_SYSTEMS
+        from discovery.packs.corroboration_rules import (
+            CORROBORATION_RULES,
+            RULE_CARD_LABELS,
+        )
+
+        for rule_id, system in (("COR-11", "confluence"), ("COR-12", "sharepoint")):
+            assert rule_id in CORROBORATION_RULES
+            assert RULE_CARD_LABELS.get(rule_id)
+            assert _CORROBORATION_RULE_SYSTEMS.get(rule_id) == system

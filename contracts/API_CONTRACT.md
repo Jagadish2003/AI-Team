@@ -1,6 +1,31 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.30
-Date: 2026-08-06
+Version: v1.31
+Date: 2026-08-10
+
+> v1.31 — PR review fix (certification policy readability): `GET /api/packs/state`
+> now says whether the certification policy behind its activation-eligibility
+> annotation could be READ. Two additive fields; no existing field changes meaning.
+>
+> **The gap this closes.** The activation gate fails CLOSED (an unreadable policy
+> returns 503) while the display annotation fails SOFT. Both are correct, but they
+> disagreed invisibly: on an unreadable policy `certificationPolicy` was `null` and
+> `activationBlocked` was simply ABSENT from every row — indistinguishable from an
+> unrestricted org. A selection surface filtering on `activationBlocked` therefore
+> showed every pack as activatable, and the launch then returned 503 with nothing on
+> screen explaining why.
+>
+> **New fields**
+> - `certificationPolicyStatus` (top level): `available` | `unavailable`. Distinguishes
+>   "read, and imposes no restriction" from "could not be read". A consumer must not
+>   read `certificationPolicy: null` alone as "unrestricted".
+> - `activationPolicyStatus` (per `packs[]` row): `available` | `unavailable`. When
+>   `unavailable`, eligibility is **indeterminate** — `activationBlocked` is absent and
+>   activation will still be refused. Do not treat a missing `activationBlocked` as
+>   "activatable" without checking this field.
+>
+> `activationBlocked` is deliberately left ABSENT rather than set to `false` (which
+> would assert an eligibility that was never established) or `true` (which would block
+> packs a readable policy may well permit). Unknown is a third answer.
 
 > v1.30 — 2.0-C4 T5 (Deprecation Lifecycle Audit): all three deprecation transitions
 > are audit events, and are readable as one trail. One new route and one new audit

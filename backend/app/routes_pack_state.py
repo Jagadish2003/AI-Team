@@ -98,11 +98,16 @@ def list_pack_states() -> Dict[str, Any]:
     this is so a selection surface can grey out a pack it would only be refused for
     later, which beats a 409 after the user has configured a whole run.
 
-    The annotation is fail-soft (an unreadable policy leaves rows unannotated) while
-    the GATE fails closed, so a surfacing hiccup can never become a way past the
-    policy.
+    The annotation is fail-soft while the GATE fails closed, so a surfacing hiccup
+    can never become a way past the policy. ``certificationPolicyStatus`` reports
+    which of the two happened: without it, an unreadable policy was indistinguishable
+    from an unrestricted one (``certificationPolicy: null`` and no ``activationBlocked``
+    on any row), so every pack rendered activatable while activation returned 503
+    with nothing on screen to explain it.
     """
     from .pack_certification_policy import (
+        POLICY_STATUS_AVAILABLE,
+        POLICY_STATUS_UNAVAILABLE,
         PackCertificationPolicyUnavailable,
         annotate_activation_blocked,
         get_certification_policy,
@@ -112,9 +117,16 @@ def list_pack_states() -> Dict[str, Any]:
     packs = annotate_activation_blocked(org_id, pack_state_view(org_id))
     try:
         policy = get_certification_policy(org_id).to_dict()
+        policy_status = POLICY_STATUS_AVAILABLE
     except PackCertificationPolicyUnavailable:
         policy = None
-    return {"orgId": org_id, "packs": packs, "certificationPolicy": policy}
+        policy_status = POLICY_STATUS_UNAVAILABLE
+    return {
+        "orgId": org_id,
+        "packs": packs,
+        "certificationPolicy": policy,
+        "certificationPolicyStatus": policy_status,
+    }
 
 
 @router.put(

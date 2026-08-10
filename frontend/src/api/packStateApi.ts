@@ -45,6 +45,13 @@ export interface PackStateItem {
    */
   activationBlocked?: boolean;
   activationBlockedReason?: string | null;
+  /**
+   * Whether the policy behind `activationBlocked` could be read. `'unavailable'`
+   * means eligibility is INDETERMINATE, not permitted: `activationBlocked` is
+   * absent and the activation gate will still refuse (fail-closed). Do not treat a
+   * missing `activationBlocked` as "activatable" without checking this.
+   */
+  activationPolicyStatus?: 'available' | 'unavailable';
 }
 
 /** 2.0-C2 T4 (AT-834): the org's activation floor. */
@@ -66,10 +73,48 @@ export interface PackStateResponse {
   packs: PackStateItem[];
   /** Null when the policy could not be read — never silently "unrestricted". */
   certificationPolicy?: PackCertificationPolicy | null;
+  /**
+   * Distinguishes the two reasons `certificationPolicy` is null: `'available'`
+   * means it was read and imposes no restriction; `'unavailable'` means it could
+   * not be read, so activation will be refused with a 503 until it can be.
+   */
+  certificationPolicyStatus?: 'available' | 'unavailable';
 }
 
 export async function fetchPackStates(): Promise<PackStateResponse> {
   return apiGet<PackStateResponse>('/api/packs/state');
+}
+
+/**
+ * True when this org's certification policy could NOT be read.
+ *
+ * The activation gate fails closed while this display annotation fails soft, so
+ * an unreadable policy means activation will be refused even though no row is
+ * marked blocked. Checking `certificationPolicy` alone cannot tell you that: it
+ * is null both for an unrestricted org and for an unreadable store.
+ */
+export function isCertificationPolicyIndeterminate(
+  response: PackStateResponse | null | undefined,
+): boolean {
+  return response?.certificationPolicyStatus === 'unavailable';
+}
+
+/**
+ * A pack's activation eligibility as a THREE-valued answer.
+ *
+ * `activationBlocked` is absent when the policy could not be read, so a caller
+ * doing `if (pack.activationBlocked)` silently treats "we do not know" as
+ * "permitted" — which is how every pack came to render as activatable while
+ * activation was returning 503. Prefer this helper over the raw field.
+ */
+export function activationEligibility(
+  pack: PackStateItem | null | undefined,
+): 'blocked' | 'permitted' | 'unknown' {
+  if (!pack) return 'unknown';
+  if (pack.activationPolicyStatus === 'unavailable') return 'unknown';
+  if (pack.activationBlocked === true) return 'blocked';
+  if (pack.activationBlocked === false) return 'permitted';
+  return 'unknown';
 }
 
 /** `{packId: certification}` for the packs that have a resolvable badge. */

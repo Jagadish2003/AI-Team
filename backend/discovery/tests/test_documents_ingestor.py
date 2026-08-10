@@ -364,3 +364,60 @@ def _fetch_record(artifact_id: str) -> dict:
     """Extract one record from a fresh first-run ingest (no checkpoint)."""
     recs = _by_id(DocumentIngestor().ingest_changes(ORG, None))
     return recs[artifact_id]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R18-A5 AC2 — the document path is REACHED from a discovery run
+#
+# The router always guaranteed "never twice"; the "at least once" half was missing
+# because nothing called ingest_documents, so library files, page attachments and
+# configured locations were ingested ZERO times and no finding could cite a PDF.
+# ─────────────────────────────────────────────────────────────────────────────
+def test_runner_has_a_document_ingest_step():
+    from discovery import runner
+
+    assert hasattr(runner, "_ingest_documents")
+
+
+def test_runner_document_step_drives_the_handoff(monkeypatch):
+    from discovery import runner
+    from discovery.ingest import documents_handoff
+
+    calls = []
+
+    class _Result:
+        org_id = "org_1"
+        batches = 1
+        records = 3
+        artifacts_handed_off = 2
+        artifacts_indexed = 2
+        artifacts_empty = 0
+        artifacts_failed = 0
+        chunks_indexed = 5
+        chunks_replaced = 0
+        checkpoint_advanced = True
+        first_run = True
+        error = None
+
+    monkeypatch.setattr(
+        documents_handoff,
+        "ingest_documents",
+        lambda org_id, **kw: (calls.append(org_id), _Result())[1],
+    )
+
+    runner._ingest_documents("org_1", "run_1")
+    assert calls == ["org_1"]
+
+
+def test_runner_document_step_never_breaks_the_run(monkeypatch):
+    """Non-blocking, like every other deep-content hand-off: a document failure
+    must not abort a discovery run that has real findings to report."""
+    from discovery import runner
+    from discovery.ingest import documents_handoff
+
+    def _boom(org_id, **kw):
+        raise RuntimeError("extraction exploded")
+
+    monkeypatch.setattr(documents_handoff, "ingest_documents", _boom)
+
+    runner._ingest_documents("org_1", "run_1")  # must not raise

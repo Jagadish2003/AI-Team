@@ -195,6 +195,52 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "Financial Services Cloud",
         "domain":        "financial_services_cloud",
         "pack_domain":   "financial_services_cloud",
+        # 2.0-C1 T1 compatibility. Added late: this pack (2.0-D1 T1) and the
+        # compatibility gate (2.0-C1 T1) were built on separate branches, and the
+        # merge left FSC as the only registered pack with no declaration — which
+        # the structural guard reports, correctly, as a build failure.
+        #
+        # Mirrors `ncino` deliberately. FSC's registry entry was copied from
+        # ncino's shape in T1 (same Salesforce connector, same BFSI domain family,
+        # same compliance posture), and its detectors read the same case/approval
+        # workflow surface, so the platform floor and concept set are the same
+        # question with the same answer. Choosing anything else here would be
+        # inventing a requirement no FSC code expresses.
+        "compatibility": {
+            "minPlatformVersion": "1.0.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts":   ["case_workflow"],
+            "optionalConcepts":   ["cross_system_link"],
+        },
+        # 2.0-C2 T1 certification. Declared COMMUNITY because that is the truth:
+        # this pack has had no certification review and carries no CloudFulcrum
+        # signature. Every other first-party pack is `certified` and signed, so FSC
+        # is genuinely uncertified rather than merely undeclared — 2.0-D1 shipped it
+        # without going through 2.0-C2's review.
+        #
+        # Declaring it explicitly is strictly better than leaving it absent: the
+        # effective level is `community` either way (that is the documented
+        # default), but an explicit declaration is a statement rather than an
+        # omission, and it satisfies the registry-completeness guard.
+        #
+        # CONSEQUENCE, stated rather than discovered later: under an org policy that
+        # restricts activation to Certified (2.0-C2 T4), this pack is refused. That
+        # is correct — it has not been certified.
+        #
+        # TO CERTIFY: run a review (POST /api/packs/{id}/certification/reviews), then
+        # issue the signature with
+        #   PACK_CERTIFICATION_SIGNING_KEY=... python scripts/sign_pack_certifications.py --sign
+        # and replace this block with the signed `certified` one. That key is release
+        # tooling, deliberately absent from this repo, so the signature cannot be
+        # produced here.
+        "certification": {
+            "level": "community",
+            "certifyingEntity": "",
+            "reviewDate": "",
+            "reviewedAgainstPlatformVersion": "",
+            "scope": {},
+            "signature": {},
+        },
         "detectors": [
             "discovery.detectors.fsc_servicing_request_recurrence",
             "discovery.detectors.fsc_referral_handoff_friction",

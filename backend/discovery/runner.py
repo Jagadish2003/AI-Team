@@ -1386,7 +1386,9 @@ def _ingest_teams_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     return build_teams_corroboration_payload(collected)
 
 
-def _ingest_confluence_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
+def _ingest_confluence_corroboration(
+    org_id: str, run_id: str, *, probe_covenant_documentation: bool = False
+) -> Dict[str, Any]:
     """Drive Confluence change-based ingestion and build its corroboration block.
 
     R17-A2: Confluence is a connected knowledge SOURCE. When connected, drive it
@@ -1447,6 +1449,7 @@ def _ingest_confluence_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
             result.batches, result.records, result.checkpoint_advanced,
         )
 
+    content_result = None   # may stay None if the depth path fails below
     try:
         content_result = ingest_confluence_content(org_id, collected, ingestor=ingestor)
         logger.info(
@@ -1463,7 +1466,51 @@ def _ingest_confluence_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
             exc_info=True,
         )
 
-    return build_confluence_corroboration_payload(collected)
+    payload = build_confluence_corroboration_payload(collected)
+
+    # COR-11's supply. The reach path extracts cross-references from page TITLES;
+    # the depth path is the only one that sees the BODY, where a postmortem
+    # actually cites "INC-4821". Merged (not replaced) so a title marker still
+    # counts, and deduplicated on (system, ref).
+    _merge_body_cross_references(
+        payload, CONFLUENCE_KEY, getattr(content_result, "cross_references", None)
+    )
+
+    # COR-04's producer. The rule has been in the registry since ENT-2 and could
+    # never fire, because nothing produced the fact it reads. Computed HERE rather
+    # than inside the corroboration engine deliberately: build_corroboration_run_data
+    # takes dicts and evaluate_corroboration is a pure function of them, so the same
+    # run_data always yields the same verdict. Giving the engine a retrieval call
+    # would put I/O in a per-finding scoring loop and make a verdict depend on live
+    # index state — which run_reproducibility.py exists to rule out.
+    if probe_covenant_documentation:
+        try:
+            from .ingest.documentation_probe import (
+                COVENANT_REVIEW,
+                apply_to_confluence_block,
+                probe_documentation,
+            )
+
+            probe = probe_documentation(org_id, COVENANT_REVIEW)
+            from .ingest.confluence_signals import CONFLUENCE_CORROBORATION_KEY
+
+            block = payload.get(CONFLUENCE_CORROBORATION_KEY) or {}
+            payload[CONFLUENCE_CORROBORATION_KEY] = apply_to_confluence_block(
+                block, probe
+            )
+            logger.info(
+                "Confluence documentation probe: org=%s run=%s topic=%s status=%s "
+                "matches=%d",
+                org_id, run_id, probe.topic, probe.status, probe.match_count,
+            )
+        except Exception as e:  # noqa: BLE001 — a probe must never break a run.
+            logger.warning(
+                "Confluence documentation probe failed (non-blocking) org=%s run=%s: "
+                "[%s] — COR-04 will not fire, which is the safe outcome",
+                org_id, run_id, type(e).__name__,
+            )
+
+    return payload
 
 
 def _ingest_sharepoint_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
@@ -1525,6 +1572,7 @@ def _ingest_sharepoint_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
             result.batches, result.records, result.checkpoint_advanced,
         )
 
+    content_result = None   # may stay None if the depth path fails below
     try:
         content_result = ingest_sharepoint_content(org_id)
         logger.info(
@@ -1540,7 +1588,122 @@ def _ingest_sharepoint_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
             org_id, run_id, type(e).__name__,
         )
 
-    return build_sharepoint_corroboration_payload(collected)
+    payload = build_sharepoint_corroboration_payload(collected)
+    # COR-12's supply — see the Confluence equivalent above.
+    _merge_body_cross_references(
+        payload, "sharepoint", getattr(content_result, "cross_references", None)
+    )
+    return payload
+
+
+def _ingest_documents(org_id: str, run_id: str) -> None:
+    """Drive document ingestion into the retrieval substrate (R18-A5 AC2).
+
+    AC2 requires that a library file or page attachment is ingested EXACTLY ONCE,
+    via the document path. The router has always guaranteed the "never twice" half;
+    the "at least once" half was missing because nothing called
+    ``ingest_documents`` — a run record therefore carried no document volume at all
+    (``app/run_volume_report.py`` says so in as many words). So library files,
+    Confluence attachments and configured on-disk locations were ingested ZERO
+    times, and a finding could never cite a PDF runbook.
+
+    Not gated on a connected system: ``documents`` is not a connector a customer
+    connects, it is a per-deployment configuration (``DOCUMENT_LOCATIONS`` plus the
+    SharePoint/Confluence attachment sources the live composite adds). It runs
+    after both of those connectors above, because the composite reuses their
+    authenticated access layers to enumerate attachments.
+
+    Cost is bounded by the ingestor's own budgets rather than by anything here:
+    ``DOCUMENT_MAX_FILE_BYTES`` (25 MiB/file) and
+    ``DOCUMENT_EXTRACTION_BUDGET_BYTES`` (256 MiB/run). A file past the per-run
+    budget is skipped WITHOUT advancing its checkpoint signature, so it is picked
+    up next run rather than lost — which is what makes it safe to run this on every
+    discovery run.
+
+    Non-blocking, like every other deep-content hand-off: extraction or substrate
+    failure is logged and the run continues. The checkpoint is not advanced past
+    un-indexed content, so a failed batch is re-handed next run.
+    """
+    try:
+        from .ingest.documents_handoff import ingest_documents
+    except Exception as e:  # noqa: BLE001 — never break a run on an import
+        logger.warning(
+            "document ingest unavailable (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
+        )
+        return
+
+    try:
+        result = ingest_documents(org_id)
+    except Exception as e:  # noqa: BLE001 — documents must never abort a run.
+        logger.warning(
+            "document ingest failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
+        )
+        return
+
+    logger.info(
+        "Document ingest: org=%s run=%s records=%d handed_off=%d indexed=%d "
+        "empty=%d failed=%d chunks=%d checkpoint_advanced=%s",
+        org_id,
+        run_id,
+        result.records,
+        result.artifacts_handed_off,
+        result.artifacts_indexed,
+        result.artifacts_empty,
+        result.artifacts_failed,
+        result.chunks_indexed,
+        result.checkpoint_advanced,
+    )
+    if result.error is not None:
+        # ingest_documents captures rather than raises; surface it, because a
+        # silently-empty document corpus is indistinguishable from a clean run.
+        logger.warning(
+            "document ingest completed with an error (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(result.error).__name__,
+        )
+
+
+CONFLUENCE_KEY = "confluence"
+
+
+def _merge_body_cross_references(
+    payload: Dict[str, Any], system_key: str, markers: Any
+) -> None:
+    """Merge body-derived cross-reference markers into a corroboration block.
+
+    Both connectors have always extracted markers from titles/filenames only, which
+    misses the case that actually occurs: documents cite an incident in their text.
+    The depth path is the only place the rendered body exists, so the markers are
+    collected there and merged here.
+
+    Merged rather than replaced (a title marker is still a marker) and deduplicated
+    on ``(system, ref)``. Never raises: a marker merge must not cost a run its
+    corroboration block.
+    """
+    if not markers:
+        return
+    try:
+        block = payload.get(system_key)
+        if not isinstance(block, dict):
+            return
+        existing = list(block.get("cross_references") or [])
+        seen = {
+            (m.get("system"), str(m.get("ref", "")).upper())
+            for m in existing
+            if isinstance(m, dict)
+        }
+        for marker in markers:
+            if not isinstance(marker, dict):
+                continue
+            key = (marker.get("system"), str(marker.get("ref", "")).upper())
+            if key in seen:
+                continue
+            seen.add(key)
+            existing.append(marker)
+        block["cross_references"] = existing
+    except Exception:  # noqa: BLE001 — never break a run over a marker merge
+        logger.warning("cross-reference merge failed for %s (non-blocking)", system_key)
 
 
 _ENTERPRISE_OPS_DEMO_PATH = (
@@ -2341,7 +2504,12 @@ def run(
     # being in the org's connected/live systems.
     if "confluence" in _systems:
         update_run_step(run_id, "confluence")
-        confluence_data = _ingest_confluence_corroboration(org_id, run_id) or {}
+        # The covenant probe is nCino-specific (COR-04 is gated on
+        # COVENANT_TRACKING_GAP), so it only runs when an nCino pack is selected —
+        # no other run pays for a retrieval query it cannot use.
+        confluence_data = _ingest_confluence_corroboration(
+            org_id, run_id, probe_covenant_documentation=_any_ncino
+        ) or {}
         logger.info(
             "Confluence ingest: %d space activity block(s) this run",
             len(confluence_data.get("confluence", {}).get("activity", {})),
@@ -2353,6 +2521,12 @@ def run(
             "SharePoint ingest: %d library activity block(s) this run",
             len(sharepoint_data.get("sharepoint", {}).get("activity", {})),
         )
+
+    # R18-A5 AC2 — binary documents (library files, page attachments, configured
+    # locations) reach retrieval through the DOCUMENT path. Runs AFTER the
+    # SharePoint and Confluence connectors above because the live document source
+    # composes their access layers to enumerate attachments.
+    _ingest_documents(org_id, run_id)
 
     # 2a. nCino ingest — if ncino pack, fetch lending signals from nCino objects
     from .packs.pack_config import is_ncino_pack as _is_ncino
@@ -3116,7 +3290,7 @@ def run(
                     sn_by_detector=sn_by_detector,
                     jira_by_detector=jira_by_detector,
                     run_timestamp_iso=_run_ts_iso,
-                    source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data, teams_data, java_data, dotnet_data],
+                    source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data, teams_data, java_data, dotnet_data, confluence_data, sharepoint_data],
                 )
             except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
                 logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)

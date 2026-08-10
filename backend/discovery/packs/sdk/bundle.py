@@ -184,6 +184,50 @@ def trusted_publisher_keys() -> Dict[str, str]:
     }
 
 
+def validate_trusted_keys_config() -> None:
+    """Report a malformed :data:`TRUSTED_KEYS_ENV_VAR` at STARTUP, not at install.
+
+    :func:`trusted_publisher_keys` already logs and degrades to "trust nobody", so a
+    typo was never silent — but it was only ever logged on the first bundle read,
+    which is the moment a customer is trying to install. The operator who mistyped
+    the variable is not watching then, and the failure they see is
+    ``bundle_unverified`` on a bundle that is in fact correctly signed, which points
+    at the wrong thing entirely.
+
+    So the same parse runs unconditionally at startup, following
+    ``model_gateway.validate_provider_config``'s precedent. It does NOT raise: a
+    deployment that never installs an authored pack must not be prevented from
+    booting by a variable it does not use, and refusing to start would be a worse
+    failure than the one being reported. Trust-anchor COUNT is logged, never a key
+    id or value.
+    """
+    if _TRUSTED_KEYS_OVERRIDE is not None:
+        return
+    raw = os.getenv(TRUSTED_KEYS_ENV_VAR, "").strip()
+    if not raw:
+        logger.info(
+            "%s is not set; no pack publisher keys are trusted and signed-bundle "
+            "installation will be refused with %s",
+            TRUSTED_KEYS_ENV_VAR,
+            REASON_SIGNATURE_UNTRUSTED,
+        )
+        return
+    # trusted_publisher_keys() logs the specific defect (bad JSON / wrong shape).
+    # Reading it here is what surfaces that log at startup.
+    keys = trusted_publisher_keys()
+    if not keys:
+        logger.error(
+            "%s is set but yielded no usable trust anchors; every signed-bundle "
+            "installation will be refused with %s until it is corrected",
+            TRUSTED_KEYS_ENV_VAR,
+            REASON_SIGNATURE_UNTRUSTED,
+        )
+        return
+    logger.info(
+        "%s declares %d pack publisher trust anchor(s)", TRUSTED_KEYS_ENV_VAR, len(keys)
+    )
+
+
 def set_trusted_publisher_keys(keys: Optional[Mapping[str, str]]) -> None:
     """Test/offline injection seam; ``None`` restores environment resolution."""
     global _TRUSTED_KEYS_OVERRIDE
@@ -602,5 +646,6 @@ __all__ = [
     "set_trusted_publisher_keys",
     "sign_index",
     "trusted_publisher_keys",
+    "validate_trusted_keys_config",
     "verify_bundle",
 ]

@@ -75,10 +75,15 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
 from app.provenance import EvidencePointer, utc_now_iso
-from app.retrieval.ingest import ContentArtifact, IngestResult, ingest_content
+from app.retrieval.ingest import (
+    ContentArtifact,
+    IngestResult,
+    ingest_content,
+    remove_content,
+)
 
 from . import change_runner
-from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
+from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch, tombstone
 from .sharepoint import (
     SharePointIngestor,
     _change_marker,
@@ -332,6 +337,34 @@ def _build_evidence_pointer(artifact_id: str, timestamp: Optional[str]) -> Dict[
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class _Removal:
+    """One artifact that vanished since the last run — a tombstone to emit.
+
+    ``kind`` and ``site_id`` are recovered from the artifact id itself
+    (``"{site_id}:page:{page_id}"`` / ``"{site_id}:list:{list_id}"``), because by
+    definition the source no longer offers the item to read them from.
+    """
+
+    artifact_id: str
+
+    @property
+    def kind(self) -> str:
+        if ":page:" in self.artifact_id:
+            return "page"
+        if ":list:" in self.artifact_id:
+            return "list"
+        return ""
+
+    @property
+    def site_id(self) -> str:
+        for infix in (":page:", ":list:"):
+            head, sep, _ = self.artifact_id.partition(infix)
+            if sep:
+                return head
+        return ""
+
+
 @dataclass
 class _ContentWork:
     """One page/list's rendered content plus the identity + provenance it carries."""
@@ -365,7 +398,16 @@ class SharePointContentIngestor(ChangeBasedIngestor):
     """
 
     connector_id = CONNECTOR_ID
-    reports_deletes = False
+    # R18-A5 AC3: a page/list that disappears from a granted site — or whose whole
+    # site stops being readable — is tombstoned so its content leaves retrieval.
+    # Detected by diffing the checkpoint's own marker map against the current
+    # enumeration; see _removed_artifact_ids.
+    reports_deletes = True
+    # Own checkpoint namespace (so it cannot race the reach connector's), but the
+    # pages and lists are indexed under the reach connector's substrate identity.
+    # Without this the freshness subscriber keys on 'sharepoint_content': it marks
+    # zero chunks stale and parks a queue row no resolver is registered for.
+    retrieval_source_system = SOURCE_SYSTEM
 
     def __init__(
         self,
@@ -395,6 +437,9 @@ class SharePointContentIngestor(ChangeBasedIngestor):
         running = dict(tokens)
 
         items = self._content_items(org_id)
+        removed = self._removed_artifact_ids(tokens, items)
+        for artifact_id in removed:
+            running.pop(artifact_id, None)
         fresh = [it for it in items if _marker_gt(it.marker, tokens.get(it.artifact_id))]
         # Oldest-first so the checkpoint advances monotonically as batches emit;
         # artifact_id breaks ties for a deterministic order.
@@ -409,7 +454,11 @@ class SharePointContentIngestor(ChangeBasedIngestor):
             len(fresh),
         )
 
-        if not fresh:
+        # Tombstones ride the SAME batching as upserts so exactly one batch carries
+        # is_complete=True and the checkpoint never advances past unprocessed work.
+        pending: List[Any] = [_Removal(a) for a in removed] + list(fresh)
+
+        if not pending:
             yield DeltaBatch(
                 records=[],
                 next_checkpoint=_encode_checkpoint(running),
@@ -417,19 +466,79 @@ class SharePointContentIngestor(ChangeBasedIngestor):
             )
             return
 
-        total_batches = (len(fresh) + self.batch_size - 1) // self.batch_size
+        total_batches = (len(pending) + self.batch_size - 1) // self.batch_size
         emitted = 0
-        for start in range(0, len(fresh), self.batch_size):
-            page = fresh[start : start + self.batch_size]
-            records = [self._to_record(it) for it in page]
-            for it in page:
-                running[it.artifact_id] = it.marker
+        for start in range(0, len(pending), self.batch_size):
+            page = pending[start : start + self.batch_size]
+            records = []
+            for entry in page:
+                if isinstance(entry, _Removal):
+                    records.append(
+                        tombstone(
+                            entry.artifact_id,
+                            source_system=SOURCE_SYSTEM,
+                            connector_id=self.connector_id,
+                            content_kind=entry.kind,
+                            site_id=entry.site_id,
+                        )
+                    )
+                    continue
+                records.append(self._to_record(entry))
+                running[entry.artifact_id] = entry.marker
             emitted += 1
             yield DeltaBatch(
                 records=records,
                 next_checkpoint=_encode_checkpoint(running),
                 is_complete=(emitted == total_batches),
             )
+
+    def _removed_artifact_ids(
+        self, tokens: Dict[str, str], items: List[_ContentWork]
+    ) -> List[str]:
+        """Artifact ids that were known last run and are gone now (AC3, R18-A5).
+
+        The checkpoint's marker map already records EVERY artifact seen — unchanged
+        entries are carried forward, not dropped — so its keys are the known-id set
+        and no schema change is needed (contrast Confluence, whose cursor is
+        per-space and needed an explicit ``known_ids`` addition at v2). A v1
+        checkpoint therefore starts detecting deletions immediately.
+
+        Two causes, both real and both handled the way the Confluence connector
+        handles them:
+
+        * the page/list is gone from a site we CAN still read — deleted or moved to
+          the site recycle bin;
+        * the whole site is no longer readable (grant withdrawn or removed from the
+          org's saved selection) — its content must stop being retrievable too, and
+          this is decided WITHOUT reading the now-ungranted site.
+
+        A transient failure cannot reach here: ``_content_items`` raising propagates
+        out of ``ingest_changes``, so the runner leaves the checkpoint untouched and
+        nothing is tombstoned. The remaining edge — an enumeration that legitimately
+        returns nothing while ids are known — is a genuine total loss of grant, and
+        is logged at WARNING because it removes every indexed page for this org.
+        """
+        if not tokens:
+            return []
+        current = {it.artifact_id for it in items}
+        gone = sorted(set(tokens) - current)
+        if not gone:
+            return []
+        if not current:
+            logger.warning(
+                "sharepoint_content: no readable page/list content for org — "
+                "tombstoning all %d previously-known artifact(s). This is correct "
+                "if every site's grant or selection was withdrawn; investigate if "
+                "not, because their chunks leave retrieval.",
+                len(gone),
+            )
+        else:
+            logger.info(
+                "sharepoint_content: %d artifact(s) disappeared since the last run; "
+                "emitting tombstones so their chunks leave retrieval",
+                len(gone),
+            )
+        return gone
 
     # ── Granted-scope enumeration (R18-A5 §4 — permissions re-verified at depth) ─
     def _accessible_sites(self, org_id: str) -> List[Dict[str, Any]]:
@@ -604,6 +713,37 @@ def _build_provenance(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def extract_body_cross_references(
+    artifacts: List[ContentArtifact],
+) -> List[Dict[str, Any]]:
+    """Pull ServiceNow/Jira/GitHub markers out of rendered page/list text.
+
+    Uses the SAME source-agnostic extractor the reach path uses, so a reference
+    means the same thing wherever it was found. COR-12 still requires an exact id
+    match against a record already linked to the detector, so a passing mention
+    corroborates nothing on its own.
+    """
+    from .slack_signals import extract_cross_reference_markers
+
+    seen = set()
+    out: List[Dict[str, Any]] = []
+    for artifact in artifacts or []:
+        content = getattr(artifact, "content", "") or ""
+        if not content:
+            continue
+        try:
+            markers = extract_cross_reference_markers(content)
+        except Exception:  # noqa: BLE001 — a marker scan never sinks ingestion
+            continue
+        for marker in markers or ():
+            key = (marker.get("system"), str(marker.get("ref", "")).upper())
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(marker)
+    return out
+
+
 def record_to_artifact(record: Dict[str, Any]) -> Optional[ContentArtifact]:
     """Map one ingestor record to a substrate :class:`ContentArtifact`, or ``None``.
 
@@ -639,6 +779,75 @@ def content_artifacts(records: List[Dict[str, Any]]) -> List[ContentArtifact]:
     return artifacts
 
 
+def build_content_artifact(
+    ingestor: "SharePointContentIngestor",
+    org_id: str,
+    site_id: str,
+    kind: str,
+    native_id: str,
+) -> Optional[ContentArtifact]:
+    """Re-read ONE page/list and build its substrate artifact, or ``None``.
+
+    The single public seam the retrieval-freshness resolver
+    (``app.retrieval.default_resolvers._resolve_sharepoint``) uses to turn a queued
+    ``"{site_id}:page:{page_id}"`` / ``"{site_id}:list:{list_id}"`` artifact id back
+    into current content. It reuses the EXACT render + record + provenance chain the
+    direct hand-off (:func:`ingest_sharepoint_content`) uses — ``_page_work`` /
+    ``_list_work`` → ``_to_record`` → :func:`record_to_artifact` — so an
+    async refresh produces the same structure-preserving prose as the synchronous
+    path, never a metadata-only stub. Mirrors
+    ``confluence_content.build_content_artifact`` (R18-A5 / AT-603).
+
+    Without this the resolver could not parse the ``:page:`` / ``:list:`` namespace
+    at all: it returned ``None`` for every one, the worker recorded ``no_content``
+    and parked the row ``failed`` after its retry budget, and the chunks stayed
+    ``is_stale = TRUE`` — excluded from default retrieval — permanently. Because
+    ``change_runner`` emits ``artifact_changed`` AFTER the hand-off already wrote
+    fresh chunks, that applied to a page's FIRST indexing, not just to edits.
+
+    Scope is re-verified here (R18-A5 §4 "permissions re-verified at depth"):
+    the site must still be granted AND still inside the org's saved site selection,
+    resolved through :meth:`SharePointContentIngestor._accessible_sites` — which is
+    also where ``site_name`` comes from, so provenance matches the hand-off's.
+    A site that has since lost its grant resolves to ``None`` (the artifact keeps
+    its existing state; removal is ``remove_artifact``'s job, not a resolver's).
+    """
+    if kind not in ("page", "list"):
+        return None
+    site_id = str(site_id or "").strip()
+    native_id = str(native_id or "").strip()
+    if not site_id or not native_id:
+        return None
+
+    site = next(
+        (
+            candidate
+            for candidate in ingestor._accessible_sites(org_id)
+            if str(candidate.get("id") or "") == site_id
+        ),
+        None,
+    )
+    if site is None:
+        return None
+    site_name = str(site.get("displayName") or site.get("name") or "")
+
+    if kind == "page":
+        source = ingestor._raw_pages(org_id, site_id)
+        build_work = ingestor._page_work
+    else:
+        source = ingestor._raw_lists(org_id, site_id)
+        build_work = ingestor._list_work
+
+    for item in source:
+        if str(item.get("id") or "").strip() != native_id:
+            continue
+        work = build_work(site_id, site_name, item)
+        if work is None:
+            return None
+        return record_to_artifact(ingestor._to_record(work))
+    return None
+
+
 @dataclass
 class SharePointContentResult:
     """Outcome of one :func:`ingest_sharepoint_content` run — read + hand-off totals."""
@@ -650,8 +859,14 @@ class SharePointContentResult:
     artifacts_indexed: int = 0
     artifacts_empty: int = 0
     artifacts_failed: int = 0
+    artifacts_removed: int = 0
     chunks_indexed: int = 0
     chunks_replaced: int = 0
+    chunks_removed: int = 0
+    #: ServiceNow/Jira/GitHub markers found in page/list TEXT (COR-12's supply).
+    #: The reach path extracts these from FILE NAMES only, which misses the common
+    #: case: a runbook cites "INC-4821" in its body, not in its filename.
+    cross_references: List[Dict[str, Any]] = field(default_factory=list)
     checkpoint_advanced: bool = False
     first_run: bool = False
     error: Optional[BaseException] = None
@@ -667,6 +882,7 @@ def ingest_sharepoint_content(
     ingestor: Optional[SharePointContentIngestor] = None,
     batch_size: Optional[int] = None,
     ingest_fn: IngestFn = ingest_content,
+    remove_fn: Any = remove_content,
     **runner_kwargs: Any,
 ) -> SharePointContentResult:
     """Run SharePoint content ingestion and hand every artifact to the substrate.
@@ -695,7 +911,29 @@ def ingest_sharepoint_content(
     summary = SharePointContentResult(org_id=org_id)
 
     def _process_batch(batch: change_runner.DeltaBatch) -> None:
+        # Deletions first: a tombstone carries no content, so content_artifacts()
+        # drops it. Routing them here — synchronously, in the same call — mirrors
+        # the Confluence path: belt-and-braces on top of the standard
+        # artifact_changed -> freshness purge, so a page's chunks leave retrieval
+        # even if the async subscriber never runs.
+        removals = [
+            (SOURCE_SYSTEM, r["artifact_id"])
+            for r in batch.records
+            if r.get("change_kind") == ChangeKind.DELETED and r.get("artifact_id")
+        ]
+        if removals:
+            removal = remove_fn(org_id, removals)
+            summary.artifacts_removed += getattr(removal, "artifacts_removed", 0)
+            summary.chunks_removed += getattr(removal, "chunks_removed", 0)
+            logger.info(
+                "sharepoint_content: removed org=%s artifacts=%d chunks=%d",
+                org_id,
+                getattr(removal, "artifacts_removed", 0),
+                getattr(removal, "chunks_removed", 0),
+            )
+
         artifacts = content_artifacts(batch.records)
+        summary.cross_references.extend(extract_body_cross_references(artifacts))
         if not artifacts:
             return
         result = ingest_fn(org_id, artifacts)

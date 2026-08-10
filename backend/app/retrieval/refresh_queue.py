@@ -110,6 +110,53 @@ def failed_count(org_id: str) -> int:
     return int(row[0]) if row else 0
 
 
+def requeue_failed(org_id: str, source_system: Optional[str] = None) -> int:
+    """Return parked ``failed`` rows to ``pending`` with a fresh retry budget.
+
+    Returns the number of rows revived. Org-scoped; optionally narrowed to one
+    ``source_system``.
+
+    This exists because a ``failed`` row is otherwise UNREACHABLE. Both
+    :func:`fetch_pending` and :func:`orgs_with_pending` filter on
+    ``status = 'pending'``, and the only ``failed`` → ``pending`` transition is the
+    ``ON CONFLICT`` upsert in :func:`enqueue` / ``store.mark_stale_and_enqueue`` —
+    which fires only on a NEW ``artifact_changed`` event. A checkpoint-based
+    connector emits no event for an unchanged artifact, so a row parked by a
+    resolver bug stays parked, and its chunks stay stale, indefinitely. Fixing the
+    resolver does not by itself revive anything it already parked.
+
+    ``attempts`` is reset to 0 deliberately: neither upsert resets it, so a row
+    revived at ``attempts = max_attempts`` would get a single try and re-park on any
+    transient failure — which would look exactly like the bug not being fixed.
+
+    Not a delete path: rows are updated in place, so the queue's history of what
+    failed and why (``last_error``) is preserved up to the next attempt.
+    """
+    now = datetime.now(timezone.utc)
+    params: list[Any] = [now, org_id]
+    sql = (
+        "UPDATE retrieval_refresh_queue "
+        "SET status = 'pending', attempts = 0, updated_at = %s "
+        "WHERE org_id = %s AND status = 'failed'"
+    )
+    if source_system:
+        sql += " AND source_system = %s"
+        params.append(source_system)
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(sql, tuple(params))
+        revived = cur.rowcount or 0
+        con.commit()
+    if revived:
+        logger.info(
+            "retrieval refresh: requeued %d failed row(s) for org=%s source_system=%s",
+            revived,
+            org_id,
+            source_system or "*",
+        )
+    return int(revived)
+
+
 def fetch_pending(org_id: str, limit: int = 64) -> list[dict[str, Any]]:
     """Return up to ``limit`` of an org's pending refresh rows, oldest first.
 
