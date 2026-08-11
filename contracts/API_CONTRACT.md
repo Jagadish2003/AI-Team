@@ -1,7 +1,17 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.30
-Date: 2026-08-06
+Version: v1.31
+Date: 2026-08-11
 
+> v1.31 — Entity Matches undo: `POST /api/entity-match-proposals/{proposalId}/decision`
+> now accepts `action: "undo"`, which withdraws a prior confirm/reject and returns
+> the pair to `pending` (clearing `decided_by`/`decided_at` on the row) so a
+> mis-clicked decision is recoverable and the pair re-enters the review queue.
+> Purely additive: a new accepted `action` value plus one new UI control (the
+> "Undo" button on a decided match). No response shape changes — `undo` returns the
+> same `ProposalDecisionResponse` — and existing `confirm`/`reject` behaviour is
+> unchanged. Like every decision, `undo` appends a forward history row; history is
+> never rewritten.
+>
 > v1.30 — 2.0-C4 T5 (Deprecation Lifecycle Audit): all three deprecation transitions
 > are audit events, and are readable as one trail. One new route and one new audit
 > event type; no existing response shape changes.
@@ -361,8 +371,9 @@ Date: 2026-08-06
 > `POST /api/entity-match-proposals/{proposalId}/decision`, and
 > `POST /api/entity-match-proposals/scan`. Only propose-only tiers appear — a pair
 > resolved by an explicit cross-reference or the org alias table auto-merges and is
-> never queued. `action` is one of `confirm | reject`; `changed=false` means the
-> same decision was already current and no history row was added. A decision is
+> never queued. `action` is one of `confirm | reject | undo` (`undo` withdraws a
+> confirm/reject and returns the pair to `pending`); `changed=false` means the
+> same state was already current and no history row was added. A decision is
 > RECORDED, not applied: nothing in these endpoints merges the graph. Answered
 > pairs are never re-proposed — a re-scan reports them as
 > `skipped_already_decided` rather than reopening them. Organization-scoped: a
@@ -1124,7 +1135,7 @@ Response: `{ "proposal": <as above>, "history": [ { "revision", "action",
 "previous_status", "resulting_status", "actor_id", "note", "decided_at" } ] }`
 
 #### POST /api/entity-match-proposals/{proposalId}/decision
-Purpose: confirm or reject one proposed match.
+Purpose: confirm, reject, or undo one proposed match.
 Requires: authenticated Analyst or Owner.
 
 Request:
@@ -1132,10 +1143,15 @@ Request:
 { "action": "confirm", "note": "same service, different system of record" }
 ```
 
-`action` is one of `confirm | reject` (there is no `defer` — a proposal nobody
-has answered is already `pending`). `changed=false` means the same decision was
-already current and no history row was added. Reversing a decision is allowed and
-APPENDS a new forward row; history is never rewritten.
+`action` is one of `confirm | reject | undo`. There is no `defer` — a proposal
+nobody has answered is already `pending`. `undo` withdraws a prior confirm/reject
+and returns the pair to `pending`, clearing `decided_by`/`decided_at` on the row
+so it is genuinely undecided again and re-enters the review queue (a future
+`scan` will refresh it); it is the correction path for a mis-click. `undo` on an
+already-`pending` proposal is a harmless no-op (`changed=false`). `changed=false`
+means the same state was already current and no history row was added. Reversing
+a decision — undo included — APPENDS a new forward row recording who acted and
+when; history is never rewritten.
 
 **A decision is recorded, not applied.** Confirming records a durable,
 attributable statement that two entities are the same thing and stops the pair

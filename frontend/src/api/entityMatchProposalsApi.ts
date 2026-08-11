@@ -20,7 +20,8 @@
 import { apiGet, apiPost } from "../lib/apiClient";
 
 export type ProposalStatus = "pending" | "confirmed" | "rejected";
-export type ProposalAction = "confirm" | "reject";
+/** `undo` withdraws a confirm/reject and returns the pair to `pending`. */
+export type ProposalAction = "confirm" | "reject" | "undo";
 
 /** One side of a proposed pair, as the reviewer sees it. */
 export interface ProposalEntityView {

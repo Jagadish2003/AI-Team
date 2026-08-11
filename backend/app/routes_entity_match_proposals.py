@@ -65,14 +65,16 @@ router = APIRouter(tags=["entity-match-proposals"])
 
 
 class ProposalDecisionRequest(BaseModel):
-    """``confirm`` = these are the same thing; ``reject`` = they are not.
+    """``confirm`` = these are the same thing; ``reject`` = they are not;
+    ``undo`` = withdraw a confirm/reject and return the pair to ``pending``.
 
-    There is deliberately no third "defer" action: a proposal that is neither
-    confirmed nor rejected is already pending, so deferring is what happens when
-    the reviewer does nothing.
+    There is deliberately no "defer" action: a proposal that is neither confirmed
+    nor rejected is already pending, so deferring is what happens when the
+    reviewer does nothing. ``undo`` is the correction path for a mis-click — it
+    puts an already-answered pair back in the review queue.
     """
 
-    action: str = Field(..., description="confirm | reject")
+    action: str = Field(..., description="confirm | reject | undo")
     note: Optional[str] = Field(
         None, description="Optional reviewer note recorded with the decision."
     )
@@ -164,11 +166,13 @@ def decide_entity_match_proposal(
     body: ProposalDecisionRequest,
     token: str = Depends(require_auth),
 ) -> Dict[str, Any]:
-    """Confirm or reject one proposed match.
+    """Confirm, reject, or undo one proposed match.
 
-    Idempotent — repeating the decision already in force returns ``changed:
-    false`` and writes no duplicate history row. Reversing a decision is allowed
-    and appends a new forward row, so the original answer is never edited away.
+    ``undo`` withdraws a confirm/reject and returns the pair to ``pending`` so a
+    mis-click is recoverable and the pair re-enters the review queue. Idempotent —
+    repeating the decision already in force returns ``changed: false`` and writes
+    no duplicate history row. Every change (undo included) appends a new forward
+    history row, so the original answer is never edited away.
     """
     org_id = get_current_org_id()
     actor_id = _get_user_id_from_token(token)

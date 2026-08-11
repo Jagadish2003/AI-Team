@@ -126,7 +126,7 @@ function ProposalCard({
 }: {
   proposal: EntityMatchProposal;
   busy: boolean;
-  onDecide: (id: string, action: "confirm" | "reject") => void;
+  onDecide: (id: string, action: "confirm" | "reject" | "undo") => void;
 }) {
   const evidence = proposal.evidence ?? {};
   const corroborating = evidence.corroborating_relationships ?? [];
@@ -199,11 +199,27 @@ function ProposalCard({
           </Button>
         </footer>
       ) : (
-        <footer data-testid="proposal-decided" className="mt-3 text-xs text-muted">
-          {proposal.status === "confirmed" ? "Confirmed" : "Rejected"}
-          {proposal.decided_by ? ` by ${proposal.decided_by}` : ""}
-          {proposal.decided_at ? ` · ${proposal.decided_at}` : ""}
-          {" · will not be proposed again"}
+        <footer
+          data-testid="proposal-decided"
+          className="mt-3 flex flex-wrap items-center gap-3"
+        >
+          <span className="text-xs text-muted">
+            {proposal.status === "confirmed" ? "Confirmed" : "Rejected"}
+            {proposal.decided_by ? ` by ${proposal.decided_by}` : ""}
+            {proposal.decided_at ? ` · ${proposal.decided_at}` : ""}
+            {" · will not be proposed again"}
+          </span>
+          {/* Correction path for a mis-click: undo returns the pair to the
+              pending queue. The backend appends a forward history row, so the
+              original decision is never erased. */}
+          <Button
+            variant="secondary"
+            onClick={() => onDecide(proposal.proposal_id, "undo")}
+            disabled={busy}
+            ariaLabel="Undo this decision and return the match to pending"
+          >
+            Undo
+          </Button>
         </footer>
       )}
     </article>
@@ -257,19 +273,25 @@ export default function EntityMatchReviewPage() {
     return <Navigate to="/integration-hub" replace />;
   }
 
-  async function handleDecide(proposalId: string, action: "confirm" | "reject") {
+  async function handleDecide(
+    proposalId: string,
+    action: "confirm" | "reject" | "undo",
+  ) {
     if (busyId) return;
     setBusyId(proposalId);
     try {
       const outcome = await decideEntityMatchProposal(proposalId, action);
-      push(
-        outcome.changed
-          ? action === "confirm"
-            ? "Match confirmed. Recorded — it will not be proposed again."
-            : "Match rejected. Recorded — it will not be proposed again."
-          : "That decision was already recorded.",
-        "success",
-      );
+      const changedMessage =
+        action === "confirm"
+          ? "Match confirmed. Recorded — it will not be proposed again."
+          : action === "reject"
+            ? "Match rejected. Recorded — it will not be proposed again."
+            : "Decision undone. The match is back in the pending queue for review.";
+      const unchangedMessage =
+        action === "undo"
+          ? "Nothing to undo — this match is already pending."
+          : "That decision was already recorded.";
+      push(outcome.changed ? changedMessage : unchangedMessage, "success");
       await load(tab);
     } catch (err) {
       push(errorDetail(err, "Could not record the decision"), "error");

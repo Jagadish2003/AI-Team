@@ -58,11 +58,21 @@ PROPOSAL_STATUSES = (STATUS_PENDING, STATUS_CONFIRMED, STATUS_REJECTED)
 # Actions a reviewer can take.
 ACTION_CONFIRM = "confirm"
 ACTION_REJECT = "reject"
+#: Reverse a confirmed/rejected pair back to ``pending`` — the correction path for
+#: a mis-click. Like every other decision it appends a forward history row (the
+#: earlier answer is never edited away), and it returns the pair to the review
+#: queue so a future scan refreshes it and the reviewer can decide again.
+ACTION_UNDO = "undo"
+#: The two answers that RESOLVE a proposal. Kept distinct from :data:`DECIDE_ACTIONS`
+#: because ``undo`` is not an answer — it withdraws one.
 DECISION_ACTIONS = (ACTION_CONFIRM, ACTION_REJECT)
+#: Every action :func:`decide` accepts.
+DECIDE_ACTIONS = (ACTION_CONFIRM, ACTION_REJECT, ACTION_UNDO)
 
 _STATUS_FOR_ACTION: Dict[str, str] = {
     ACTION_CONFIRM: STATUS_CONFIRMED,
     ACTION_REJECT: STATUS_REJECTED,
+    ACTION_UNDO: STATUS_PENDING,
 }
 
 #: Default page size for the review queue — bounded so one org with a large
@@ -804,13 +814,17 @@ def decide(
     *,
     note: Any = None,
 ) -> DecisionOutcome:
-    """Confirm or reject one proposal, appending to its history.
+    """Confirm, reject, or UNDO one proposal, appending to its history.
 
     Idempotent: repeating the decision already in force changes nothing and
-    returns ``changed=False`` (no duplicate history row for a double-click).
+    returns ``changed=False`` (no duplicate history row for a double-click), so
+    undoing an already-pending proposal is a harmless no-op.
     Reversing a decision IS allowed and appends a new forward row — an analyst who
     mis-clicked must be able to correct it, and the original decision stays in the
-    record rather than being edited away.
+    record rather than being edited away. ``undo`` returns the pair to ``pending``
+    (clearing ``decided_by``/``decided_at`` on the row so it is genuinely
+    undecided again and re-enters the review queue), while the appended history
+    row records WHO undid it and when, so the audit trail stays complete.
 
     Raises :class:`ProposalNotFound` (unknown or cross-org) and
     :class:`ProposalDecisionError` (unknown action, blank actor).
@@ -819,12 +833,13 @@ def decide(
     pid = _required(proposal_id, "proposal_id")
     actor = _required(actor_id, "actor_id")
     normalised = str(action or "").strip().lower()
-    if normalised not in DECISION_ACTIONS:
+    if normalised not in DECIDE_ACTIONS:
         raise ProposalDecisionError(
-            f"action must be one of {list(DECISION_ACTIONS)}; got {action!r}"
+            f"action must be one of {list(DECIDE_ACTIONS)}; got {action!r}"
         )
     cleaned_note = _clean_note(note)
     resulting = _STATUS_FOR_ACTION[normalised]
+    is_undo = normalised == ACTION_UNDO
 
     con = db.connect()
     try:
@@ -854,6 +869,12 @@ def decide(
 
         revision = current.revision + 1
         decided_at = _now()
+        # An undo returns the row to a genuinely UNDECIDED state: no decider, no
+        # decision time, no decision note. The history row below still records who
+        # performed the undo and when, so the audit trail stays complete.
+        row_decided_by = None if is_undo else actor
+        row_decided_at = None if is_undo else decided_at
+        row_note = None if is_undo else cleaned_note
         cur.execute(
             """
             UPDATE entity_match_proposals
@@ -861,7 +882,7 @@ def decide(
                 note = %s, updated_at = %s
             WHERE org_id = %s AND proposal_id = %s
             """,
-            (resulting, revision, actor, decided_at, cleaned_note, decided_at, org, pid),
+            (resulting, revision, row_decided_by, row_decided_at, row_note, decided_at, org, pid),
         )
         cur.execute(
             """
@@ -1031,7 +1052,9 @@ __all__ = [
     "PROPOSAL_STATUSES",
     "ACTION_CONFIRM",
     "ACTION_REJECT",
+    "ACTION_UNDO",
     "DECISION_ACTIONS",
+    "DECIDE_ACTIONS",
     "DEFAULT_LIST_LIMIT",
     "MAX_LIST_LIMIT",
     "SCANNABLE_ENTITY_TYPES",

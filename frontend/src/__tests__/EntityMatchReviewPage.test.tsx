@@ -288,12 +288,74 @@ describe("decided proposals", () => {
     expect(decided).toHaveTextContent(/will not be proposed again/i);
   });
 
-  it("offers no decision buttons", async () => {
+  it("offers no confirm/reject buttons (only Undo)", async () => {
     renderPage();
     await screen.findByTestId("proposal-decided");
 
     expect(screen.queryByRole("button", { name: /confirm this match/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /reject this match/i })).toBeNull();
+  });
+
+  it("offers an Undo button to reverse a decision", async () => {
+    renderPage();
+    await screen.findByTestId("proposal-decided");
+
+    expect(
+      screen.getByRole("button", { name: /undo this decision/i }),
+    ).toBeTruthy();
+  });
+
+  it("undoes a decision and returns the match to the pending queue", async () => {
+    h.mockDecide.mockResolvedValue({
+      proposal: { ...CONFIRMED, status: "pending", decided_by: null, decided_at: null },
+      action: "undo",
+      previous_status: "confirmed",
+      resulting_status: "pending",
+      revision: 2,
+      changed: true,
+      actor_id: "analyst@example.com",
+      decided_at: "2026-08-03T12:00:00+00:00",
+    });
+    renderPage();
+    await screen.findByTestId("proposal-decided");
+
+    fireEvent.click(screen.getByRole("button", { name: /undo this decision/i }));
+
+    await waitFor(() =>
+      expect(h.mockDecide).toHaveBeenCalledWith("emp_done999", "undo"),
+    );
+    await waitFor(() =>
+      expect(h.mockPush).toHaveBeenCalledWith(
+        expect.stringMatching(/pending queue/i),
+        "success",
+      ),
+    );
+    // The queue is reloaded after the undo so the item leaves this tab.
+    expect(h.mockList).toHaveBeenCalledTimes(2);
+  });
+
+  it("says there is nothing to undo when the match is already pending", async () => {
+    h.mockDecide.mockResolvedValue({
+      proposal: CONFIRMED,
+      action: "undo",
+      previous_status: "pending",
+      resulting_status: "pending",
+      revision: 1,
+      changed: false,
+      actor_id: "analyst@example.com",
+      decided_at: null,
+    });
+    renderPage();
+    await screen.findByTestId("proposal-decided");
+
+    fireEvent.click(screen.getByRole("button", { name: /undo this decision/i }));
+
+    await waitFor(() =>
+      expect(h.mockPush).toHaveBeenCalledWith(
+        expect.stringMatching(/nothing to undo/i),
+        "success",
+      ),
+    );
   });
 });
 
