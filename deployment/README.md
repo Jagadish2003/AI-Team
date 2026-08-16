@@ -40,7 +40,7 @@ user/password, and native DB connection credentials.
 |---|---|
 | Database | `DATABASE_URL` (+ `DEV_/PROD_/TEST_DATABASE_URL` selectors) |
 | Vault key | `CREDENTIAL_VAULT_KEY` — deliberately stays in env: it encrypts the vault's contents, so storing it in the database it protects would be circular. Env or the customer's secrets manager only. |
-| CORS / server | `CORS_ORIGINS`, `DEV_JWT`, `JWT_SECRET`, `OAUTH_STATE_SECRET`, `ENVIRONMENT` |
+| CORS / server | `CORS_ORIGINS`, `DEV_JWT`, `JWT_SECRET`, `OAUTH_STATE_SECRET`, `ENVIRONMENT`, `DEPLOYMENT_PROFILE` |
 | OAuth app registrations | `OAUTH_REDIRECT_URI`, `OAUTH_FRONTEND_BASE_URL`, `{CONNECTOR}_CLIENT_ID` / `{CONNECTOR}_CLIENT_SECRET` (the deployment's OAuth **app**, not any client's token), tenant IDs |
 | Model gateway | `ANTHROPIC_API_KEY`, `MODEL_*_PROVIDER`, `IN_BOUNDARY_*`, `CUSTOMER_TENANT_*` (dev fallback only — production customer-tenant key is vaulted) |
 | Email / licensing / flags | `SMTP_*`, `EMAIL_*`, `LICENSE_*`, feature flags (e.g. `INFERRED_RELATIONSHIPS_ENABLED`) |
@@ -200,6 +200,68 @@ the connector makes (`cloudwatch:DescribeAlarmHistory`, `events:ListRules`/`Desc
 `boto3` is a lazy, live-only dependency (offline runs and tests never import it).
 
 ---
+
+## `DEPLOYMENT_PROFILE` — who runs this deployment 
+
+A deployment declares **who operates it** with one env var. This is the gate the HP-2
+boundary rules consult; it is read only by `backend/app/deployment_profile.py`.
+
+| Value | Meaning |
+|---|---|
+| `saas` (default) | CloudFulcrum operates the deployment. Reaching an internet endpoint is ordinary, so the model gateway may keep a cloud-calling default. |
+| `customer_hosted` | The customer operates it inside their own boundary — on-prem, air-gapped, or under a data-residency constraint. A call that leaves the boundary must be a **configured choice, never an inherited default**. |
+
+**Unset or blank resolves to `saas`**, so every deployment that predates this variable is
+unaffected. **Any other value is refused at startup** with a message naming the variable,
+the offending value and the valid values.
+
+That refusal is deliberately the opposite posture to `NETWORK_PROFILE` below, which
+degrades an unknown value to its safe default. The safe direction differs: an unknown
+`NETWORK_PROFILE` degrades toward the *full* experience, so the worst case is a connect
+flow that is offered and fails. An unknown `DEPLOYMENT_PROFILE` degrading to `saas` would
+hand a customer-hosted deployment the cloud-calling default it exists to refuse — so a
+typo such as `on_prem` or `customer-hosted` must fail loudly rather than silently
+reinstate the defect. The vocabulary is closed; `on_prem` is **not** an alias.
+
+### What the profile gates today (HP-2 T2)
+
+The model gateway's provider default. Under `saas`, an unset `MODEL_GENERATION_PROVIDER` /
+`MODEL_EMBEDDING_PROVIDER` resolves to `hosted` exactly as before. Under `customer_hosted`
+there is **no default** — either variable left unset fails startup with a message naming
+both variables and the valid values (`hosted`, `in_boundary`, `customer_tenant`).
+
+Left at defaults, an air-gapped deployment previously produced findings with no AI
+narrative and no retrieval evidence *while reporting healthy*: generation failed on DNS and
+degraded silently to `llmGenerated=False`, and the hosted embedding path returned `[]`, so
+nothing indexed and every retrieval came back empty. Refusing to boot replaces a run that
+looks fine with a message that says which variable to set.
+
+Setting `hosted` **deliberately** in a customer-hosted deployment is still allowed — the
+rule removes the inherited cloud call, not the option. (HP-3 audits the resulting
+transmission.)
+
+```bash
+# Customer-hosted, model served in-boundary by Ollama or vLLM:
+DEPLOYMENT_PROFILE=customer_hosted
+MODEL_GENERATION_PROVIDER=in_boundary
+MODEL_EMBEDDING_PROVIDER=in_boundary
+IN_BOUNDARY_BASE_URL=http://ollama.internal:11434
+```
+
+### `DEPLOYMENT_PROFILE` is not `ENVIRONMENT`
+
+The two answer different questions and neither derives the other:
+
+| | `DEPLOYMENT_PROFILE` | `ENVIRONMENT=production` |
+|---|---|---|
+| Question | Who runs it? | Is this process production? |
+| Governs | Whether a call may leave the boundary by default | Credential rules, fail-closed invites, dev-bypass suppression |
+| Read via | `get_deployment_profile()` / `is_customer_hosted()` | `is_production()` |
+
+A **customer-hosted staging box** is `customer_hosted` and **not** production: its boundary
+is real (so it must not inherit a cloud default), while it is not subject to production
+credential rules that assume a managed secret store. A SaaS production box is the mirror
+case. Deriving either from the other gets one of those two deployments wrong.
 
 ## No-Public-Inbound Deployments (R18-A3)
 
