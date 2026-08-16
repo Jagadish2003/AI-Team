@@ -194,6 +194,15 @@ def _validate_org_approval_config() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # HP-2 T1: resolve the deployment profile FIRST. It answers "who runs this
+    # deployment" (saas | customer_hosted) and is the gate the boundary rules in
+    # HP-2.2 / HP-2.3 / HP-2.5 consult, so a bad value must stop the process here
+    # rather than surface on whichever request first consults it. Unset is 'saas'
+    # (unchanged for every existing deployment); an unrecognised value raises.
+    # Orthogonal to _is_production() — see app.deployment_profile.
+    from .deployment_profile import validate_deployment_profile
+
+    logger.info("Deployment profile: %s", validate_deployment_profile())
     # Only enforce secret presence when REQUIRE_CONNECTOR_SECRETS=1 (production).
     # Dev and test environments run without connector secrets set.
     if os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1":
