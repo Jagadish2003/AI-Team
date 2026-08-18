@@ -966,6 +966,49 @@ def orgs_with_stale_model(
     return [row[0] for row in rows]
 
 
+def stored_embedding_dimensions(
+    embedding_model: str,
+    embedding_model_version: str,
+    limit: int = 16,
+) -> list[dict[str, Any]]:
+    """Distinct stored vector dimensions for ONE model stamp, with counts (HP-2.4).
+
+    Scoped to the ACTIVE ``(embedding_model, embedding_model_version)`` pair on
+    purpose. Vectors under a different stamp are never compared against these
+    (``search`` filters on the active pair), so they are allowed to have a
+    different dimension — they are the managed backfill's job, not a mismatch.
+
+    Read-only, and deliberately returns NO content: dimensions, a chunk count and
+    a distinct-org count only. It spans orgs rather than taking an ``org_id``
+    because a dimension conflict inside one active stamp is a store-wide fact —
+    the org count tells an operator how far it spreads, and no row content crosses
+    a tenant boundary in the process.
+
+    ``vector_dims`` is a pgvector function; a deployment whose extension predates
+    it (or lacks it) raises, which callers treat as "cannot determine" rather than
+    as a mismatch.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT vector_dims(embedding) AS dims, COUNT(*) AS chunks, "
+            "       COUNT(DISTINCT org_id) AS orgs "
+            "FROM retrieval_chunks "
+            "WHERE embedding IS NOT NULL "
+            "  AND embedding_model = %s AND embedding_model_version = %s "
+            "GROUP BY vector_dims(embedding) "
+            "ORDER BY COUNT(*) DESC "
+            "LIMIT %s",
+            (embedding_model, embedding_model_version, int(limit)),
+        )
+        rows = cur.fetchall() or []
+    return [
+        {"dimensions": int(r[0]), "chunks": int(r[1]), "orgs": int(r[2])}
+        for r in rows
+        if r and r[0] is not None
+    ]
+
+
 def count_stale_model(
     org_id: str,
     embedding_model: str,

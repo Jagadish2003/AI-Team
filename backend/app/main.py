@@ -242,6 +242,16 @@ async def lifespan(app: FastAPI):
     # clear ValueError before the first model call (T2-AC4).
     from .model_gateway import validate_provider_config
     validate_provider_config()
+    # HP-2.4: refuse at startup when the configured embedding model's output
+    # dimension differs from what is already stored under the active model stamp —
+    # previously a runtime storage error on the first write. It lives here rather
+    # than inside validate_provider_config() because it spans two layers: the
+    # model gateway owns provider config and deliberately touches no database,
+    # while this needs the retrieval store. Skips silently on a first run, an
+    # unknown model, or an unreadable store; raises only on a proven conflict.
+    from .retrieval.dimension_guard import validate_embedding_dimensions
+
+    validate_embedding_dimensions()
     # T2-S12-A: surface Oracle/PostgreSQL driver install issues at startup.
     _verify_db_driver_imports()
     # Ensure the temporal signal_snapshots table exists. A fresh dev.db is built

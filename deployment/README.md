@@ -291,6 +291,53 @@ platform's one canonical set (`app/degradation.py`) — no new vocabulary. The p
 resolved once at startup and cached; reading it never re-probes, so a health check can
 never become a denial-of-service lever pointed at the customer's own model server.
 
+### Embedding-dimension consistency (HP-2 T4)
+
+The pgvector column is deliberately an unqualified `vector` with **no fixed dimension**,
+so `nomic-embed-text` (768), `mxbai-embed-large` (1024), `all-MiniLM-L6-v2` (384) and
+BGE-large (1024) all work today with no schema migration and no re-embed. **That does not
+change.**
+
+What was missing was any check that the *configured* model emits the dimension already
+stored under the active `(embedding_model, embedding_model_version)` stamp. A mismatch
+used to appear as a storage error on the first write. It is now refused at startup, with a
+message naming both dimensions, the model identity and version, and how many chunks and
+orgs are affected.
+
+Supported models and their declared output dimensions
+(`backend/app/retrieval/embedding_dimensions.py` — add a row to extend, no migration
+needed):
+
+| Model | Dimensions | Basis |
+|---|---|---|
+| `all-MiniLM-L6-v2` | 384 | published |
+| `bge-small-en-v1.5` | 384 | published |
+| `nomic-embed-text` | 768 | published |
+| `bge-base-en-v1.5` | 768 | published |
+| `mxbai-embed-large` | 1024 | published |
+| `bge-large-en-v1.5` / `bge-large-en` | 1024 | published |
+| `text-embedding-3-small` | 1536 | measured (the shipped configuration) |
+| `text-embedding-ada-002` | 1536 | published |
+| `text-embedding-3-large` | 3072 | published |
+
+An Ollama tag is folded (`nomic-embed-text:latest` is the same model and the same vector
+space). A model **absent** from the table has no declared dimension, so the check is
+skipped for it — an unknown model is not a mismatch.
+
+**Skipped is not passed**, and the two are logged distinctly: a first run with nothing
+embedded, an unknown model, and an unreadable store all skip. Only a proven conflict
+refuses, and it refuses in **both** profiles — unlike the reachability probe above this is
+not environmental, the configured model simply cannot write into this index.
+
+**On the remedy:** the R18-B2 T5 managed backfill does **not** fix this. It re-embeds
+vectors stamped by a *non-active* model, and the conflicting rows already carry the active
+stamp, so it would run and change nothing. Either repin the model to the one that produced
+the stored vectors, or change the model **version** so those rows become non-active and
+the backfill can reach them.
+
+> Note: the on-prem `in_boundary` configuration templates for Ollama and vLLM are HP-2 T7
+> and are not in this document yet. The dimension table above is the one T7 will reference.
+
 ### `DEPLOYMENT_PROFILE` is not `ENVIRONMENT`
 
 The two answer different questions and neither derives the other:
