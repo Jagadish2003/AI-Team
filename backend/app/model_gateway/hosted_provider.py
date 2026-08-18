@@ -66,11 +66,16 @@ import urllib.error
 import urllib.request
 from typing import List, Optional, Tuple
 
-from app.model_gateway._config import CONFIG_KEY_API_KEY, HostedConfig
+from app.model_gateway._config import (
+    CONFIG_KEY_API_KEY,
+    CONFIG_KEY_ENDPOINT,
+    HostedConfig,
+)
 from app.model_gateway._interface import (
     GenerationRequest,
     GenerationResult,
     ModelProvider,
+    ProviderProbeTarget,
 )
 
 logger = logging.getLogger(__name__)
@@ -237,6 +242,21 @@ class HostedModelProvider(ModelProvider):
 
         # Unreachable — the loop always returns, but satisfies type checkers.
         return GenerationResult(text=None, provider=self.name, ok=False)  # pragma: no cover
+
+    def probe_target(self, role: str) -> ProviderProbeTarget:
+        """HP-2.3 startup probe target — one endpoint serves both roles here.
+
+        The credential IS required: without it every call fails on auth, so a
+        missing key is a genuine boot-time fault rather than an optional extra.
+        Only its presence and its variable NAME are reported, never the value.
+        """
+        return ProviderProbeTarget(
+            endpoint=self._config.endpoint or None,
+            endpoint_config_keys=(CONFIG_KEY_ENDPOINT,),
+            credential_required=True,
+            credential_present=self._config.has_credential(),
+            credential_config_key=CONFIG_KEY_API_KEY,
+        )
 
     def embed(self, texts: List[str]) -> List[List[float]]:
         """Return embedding vectors for each input string.

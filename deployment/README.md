@@ -248,6 +248,49 @@ MODEL_EMBEDDING_PROVIDER=in_boundary
 IN_BOUNDARY_BASE_URL=http://ollama.internal:11434
 ```
 
+### Startup posture probe (HP-2 T3)
+
+Refusing to *inherit* a cloud provider does not prove the provider that *was*
+configured works. A deployment pointed at an in-boundary model server nobody started
+still booted, still reported healthy, and still produced findings with no AI narrative
+and no retrieval evidence.
+
+At startup each role is now checked, cheapest-first, and the **first failing check is
+reported**:
+
+| Check | Fails when | Reported status |
+|---|---|---|
+| `endpoint_configuration` | the provider is selected but no endpoint URL is set | `unavailable` |
+| `credential_presence` | a provider that *requires* a credential has none | `unavailable` |
+| `reachability` | a TCP connect to the endpoint host/port does not open | `unavailable` |
+
+A TCP connect, not a model call — a model call costs money, needs a valid credential,
+and could not distinguish "unreachable" from "wrong key". **One attempt, no retries**:
+a retrying probe would reproduce the startup hang this exists to make loud.
+
+`credential_presence` is checked *before* reachability, because a connect to a host with
+no credential configured succeeds and would report `ok` for a provider whose every call
+is about to be rejected. For `in_boundary` a credential is **not** required — Ollama and
+vLLM are commonly unauthenticated, so a missing key there is normal, not a fault.
+
+| | `customer_hosted` | `saas` |
+|---|---|---|
+| Unhealthy role | **startup fails** | logged, reported unhealthy, boot continues |
+| `unknown` role | boot continues | boot continues |
+
+`unknown` never blocks boot: it means the posture was not established (probing disabled,
+or a provider that declares nothing to probe), and refusing to boot over an unmeasured
+provider would turn "we did not look" into "it is broken".
+
+```bash
+MODEL_PROVIDER_PROBE_TIMEOUT_SECONDS=3   # seconds per attempt; 0 disables probing
+```
+
+Probing is also skipped when `AGENTIQ_DISABLE_BACKGROUND_JOBS=1`. Statuses come from the
+platform's one canonical set (`app/degradation.py`) — no new vocabulary. The posture is
+resolved once at startup and cached; reading it never re-probes, so a health check can
+never become a denial-of-service lever pointed at the customer's own model server.
+
 ### `DEPLOYMENT_PROFILE` is not `ENVIRONMENT`
 
 The two answer different questions and neither derives the other:

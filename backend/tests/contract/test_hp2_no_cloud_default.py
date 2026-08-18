@@ -165,10 +165,19 @@ def test_customer_hosted_blank_is_also_refused(clean_env):
 
 
 def test_customer_hosted_fully_configured_boots(clean_env):
-    """The profile forbids an INHERITED cloud call, not a configured provider."""
+    """The profile forbids an INHERITED cloud call, not a configured provider.
+
+    The endpoint and the probe settings below are HP-2.3's doing, not HP-2.2's:
+    once the posture probe exists, "configured" means an endpoint too, and naming
+    a provider with no endpoint is refused under this profile. Reachability
+    probing is switched off so this test stays about provider RESOLUTION —
+    HP-2.3's own suite covers the posture rules.
+    """
     clean_env.setenv("DEPLOYMENT_PROFILE", "customer_hosted")
     clean_env.setenv(_GEN, "in_boundary")
     clean_env.setenv(_EMB, "in_boundary")
+    clean_env.setenv("IN_BOUNDARY_BASE_URL", "http://model.internal:11434")
+    clean_env.setenv("MODEL_PROVIDER_PROBE_TIMEOUT_SECONDS", "0")
     validate_provider_config()  # must not raise
     assert get_generation_provider().name == "in_boundary"
     assert get_embedding_provider().name == "in_boundary"
@@ -180,10 +189,16 @@ def test_customer_hosted_may_still_choose_hosted_deliberately(clean_env):
     HP-2 removes the *inherited* cloud call. A customer-hosted deployment that
     deliberately sets 'hosted' has made the decision, and HP-3 is what audits the
     resulting transmission.
+
+    The credential and probe settings are HP-2.3's requirement: the hosted
+    provider REQUIRES a credential, so under this profile choosing it without one
+    is refused. Reachability probing is off so this stays a resolution test.
     """
     clean_env.setenv("DEPLOYMENT_PROFILE", "customer_hosted")
     clean_env.setenv(_GEN, "hosted")
     clean_env.setenv(_EMB, "hosted")
+    clean_env.setenv("ANTHROPIC_API_KEY", "test-key-not-a-real-credential")
+    clean_env.setenv("MODEL_PROVIDER_PROBE_TIMEOUT_SECONDS", "0")
     validate_provider_config()  # must not raise
     assert get_generation_provider().name == "hosted"
 

@@ -535,6 +535,29 @@ def validate_provider_config() -> None:
         _ENV_EMBEDDING, emb_name,
     )
 
+    # HP-2.3: startup posture — endpoint configuration, credential presence, and
+    # a BOUNDED reachability probe per role. Extends this validator rather than
+    # adding a parallel one, so there stays exactly one startup validation entry
+    # point. Evaluation never raises and always records the posture (HP-2.5's
+    # health surface reads it); enforcement is separate and raises only under the
+    # customer_hosted profile, where there is no fallback.
+    #
+    # The evaluate/enforce split is why the try/except is scoped to evaluation
+    # only: a bug in probing must not block startup, but a DELIBERATE refusal
+    # must not be swallowed by the same guard.
+    posture = None
+    try:
+        posture = probe.evaluate_startup_posture(
+            gen_provider, emb_provider, _ENV_GENERATION, _ENV_EMBEDDING
+        )
+    except Exception:  # pragma: no cover - probing must never break startup
+        logger.warning(
+            "model_gateway: provider posture probe raised; posture unknown",
+            exc_info=True,
+        )
+    if posture is not None:
+        probe.enforce_startup_posture(posture)
+
 
 # ---------------------------------------------------------------------------
 # Bootstrap: register HostedModelProvider as the default 'hosted' provider at
@@ -559,6 +582,10 @@ def validate_provider_config() -> None:
 # this module, so there is no cycle.
 # ---------------------------------------------------------------------------
 
+# HP-2.3: imported here (not at the top) for the same reason as the providers —
+# probe.py imports from _interface, which is already in sys.modules by this point.
+# validate_provider_config() resolves the name at call time, not at def time.
+from app.model_gateway import probe  # noqa: E402
 from app.model_gateway.hosted_provider import HostedModelProvider as _HostedModelProvider  # noqa: E402
 from app.model_gateway.in_boundary_provider import InBoundaryModelProvider as _InBoundaryModelProvider  # noqa: E402
 from app.model_gateway.customer_tenant_provider import CustomerTenantModelProvider as _CustomerTenantModelProvider  # noqa: E402
@@ -577,7 +604,18 @@ __all__ = [
     "embed",
     "get_generation_provider",
     "get_embedding_provider",
+    "probe",
+    "provider_posture",
     "register_provider",
     "resolve_provider_names",
     "validate_provider_config",
 ]
+
+
+def provider_posture():
+    """The startup provider posture (HP-2.3), or ``None`` if never evaluated.
+
+    Re-exported so HP-2.5's health surface reads the gateway's public interface
+    rather than reaching into a submodule.
+    """
+    return probe.provider_posture()
