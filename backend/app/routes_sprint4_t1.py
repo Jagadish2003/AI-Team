@@ -293,6 +293,20 @@ def _run_trackb_and_persist(
     }
     errors: Dict[str, str] = {}
 
+    # HP-2.6 (AC5): record the model-provider posture this run ran under, BEFORE
+    # the pipeline, so every exit path carries it. This is the path the product
+    # actually uses (POST /api/stack-builder/launch, then POST /api/runs/{id}/
+    # compute), so stamping only in materialize_t2 would have left the real
+    # customer journey silent. Reads HP-2.3's cached posture; never probes.
+    try:
+        from .run_completeness import stamp_provider_posture
+
+        stamp_provider_posture(run)
+    except Exception:  # noqa: BLE001 - a posture stamp must never break a run
+        logger.warning(
+            "run %s: model provider posture not recorded", run_id, exc_info=True
+        )
+
     try:
         # Single-ingest: the discovery runner is the SOLE place enterprise systems
         # are ingested. The removed _probe_systems pre-pass ingested Salesforce/

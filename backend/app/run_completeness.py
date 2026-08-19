@@ -28,6 +28,45 @@ connections, the pgvector retrieval store being unreachable, and the evidence
 store being unwritable. The second is the one with the established posture —
 R18-B2's freshness metrics refuse to report zeros on a read failure — and this
 module generalises it: an unmeasurable component is UNKNOWN, never ``ok``.
+
+HP-2.6 — provider-caused degradation is a RUN fact, not only a live one
+----------------------------------------------------------------------
+The model reader above answered "can this deployment embed content *right now*?",
+which is the right question for ``GET /api/run-health/degradation`` and the wrong
+one for a run that finished last Tuesday. It was therefore reached only under
+``include_environment=True``, so the two surfaces a customer actually reads for a
+specific run — ``GET /api/runs/{runId}/status`` and the executive report — said
+nothing at all when a run lost its AI narrative or its retrieval evidence because
+a provider could not be reached.
+
+HP-2.6 closes that by making the posture a **stamped run field**
+(:data:`PROVIDER_POSTURE_RUN_FIELD`), written by the materializers from HP-2.3's
+cached startup posture and read back by :func:`_model_components` as an ordinary
+record reader — so it travels with the run, needs no probe on a read, and a
+historical run cannot be re-described by today's environment. Three decisions are
+load-bearing:
+
+*The stamp writer and the stamp reader live in ONE module.* A shape written in
+``materialize_t2`` and parsed here could disagree; the ``ALL_ENTITIES_DDL``
+precedent (one DDL shared by the migration and the runtime creator) is the
+pattern followed instead.
+
+*Only a REACHABILITY failure is reported as a degradation*, decided by HP-2.5's
+:func:`~app.model_provider_health.role_degrades_health` rather than a second copy
+of the rule. A missing credential or an unconfigured endpoint already refuses boot
+under ``customer_hosted`` and is a SUPPORTED configuration under ``saas`` — LLM
+enrichment is optional by design and the shipped dev/test setup has no key — so
+reporting it would flip every keyless deployment's every run to "treat these
+findings as partial", and a completeness verdict that cries wolf is one nobody
+reads. ``unknown`` does not degrade either: "we did not look" is not "it is
+broken".
+
+*No endpoint host is carried.* HP-2.5 withholds it because ``/api/health`` is
+public; the reason here is narrower but real — a run record is served to viewers,
+exported, and diffed, and an in-boundary deployment's model host is internal
+network topology. The consequence is stated in the remedy rather than hidden: the
+host and the transport error ("connection refused", "host name could not be
+resolved") stay in the startup log, where HP-2.3 already writes them at WARNING.
 """
 
 from __future__ import annotations
@@ -224,6 +263,265 @@ def _stage_components(run: Mapping[str, Any]) -> List[ComponentDegradation]:
     return out
 
 
+# --------------------------------------------------------------------------
+# HP-2.6 — the model-provider posture, recorded on the run and rendered
+# identically wherever it is read.
+# --------------------------------------------------------------------------
+
+#: The additive run-record field carrying the provider posture a run ran under.
+#: Written by the materializers via :func:`provider_posture_record`, read back by
+#: :func:`_model_components`. A run recorded before HP-2.6 simply has no field and
+#: is therefore never described — the honest outcome, and the same posture 2.0-A2
+#: takes to un-baselined findings.
+PROVIDER_POSTURE_RUN_FIELD = "modelProviders"
+
+#: Bumped when the stamp's SHAPE changes in a way a reader must notice.
+PROVIDER_POSTURE_SCHEMA_VERSION = "1.0.0"
+
+#: Where the posture being rendered came from. Reported on ``detail`` so an
+#: engineer can tell "this run recorded it" from "this is the environment now".
+POSTURE_SOURCE_RUN_RECORD = "run_record"
+POSTURE_SOURCE_STARTUP = "startup_posture"
+
+#: Model-gateway role -> the component id its degradation is reported under.
+#: DISTINCT ids are what make "embedding is reported distinctly from generation"
+#: structural rather than a wording convention: a consumer can filter on the id.
+#: Keyed on the literal role names rather than importing them, so this module
+#: keeps its no-gateway-at-import-time posture; a contract test pins the keys
+#: against ``ROLE_GENERATION`` / ``ROLE_EMBEDDING`` so they cannot drift.
+ROLE_COMPONENT_IDS: Dict[str, str] = {
+    "generation": "generation_provider",
+    "embedding": "embedding_provider",
+}
+
+#: What each role's absence actually costs a run, in the customer's terms. A
+#: generation outage costs narrative and leaves the deterministic findings intact;
+#: an embedding outage costs citations. Collapsing them into one "AI unavailable"
+#: sentence would tell a reader nothing about which half of the product they lost.
+_ROLE_COPY: Dict[str, Dict[str, str]] = {
+    "generation": {
+        "attempted": "Generate AI-assisted narrative for this run's findings",
+        "missing": (
+            "AI-assisted narrative (summaries, rationale and executive-report "
+            "prose) was not generated for this run — findings carry the "
+            "platform's deterministic wording instead"
+        ),
+        "consequence": "generation calls had no reachable provider",
+    },
+    "embedding": {
+        "attempted": "Embed retrieval content so this run's findings can cite documents",
+        "missing": (
+            "Document and conversation content was not embedded for this run — "
+            "retrieval matched nothing, so findings could not cite indexed content"
+        ),
+        "consequence": "retrieval content could not be embedded",
+    },
+}
+
+
+def provider_posture_record() -> Optional[Dict[str, Any]]:
+    """The model-provider posture as a run-record stamp, or ``None``.
+
+    Reads HP-2.3's CACHED startup posture through the gateway's public
+    ``provider_posture()``. It never re-probes — a materializer that opened
+    sockets per run would turn a customer's own model server into something this
+    platform hammers, which is the same reason HP-2.5 refuses to probe on a health
+    read.
+
+    Returns ``None`` when the posture was never evaluated (a process that did not
+    run the lifespan, or a gateway that could not be imported). ``None`` means "we
+    have nothing to say", which is different from — and must never be written as —
+    a healthy posture.
+
+    Carries no endpoint host and no secret: only the role, the provider NAME, the
+    variable that selected it, the canonical status, which check produced it, and
+    whether the reachability probe actually ran.
+    """
+    try:
+        from .model_gateway import provider_posture
+    except Exception:  # noqa: BLE001 — a stamp must never break a run
+        logger.debug("run posture: model gateway not importable", exc_info=True)
+        return None
+
+    try:
+        posture = provider_posture()
+    except Exception:  # noqa: BLE001
+        logger.debug("run posture: posture unreadable", exc_info=True)
+        return None
+
+    if posture is None:
+        return None
+
+    roles: Dict[str, Any] = {}
+    try:
+        for role in posture.roles:
+            roles[str(role.role)] = {
+                "provider": role.provider,
+                "variable": role.env_var,
+                "status": role.status,
+                "check": role.check,
+                "probed": bool(role.probed),
+            }
+        status = posture.status
+    except Exception:  # noqa: BLE001
+        logger.debug("run posture: posture shape unexpected", exc_info=True)
+        return None
+
+    return {
+        "schemaVersion": PROVIDER_POSTURE_SCHEMA_VERSION,
+        "status": status,
+        "roles": roles,
+    }
+
+
+def stamp_provider_posture(run: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Record the provider posture on a run record. Never raises.
+
+    The single call the materializers make, so neither of them has to know the
+    field name or the shape. A run whose posture cannot be resolved is left
+    untouched rather than stamped with an empty record: an absent field reads as
+    "not recorded", while an empty one would read as "recorded, and fine".
+    """
+    try:
+        record = provider_posture_record()
+    except Exception:  # noqa: BLE001
+        logger.debug("run posture: record could not be built", exc_info=True)
+        return None
+    if not record:
+        return None
+    try:
+        run[PROVIDER_POSTURE_RUN_FIELD] = record
+    except Exception:  # noqa: BLE001 — a mapping that refuses assignment
+        logger.debug("run posture: run record not writable", exc_info=True)
+        return None
+    return record
+
+
+def _role_degrades_run(status: str, check: str) -> bool:
+    """Whether one role's posture is a degradation worth reporting on a run.
+
+    Delegates to HP-2.5's rule so "which provider conditions count as a real
+    degradation" has exactly ONE answer across ``/api/health``, the run status and
+    the run-health surface. A second copy here would be free to drift, which is
+    the defect HP-1 was created to remove in a different guise.
+
+    The one fail-quiet path is the module not importing — a packaging fault CI
+    catches — logged with its consequence named, because inlining a duplicate of
+    the rule to cover it would reintroduce exactly the drift this avoids.
+    """
+    try:
+        from .model_provider_health import role_degrades_health
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "run posture: model_provider_health is not importable, so provider "
+            "reachability failures will NOT be reported on this run's "
+            "completeness. Every other degradation is unaffected.",
+            exc_info=True,
+        )
+        return False
+    try:
+        return bool(role_degrades_health(status, check))
+    except Exception:  # noqa: BLE001
+        logger.debug("run posture: degradation rule raised", exc_info=True)
+        return False
+
+
+def _provider_component(
+    role: str,
+    entry: Mapping[str, Any],
+    *,
+    source: str,
+) -> Optional[ComponentDegradation]:
+    """One role's posture as a degradation, or ``None`` when it is not one.
+
+    This is the ONLY place provider-degradation wording is composed. Every
+    surface renders the same sentences because none of them writes any.
+    """
+    native = entry.get("status")
+    status = canonical_status(str(native) if native is not None else None)
+    check = str(entry.get("check") or "")
+    if not _role_degrades_run(status, check):
+        return None
+
+    provider = str(entry.get("provider") or "unknown")
+    variable = str(entry.get("variable") or "the provider selection variable")
+    copy = _ROLE_COPY.get(
+        role,
+        {
+            # A role this module has not been taught still reports — silence for an
+            # unrecognised role would be the exact silent degradation HP-2 removes.
+            "attempted": f"Serve the {role} model role for this run",
+            "missing": f"The {role} model role produced nothing for this run",
+            "consequence": f"{role} calls had no reachable provider",
+        },
+    )
+
+    return ComponentDegradation(
+        kind=COMPONENT_MODEL,
+        component=ROLE_COMPONENT_IDS.get(role, f"{role}_provider"),
+        status=status,
+        native_status=str(native) if native is not None else None,
+        attempted=f"{copy['attempted']} using the '{provider}' provider",
+        delivered=None,
+        missing=copy["missing"],
+        reason=(
+            f"The {role} provider '{provider}' ({variable}) was unreachable at "
+            "this deployment's startup posture check, so "
+            f"{copy['consequence']}. The check is not repeated per run, so this "
+            "run ran against a provider last seen as unreachable."
+        ),
+        remedy=(
+            f"Restore network reach to the configured {role} endpoint, or point "
+            f"{variable} at a reachable provider, then restart the service so the "
+            "posture is re-checked. The endpoint host and the transport error are "
+            "in the startup log at WARNING — deliberately not carried here, "
+            "because a run record is not the place for internal network "
+            "topology. Findings from structured sources are unaffected."
+        ),
+        detail={
+            "role": role,
+            "provider": provider,
+            "variable": variable,
+            "check": check,
+            "probed": bool(entry.get("probed")),
+            "postureSource": source,
+        },
+    )
+
+
+def _provider_components(
+    record: Mapping[str, Any],
+    *,
+    source: str,
+) -> List[ComponentDegradation]:
+    """Every degrading role in one posture record, in a deterministic order."""
+    roles = record.get("roles")
+    if not isinstance(roles, Mapping):
+        return []
+    out: List[ComponentDegradation] = []
+    for role_name in sorted(str(r) for r in roles):
+        entry = roles.get(role_name)
+        if not isinstance(entry, Mapping):
+            continue
+        component = _provider_component(role_name, entry, source=source)
+        if component is not None:
+            out.append(component)
+    return out
+
+
+def _model_components(run: Mapping[str, Any]) -> List[ComponentDegradation]:
+    """HP-2.6 — provider degradation as the RUN recorded it.
+
+    A record reader, so it runs on every surface including the ones that must not
+    probe (``GET /api/runs/{runId}/status``, the executive report). What it reports
+    is what that run stamped, never what the environment looks like now.
+    """
+    record = run.get(PROVIDER_POSTURE_RUN_FIELD)
+    if not isinstance(record, Mapping):
+        return []
+    return _provider_components(record, source=POSTURE_SOURCE_RUN_RECORD)
+
+
 def model_degradation(run: Optional[Mapping[str, Any]] = None) -> List[ComponentDegradation]:
     """Whether the configured model providers can actually serve this deployment.
 
@@ -233,8 +531,16 @@ def model_degradation(run: Optional[Mapping[str, Any]] = None) -> List[Component
     looking entirely normal. That is precisely the silent-incompleteness this
     subtask exists to prevent, so it is reported as a run-visible degradation
     rather than only a startup log line.
+
+    HP-2.6 adds the LIVE posture here, and only for a record that carries no
+    stamp of its own — the run's own record is authoritative about the run, and
+    letting the environment answer over it is how a historical run gets
+    re-described by today's outage. With no run at all (``/api/run-health/``
+    ``degradation`` with no ``run_id``, which is a question about now) the live
+    posture is the only answer there is.
     """
     out: List[ComponentDegradation] = []
+    record = run if isinstance(run, Mapping) else {}
     try:
         from .model_gateway import _config as gateway_config  # type: ignore
     except Exception:  # pragma: no cover - gateway shape varies by build
@@ -288,6 +594,18 @@ def model_degradation(run: Optional[Mapping[str, Any]] = None) -> List[Component
             )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not determine the embedding provider: %s", exc)
+
+    # HP-2.6: the live startup posture, for a record that stamped none of its own.
+    # Appended AFTER the inertness check so the two facts stay in a stable order,
+    # and composed through the SAME helper the record reader uses — a live answer
+    # and a recorded one must read identically or the surfaces disagree again.
+    if not isinstance(record.get(PROVIDER_POSTURE_RUN_FIELD), Mapping):
+        try:
+            live = provider_posture_record()
+            if live:
+                out.extend(_provider_components(live, source=POSTURE_SOURCE_STARTUP))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not read the live provider posture: %s", exc)
     return out
 
 
@@ -394,7 +712,12 @@ def build_run_completeness(
     record = run if isinstance(run, Mapping) else {}
     components: List[ComponentDegradation] = []
 
-    for reader in (_connector_components, _stage_components):
+    # HP-2.6: `_model_components` is a RECORD reader, not an environment probe, so
+    # it sits here rather than below the `include_environment` gate. That is the
+    # whole point — provider degradation has to reach the run-scoped surfaces
+    # (`GET /api/runs/{runId}/status`, the executive report), which deliberately
+    # never probe, and it reaches them from what the run itself recorded.
+    for reader in (_connector_components, _stage_components, _model_components):
         try:
             components.extend(reader(record))
         except Exception as exc:  # noqa: BLE001
@@ -416,7 +739,14 @@ def build_run_completeness(
 
 
 __all__ = [
+    "POSTURE_SOURCE_RUN_RECORD",
+    "POSTURE_SOURCE_STARTUP",
+    "PROVIDER_POSTURE_RUN_FIELD",
+    "PROVIDER_POSTURE_SCHEMA_VERSION",
+    "ROLE_COMPONENT_IDS",
     "build_run_completeness",
     "model_degradation",
+    "provider_posture_record",
+    "stamp_provider_posture",
     "storage_degradation",
 ]
