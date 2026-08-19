@@ -363,10 +363,18 @@ needed):
 | `nomic-embed-text` | 768 | published |
 | `bge-base-en-v1.5` | 768 | published |
 | `mxbai-embed-large` | 1024 | published |
-| `bge-large-en-v1.5` / `bge-large-en` | 1024 | published |
-| `text-embedding-3-small` | 1536 | measured (the shipped configuration) |
+| `bge-large-en-v1.5` | 1024 | published |
+| `bge-large-en` | 1024 | published |
+| `text-embedding-3-small` | 1536 | measured |
 | `text-embedding-ada-002` | 1536 | published |
 | `text-embedding-3-large` | 3072 | published |
+
+`text-embedding-3-small` is the only `measured` row because it is the shipped configuration
+and its vectors were counted directly; every other basis is `published`, taken from the
+model's own documentation. The basis cell carries the code's vocabulary verbatim and nothing
+else, so this table stays literally comparable to `MODEL_DIMENSIONS` — the contract gate
+parses these rows, and an annotation inside the cell would silently drop the row from the
+comparison rather than failing it.
 
 An Ollama tag is folded (`nomic-embed-text:latest` is the same model and the same vector
 space). A model **absent** from the table has no declared dimension, so the check is
@@ -383,8 +391,92 @@ stamp, so it would run and change nothing. Either repin the model to the one tha
 the stored vectors, or change the model **version** so those rows become non-active and
 the backfill can reach them.
 
-> Note: the on-prem `in_boundary` configuration templates for Ollama and vLLM are HP-2 T7
-> and are not in this document yet. The dimension table above is the one T7 will reference.
+> **The on-prem templates are now written (HP-2 T7):**
+> [`ON_PREM_OLLAMA.md`](./ON_PREM_OLLAMA.md) and [`ON_PREM_VLLM.md`](./ON_PREM_VLLM.md). Both
+> restate the table above, and `backend/tests/contract/test_hp2_onprem_templates.py` pins all
+> three copies — the two templates and **this document** — to `MODEL_DIMENSIONS`
+> bidirectionally, so they cannot drift apart. A restated dimension nobody checks is exactly
+> the artifact that goes stale silently, and a wrong number here has no way of being
+> discovered by the operator who sizes a model server against it.
+
+### On-prem configuration templates (HP-2 T7)
+
+Everything above describes *behaviour*. What an on-prem operator actually needs is a recipe,
+so `deployment/` carries one per supported self-hosted model server:
+
+| Template | Server | Covers |
+|---|---|---|
+| [`ON_PREM_OLLAMA.md`](./ON_PREM_OLLAMA.md) | Ollama | generation + embeddings, one host, **different hosts**, mixed, embeddings-only |
+| [`ON_PREM_VLLM.md`](./ON_PREM_VLLM.md) | vLLM | the same, plus the two-process topology vLLM requires |
+
+Each is a complete, copy-pasteable `.env` block — not a list of variables to assemble — and
+each sets `DEPLOYMENT_PROFILE=customer_hosted` together with **both** provider variables,
+because under the rule above a template that omits either describes a deployment that refuses
+to boot.
+
+**Different hosts is the normal case, not a variant.** Generation wants a GPU; embeddings are
+cheap and belong next to the database. vLLM makes it unavoidable — it serves one model per
+process. The per-role overrides exist for exactly this and are **complete URLs including the
+path**; they are never joined to `IN_BOUNDARY_BASE_URL`:
+
+```bash
+IN_BOUNDARY_BASE_URL=
+IN_BOUNDARY_GENERATION_ENDPOINT=http://vllm-gen.internal:8000/v1/chat/completions
+IN_BOUNDARY_EMBEDDING_ENDPOINT=http://vllm-embed.internal:8000/v1/embeddings
+```
+
+Each role is probed at its own endpoint and reported independently, so a failure names *which*
+host is down rather than merely that something is.
+
+**The dimension table is restated, never re-derived.**
+`backend/app/retrieval/embedding_dimensions.py` stays the single source, and
+`backend/tests/contract/test_hp2_onprem_templates.py` pins each copy to it in **both**
+directions — a documented row must match the name, dimension and basis (re-checked through
+`declared_dimension()`, the function the startup guard itself calls), and every declared model
+must appear in every copy. Adding a model to the code without documenting it fails CI; so does
+changing a documented number. The same gate pins the `IN_BOUNDARY_*` variable names against
+`in_boundary_config` (both directions), the context-window arithmetic against
+`chunking.MAX_CHUNK_CHARS`, and the documented embedding batch size against the code default.
+
+**Validation status is stated, not implied.** The configuration path was exercised end to end
+through the real gateway adapter against a local stub speaking the same HTTP surface — 32
+checks covering both roles, both hosts, the credential being optional, the startup refusal
+under `customer_hosted`, and the reachability escape hatch, each scenario in its own
+interpreter so no `.env` value could stand in for one under test. **No Ollama or vLLM binary
+was installed**, so each template carries an explicit verified / NOT-verified split, a blank
+version table for a real-server run to fill in, and a `Verify on your deployment` checklist.
+The contract gate fails the build if any of those three is deleted: that deletion is the only
+way the claim could become dishonest without anyone editing a sentence.
+
+**Two failure modes the templates document because the path was actually run.** Neither is
+discoverable from provider documentation, and both are silent in the data:
+
+- **A server that returns fewer vectors than inputs discards the whole batch.** The adapter
+  requires one vector per input; anything less returns `[]`, so **nothing is indexed** while
+  the run completes and reports healthy. The only signal is an `embedding response count
+  mismatch` WARNING. The retrieval worker sends up to `RETRIEVAL_EMBED_BATCH_SIZE` texts
+  (default 64) per request, so a server that cannot batch is in this state permanently until
+  the variable is set to 1. Both templates make a three-input `curl` the highest-priority
+  checklist item for this reason.
+- **The model name an operator naturally types often has no declared dimension**, so the
+  startup check *skips* rather than protecting them. Namespace prefixes and `:tag` suffixes
+  are folded, so `nomic-embed-text:latest`, `BAAI/bge-large-en-v1.5` and
+  `sentence-transformers/all-MiniLM-L6-v2` all resolve — but Ollama's short tags
+  `all-minilm` / `bge-large`, and the versioned ids `nomic-ai/nomic-embed-text-v1.5` /
+  `mixedbread-ai/mxbai-embed-large-v1`, do not. The models are fine; the names are not
+  resolvable. Remedies per server (`ollama cp`, `--served-model-name`, or a one-line table
+  row) are tabulated in each template.
+
+**Context window is a real constraint, not a footnote.** `MAX_CHUNK_CHARS = 2000` is roughly
+500 tokens of English prose, which fits a 512-token model only just — and code, JSON and
+non-Latin content tokenise denser. A 512-token model is silently truncating (Ollama) or
+rejecting (vLLM) part of a code corpus. Prefer an 8192-context model such as
+`nomic-embed-text` unless the corpus is short English prose.
+
+**Startup ordering will catch someone.** Under `customer_hosted` an unreachable endpoint fails
+boot, and a vLLM process can take minutes to load weights. Gate AgentIQ on the model server's
+health, or set `MODEL_PROVIDER_PROBE_TIMEOUT_SECONDS=0` and accept losing the check that
+exists to stop a silently-degraded deployment.
 
 ### `DEPLOYMENT_PROFILE` is not `ENVIRONMENT`
 
