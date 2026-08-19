@@ -533,12 +533,26 @@ def api_health() -> Dict[str, Any]:
     except Exception as exc:
         logger.warning("health check: database connectivity failed: %s", exc)
         db_status = "error"
-    healthy = db_status == "ok"
+    # HP-2.5: a deployment whose configured model provider is unreachable reported
+    # 'healthy' here, while producing findings with no AI narrative and no
+    # retrieval evidence. The posture is whatever HP-2.3 resolved at startup —
+    # this NEVER re-probes (that would make a public endpoint a lever against the
+    # customer's own model server) and reports no endpoint host (this route is
+    # public; see app/model_provider_health.py).
+    from .model_provider_health import degrades_overall_health, model_provider_health
+
+    providers = model_provider_health()
+    # Only a REACHABILITY failure degrades the verdict. 'unknown' means nobody
+    # looked; a missing credential or unconfigured endpoint already refuses boot
+    # under customer_hosted, and is a supported configuration under saas (LLM
+    # enrichment is optional — the deterministic fallbacks work without a key).
+    # The check itself still reports each of those honestly.
+    healthy = db_status == "ok" and not degrades_overall_health(providers)
     return {
         "ok": healthy,
         "ts": now_iso(),
         "status": "healthy" if healthy else "unhealthy",
-        "checks": {"database": {"status": db_status}},
+        "checks": {"database": {"status": db_status}, "model_providers": providers},
     }
 
 

@@ -291,6 +291,54 @@ platform's one canonical set (`app/degradation.py`) — no new vocabulary. The p
 resolved once at startup and cached; reading it never re-probes, so a health check can
 never become a denial-of-service lever pointed at the customer's own model server.
 
+### Health reflects model posture (HP-2 T5)
+
+`GET /api/health` reported `healthy` on database connectivity alone, so a deployment
+whose configured model provider was unreachable looked entirely fine while producing
+findings with no AI narrative and no retrieval evidence.
+
+It now carries the startup posture:
+
+```json
+{
+  "ok": false,
+  "ts": "...",
+  "status": "unhealthy",
+  "checks": {
+    "database": {"status": "ok"},
+    "model_providers": {
+      "status": "unavailable",
+      "roles": {
+        "generation": {"provider": "in_boundary", "status": "ok",          "check": "reachability", "probed": true},
+        "embedding":  {"provider": "in_boundary", "status": "unavailable", "check": "reachability", "probed": true}
+      }
+    }
+  }
+}
+```
+
+The legacy `{ok, ts}` fields and the `database` check are unchanged, so existing
+consumers keep working.
+
+**Only a `reachability` failure flips the top-level verdict.** Everything else is
+reported honestly in the check but does not degrade it, and each exclusion has a reason:
+
+| Posture | Reported as | Degrades `status`? | Why |
+|---|---|---|---|
+| reachability failure | `unavailable` | **yes** | something the deployment was configured to talk to cannot be reached |
+| missing credential | `unavailable` | no | already refuses boot under `customer_hosted`; under `saas` LLM enrichment is optional by design — the deterministic fallbacks work with no `ANTHROPIC_API_KEY` |
+| endpoint not configured | `unavailable` | no | same reasoning |
+| not probed / no posture | `unknown` | no | nobody looked; calling a deployment broken for that is the mirror image of the defect being fixed |
+
+A health endpoint that cries wolf is one nobody reads, which is why the degrading set is
+narrow — but the check's own status is always the honest one.
+
+**Two things this endpoint deliberately does not do.** It is a *public* route (no
+credential required), so it reports **no endpoint host** — an in-boundary model host is
+internal network topology, and the full detail stays in the startup log where HP-2 T3
+already writes it at WARNING. And it **never re-probes**: it reads the posture resolved at
+startup, so it cannot become a lever pointed at the customer's own model server.
+
 ### Embedding-dimension consistency (HP-2 T4)
 
 The pgvector column is deliberately an unqualified `vector` with **no fixed dimension**,
