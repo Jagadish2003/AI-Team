@@ -154,6 +154,56 @@ CORROBORATION_RULES: Dict[str, CorroborationRule] = {
         source_label="Confluence (no process documentation)",
         description="Process gap confirmed: no Confluence documentation. MEDIUM -> HIGH.",
     ),
+    # ── Documentation cross-reference corroboration (Confluence / SharePoint) ──
+    #
+    # Note what these do NOT say. The obvious "documentation exists about this
+    # process, therefore the finding is corroborated" is deliberately not a rule:
+    # the existence of an approvals page is no evidence that approvals are slow,
+    # and almost every org has documentation about almost every process, so such a
+    # rule would fire on nearly everything and mean nearly nothing.
+    #
+    # An EXPLICIT reference is different in kind. A page or document that cites
+    # INC-4821 by number is demonstrably about the same incident the detector fired
+    # on — the org's own knowledge base connecting the friction to a written record.
+    # That is a real second source, and it is exactly the marker both connectors
+    # have always extracted (Confluence page titles, SharePoint file names) and,
+    # until now, discarded unused.
+    #
+    # Both are `elevates=True` with a HIGH target: the ceiling on documentation is
+    # its ROLE WEIGHT (documentation_system 0.6 < the 0.80 lead threshold), which
+    # lets it contribute to and be credited on an elevation another source leads
+    # while never reaching HIGH alone. That is deliberately a different mechanism
+    # from COR-05's hard `elevates=False` Slack ceiling.
+    "COR-11": CorroborationRule(
+        rule_id="COR-11",
+        primary_signal="Any detector fires",
+        corroborating_signal=(
+            "A Confluence page explicitly references a ServiceNow incident or Jira "
+            "issue that is itself linked to this detector"
+        ),
+        elevation_target=CONFIDENCE_HIGH,
+        elevates=True,
+        source_label="Confluence (references the same record)",
+        description=(
+            "Documentation cites the corroborating record by id. Supports an "
+            "elevation; cannot lead one (documentation_system role weight)."
+        ),
+    ),
+    "COR-12": CorroborationRule(
+        rule_id="COR-12",
+        primary_signal="Any detector fires",
+        corroborating_signal=(
+            "A SharePoint document explicitly references a ServiceNow incident or "
+            "Jira issue that is itself linked to this detector"
+        ),
+        elevation_target=CONFIDENCE_HIGH,
+        elevates=True,
+        source_label="SharePoint (references the same record)",
+        description=(
+            "Documentation cites the corroborating record by id. Supports an "
+            "elevation; cannot lead one (documentation_system role weight)."
+        ),
+    ),
     "COR-05": CorroborationRule(
         rule_id="COR-05",
         primary_signal="Any operational detector fires",
@@ -288,6 +338,8 @@ RULE_CARD_LABELS: Dict[str, str] = {
     "COR-02": "Corroborated by Jira issues",
     "COR-03": TRIPLE_CORROBORATION_LABEL,
     "COR-04": "Process gap confirmed: no Confluence documentation",
+    "COR-11": "Referenced in Confluence documentation",
+    "COR-12": "Referenced in SharePoint documentation",
     "COR-05": "Supporting signal: Slack escalation pattern detected",
     "COR-06": "Corroborated by ServiceNow + Slack escalation pattern",
     "COR-07": "Corroborated by Jira sprint velocity decline",

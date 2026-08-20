@@ -39,7 +39,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .pack_version_context import resolve_config_path
+
 logger = logging.getLogger(__name__)
+
+#: Registry id this loader serves — the key a per-run version pin is published under.
+PACK_ID = "security_ops"
 
 # Default location of the externalized pack config, alongside the other pack
 # config/label files in this directory.
@@ -158,8 +163,14 @@ def load_security_ops_config(path: Optional[str] = None) -> SecurityOpsPackConfi
 
     Raises SecurityOpsConfigError if the file is missing, unparseable, or does not
     cover the required SecOps terminology set (MSP-B12 §2).
+
+    2.0-C1 T3 (AT-828): when the caller passes no explicit ``path``, an active
+    per-run VERSION PIN is honoured before ``DEFAULT_CONFIG_PATH`` — so a run rolled
+    back to 1.1.0 loads 1.1.0's archived thresholds/calibration rather than the
+    current ones. Detectors and scorers call the accessors below with no path, which
+    is exactly why the precedence lives here. With no pin active this is unchanged.
     """
-    cfg_path = path or DEFAULT_CONFIG_PATH
+    cfg_path = resolve_config_path(PACK_ID, path, DEFAULT_CONFIG_PATH)
 
     try:
         mtime = os.path.getmtime(cfg_path)

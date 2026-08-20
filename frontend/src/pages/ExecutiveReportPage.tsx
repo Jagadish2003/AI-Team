@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import PackCertificationBadge from '../components/common/PackCertificationBadge';
 import { Loader2 } from 'lucide-react';
 import PageShell from '../components/common/PageShell';
 import { Skeleton, SkeletonStatCard } from '../components/common/Skeleton';
@@ -21,6 +22,12 @@ import TopQuickWins from '../components/executive_report/TopQuickWins';
 import PilotRoadmapHighlights from '../components/executive_report/PilotRoadmapHighlights';
 import ExecutiveOutcomeSection from '../components/outcomes/ExecutiveOutcomeSection';
 import { downloadExecutiveReportPdf } from '../utils/exportPdf';
+import {
+  downloadEvidenceReportForRun,
+  downloadReportEvidenceBundle,
+} from '../api/evidenceExportApi';
+import { ApiError } from '../lib/apiClient';
+import { isViewerRole } from '../utils/roles';
 import { profileNameFromEmail } from '../utils/profileName';
 import { runScopedErrorMessage } from '../utils/apiErrors';
 import { useResource, useDataCache } from '../lib/dataCache';
@@ -43,6 +50,10 @@ export default function ExecutiveReportPage() {
   const cache = useDataCache();
 
   const [pdfBusy, setPdfBusy] = useState(false);
+  // 2.0-B1 T4: which evidence export is in flight ('report' | 'bundle' | null),
+  // tracked separately from the executive PDF so one never disables the other.
+  const [evidenceBusy, setEvidenceBusy] = useState<'report' | 'bundle' | null>(null);
+  const viewer = isViewerRole(auth?.user?.role);
 
   // Report + enrichment via the shared cache. Both sit under the run scope, so a
   // decision/override in Opportunity Review (which invalidates 'runs/{runId}')
@@ -109,6 +120,7 @@ export default function ExecutiveReportPage() {
   const reportConfidence = report?.confidence
     ? report.confidence.charAt(0).toUpperCase() + report.confidence.slice(1).toLowerCase()
     : 'Unavailable';
+  const packCertifications = report?.packCertifications ?? [];
   const roadmapStageLabel = roadmap.stages.length
     ? roadmap.stages.map((_, i) => `Phase ${i + 1}`).join(' / ')
     : '—';
@@ -155,6 +167,7 @@ export default function ExecutiveReportPage() {
           userName: profileNameFromEmail(auth?.user?.email),
           generatedAt,
           runId,
+          packCertifications: report?.packCertifications ?? [],
           outcomeSection: showRelease2ArcAUi ? report?.outcomeSection ?? null : null,
         },
         {
@@ -185,6 +198,56 @@ export default function ExecutiveReportPage() {
     runId,
     cache,
   ]);
+
+  // 2.0-B1 T4 (AC4/AC6) — the run-scope evidence export, in its two forms.
+  //
+  // 'report' is the readable PDF a person takes to a review; 'bundle' is the
+  // canonical signed bytes an auditor verifies offline. Two downloads rather than
+  // one archive, so nobody has to unpack anything to read the readable one — and
+  // so the file that verifies is never the file someone skims.
+  //
+  // Both are generated on demand and streamed; only the disclosure is recorded
+  // server-side (AC6). The failure copy names the cause rather than saying
+  // "export failed": a 400 here usually means the installation's license carries
+  // no report_key (nothing can be signed) or a content-discipline check refused
+  // the bundle, and those need different people to fix them.
+  const handleEvidenceDownload = useCallback(
+    async (kind: 'report' | 'bundle') => {
+      if (evidenceBusy || !runId) return;
+      setEvidenceBusy(kind);
+      try {
+        if (kind === 'report') {
+          await downloadEvidenceReportForRun(runId);
+          push('Evidence report downloaded.', 'success');
+        } else {
+          await downloadReportEvidenceBundle(runId);
+          push('Signed evidence bundle downloaded.', 'success');
+        }
+      } catch (e) {
+        console.error('[ExecutiveReport] evidence export failed:', e);
+        let message = 'Could not generate the evidence export.';
+        if (e instanceof ApiError) {
+          if (e.status === 403) {
+            message = 'Evidence exports are analyst-only.';
+          } else {
+            const body = e.body;
+            const detail =
+              body && typeof body === 'object' && 'detail' in body
+                ? (body as { detail?: unknown }).detail
+                : null;
+            message =
+              typeof detail === 'string' && detail.trim()
+                ? detail
+                : `Could not generate the evidence export (${e.status}).`;
+          }
+        }
+        push(message, 'error');
+      } finally {
+        setEvidenceBusy(null);
+      }
+    },
+    [evidenceBusy, push, runId],
+  );
 
   const pageHeader = (
     <PageShell
@@ -256,6 +319,45 @@ export default function ExecutiveReportPage() {
               {pdfBusy ? 'Generating PDF…' : 'Download PDF'}
             </button>
 
+            {/* 2.0-B1 T4 (AC4/AC6) — the run-scope signed evidence bundle.
+                Deliberately beside the PDF and deliberately NOT called an
+                "export" without qualification: the PDF is a readable summary, this
+                is the machine-verifiable artifact an auditor checks a signature
+                against. Analyst+ only, matching the endpoint. */}
+            {!viewer && (
+              <>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-2 rounded-lg border border-border bg-transparent px-4 py-2 text-sm font-medium text-text transition-colors hover:border-accent/45 hover:text-accent focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-70"
+                  onClick={() => handleEvidenceDownload('report')}
+                  disabled={evidenceBusy !== null}
+                  aria-busy={evidenceBusy === 'report'}
+                  data-testid="exec-evidence-report"
+                  title="Download a readable PDF of every finding's evidence and provenance chain for this run"
+                >
+                  {evidenceBusy === 'report' && (
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                  )}
+                  {evidenceBusy === 'report' ? 'Preparing…' : 'Evidence report (PDF)'}
+                </button>
+
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-2 rounded-lg border border-border bg-transparent px-4 py-2 text-sm font-medium text-muted transition-colors hover:border-accent/45 hover:text-accent focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-70"
+                  onClick={() => handleEvidenceDownload('bundle')}
+                  disabled={evidenceBusy !== null}
+                  aria-busy={evidenceBusy === 'bundle'}
+                  data-testid="exec-evidence-bundle"
+                  title="Download the signed bundle (.json) an auditor verifies offline. Do not edit or reformat it — any altered byte fails verification."
+                >
+                  {evidenceBusy === 'bundle' && (
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                  )}
+                  {evidenceBusy === 'bundle' ? 'Preparing…' : 'Signed bundle'}
+                </button>
+              </>
+            )}
+
             <button
               type="button"
               className="cursor-not-allowed rounded-lg border border-border bg-transparent px-4 py-2 text-sm font-medium text-muted opacity-60"
@@ -281,6 +383,26 @@ export default function ExecutiveReportPage() {
 
         <div className="mb-4 rounded-xl border border-border bg-panel px-4 py-3 text-sm text-muted">
           Overview of confidence, source coverage, and prioritized quick wins across the Agent Roadmap.
+          {/* 2.0-C2 T3 (AT-833 / AC2): which level of pack produced the claims in
+              this report. On-screen counterpart of the same line in the PDF, so the
+              exported and viewed report say the same thing. */}
+          {packCertifications.length > 0 ? (
+            <div data-testid="report-pack-certifications" className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="text-xs">Produced by</span>
+              {packCertifications.map((item) => (
+                <span key={item.packId} className="flex items-center gap-1.5">
+                  <span className="font-mono text-xs text-text">{item.packId}</span>
+                  <PackCertificationBadge
+                    level={item.level}
+                    label={item.label}
+                    reviewDue={item.reviewDue}
+                    reviewDueDetail={item.reviewDueDetail}
+                    testId={`report-pack-certification-${item.packId}`}
+                  />
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">

@@ -210,6 +210,20 @@ export default function IntegrationHubPage() {
   // that tile's useResource refetch and re-render its action. Only connected
   // connectors hold a token worth checking.
   const cache = useDataCache();
+  const salesforceLiveCheckRequested = useRef(false);
+
+  // A token-status value may have been cached on another page just before a
+  // Salesforce admin revoked the session. Force one live provider check whenever
+  // the user enters Integration Hub so the card cannot keep showing Connected
+  // until a discovery run is the first caller to receive INVALID_SESSION_ID.
+  useEffect(() => {
+    if (loading || salesforceLiveCheckRequested.current) return;
+    const salesforce = allConnectors.find(c => c.id === 'salesforce');
+    if (salesforce?.status !== 'connected') return;
+    salesforceLiveCheckRequested.current = true;
+    cache.invalidateExact(cacheKeys.connectorTokenStatus('salesforce'));
+  }, [allConnectors, cache, loading]);
+
   useEffect(() => {
     const REVALIDATE_MS = 120_000; // 2 minutes
     const timer = setInterval(() => {

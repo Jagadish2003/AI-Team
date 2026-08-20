@@ -164,7 +164,12 @@ def _emit_ingestion_completed(org_id: str, connector_id: str, result: "Ingestion
 
 
 def _emit_artifact_changed(
-    org_id: str, connector_id: str, records: list, *, notify_freshness: bool = True
+    org_id: str,
+    connector_id: str,
+    records: list,
+    *,
+    notify_freshness: bool = True,
+    retrieval_source_system: Optional[str] = None,
 ) -> None:
     """Emit one ``ingestion.artifact_changed`` telemetry event per changed
     artifact in a fully-processed batch (R16-A1 §4 / AT-381, AC4).
@@ -229,7 +234,16 @@ def _emit_artifact_changed(
         # thread-level freshness (Slack/Teams) — a per-message notification would be
         # the wrong granularity for their thread-level chunks.
         if notify_freshness:
-            _notify_freshness(event)
+            # R18-B2: freshness keys on the SUBSTRATE identity
+            # (org_id, source_system, source_artifact). For most connectors that IS
+            # connector_id, but a deep-content connector owning its own checkpoint
+            # indexes under a different source system (sharepoint_content ->
+            # 'sharepoint'). Attributing the notification to the connector id there
+            # marks zero chunks stale and parks an unresolvable queue row. The
+            # telemetry event above deliberately keeps the real connector_id.
+            _notify_freshness(
+                {**event, "connector_id": retrieval_source_system or connector_id}
+            )
 
 
 def _notify_freshness(event: dict) -> None:
@@ -369,6 +383,9 @@ def ingest_with_checkpoint(
                     connector_id,
                     batch.records,
                     notify_freshness=not getattr(ingestor, "manages_retrieval_freshness", False),
+                    retrieval_source_system=getattr(
+                        ingestor, "retrieval_source_system", None
+                    ),
                 )
             elif batch.records:
                 logger.info(

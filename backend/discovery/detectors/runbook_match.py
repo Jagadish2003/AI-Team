@@ -63,6 +63,35 @@ CITATION_RESOLUTION_UNAVAILABLE = "unavailable"
 # by MSP-B5 T2's runbook-scoped retrieval so the "library" is defined in one place.
 RUNBOOK_SOURCE_SYSTEMS: Tuple[str, ...] = ("document", "confluence", "sharepoint")
 
+#: SharePoint indexes TWO different things under ``source_system='sharepoint'``:
+#: page-native content (``"{site}:page:{id}"`` / ``"{site}:list:{id}"``), which is
+#: real prose and legitimate runbook material; and the reach connector's driveItem
+#: METADATA (``"{site}/{drive}:{item}"``), whose refresh resolver renders only
+#: ``Name/Type/Size/Parent/URL`` — a filename card, not documentation.
+#:
+#: Both are chunked and embedded, so without this a changed spreadsheet competes
+#: as a runbook candidate: "Name: Q3-budget.xlsx / Type: file / URL: ..." can out-
+#: score a real runbook on a filename term, and a documentation-gap detector can be
+#: talked out of firing by a file that documents nothing. The metadata stays
+#: indexed (filenames remain searchable elsewhere); it is excluded HERE, where the
+#: question is specifically "is this a documented procedure?".
+#:
+#: Distinguishing them needs no new field: the two id namespaces are structurally
+#: disjoint by construction (``sharepoint_content._page_artifact_id``).
+_SHAREPOINT_CONTENT_INFIXES: Tuple[str, ...] = (":page:", ":list:")
+
+
+def is_runbook_content_artifact(source_system: str, source_artifact: str) -> bool:
+    """True when an indexed artifact is page-native content, not file metadata.
+
+    Only SharePoint carries both kinds under one source system; every other
+    runbook source indexes prose exclusively, so they always qualify.
+    """
+    if str(source_system or "").strip().lower() != "sharepoint":
+        return True
+    artifact = str(source_artifact or "")
+    return any(infix in artifact for infix in _SHAREPOINT_CONTENT_INFIXES)
+
 # Structured runbook identifier tokens (mirrors MSP-B4's capture regex) — matched
 # case-insensitively, normalised to upper case. Anchored: a whole reference either
 # IS such a token or it is treated as a URL / free identifier instead.
@@ -326,6 +355,10 @@ def _page_from_provenance_row(org_id: str, row: Mapping[str, Any]) -> Optional[R
     source_system = str(row.get("source_system") or "").strip()
     source_artifact = str(row.get("source_artifact") or "").strip()
     if not source_system or not source_artifact:
+        return None
+    # A SharePoint driveItem's indexed content is filename metadata, not a
+    # documented procedure — it must not enter the runbook library.
+    if not is_runbook_content_artifact(source_system, source_artifact):
         return None
     provenance = row.get("provenance")
     provenance = dict(provenance) if isinstance(provenance, Mapping) else {}
@@ -942,6 +975,17 @@ def retrieve_runbook_candidates(
     except Exception:  # retrieval failure (e.g. store/DB down) — never break the run
         logger.warning("runbook retrieval failed for org %s; reporting unavailable", org, exc_info=True)
         return RunbookRetrievalResult(status=RETRIEVAL_UNAVAILABLE, query=query, candidates=())
+
+    # Same exclusion as the citation library: the substrate's source_filter cannot
+    # separate SharePoint page content from SharePoint file metadata (they share a
+    # source system), so the split happens here, on the artifact id namespace.
+    chunks = [
+        c
+        for c in (chunks or ())
+        if is_runbook_content_artifact(
+            getattr(c, "source_system", ""), getattr(c, "source_artifact", "")
+        )
+    ]
 
     candidates = tuple(RunbookCandidate.from_chunk(c) for c in (chunks or ()))
     if candidates:

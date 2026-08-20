@@ -67,6 +67,8 @@ def _update_connector(
     connector_id: str,
     metrics: List[Dict[str, str]],
     signal_strength: Optional[int] = None,
+    *,
+    ingested_at: Optional[str] = None,
 ) -> None:
     # Tenant isolation (R17-D3 / AT-448): run-derived connector metrics belong to
     # the org that ran the discovery, not the shared catalog. Reading/writing the
@@ -78,6 +80,8 @@ def _update_connector(
         return
     connector["metrics"] = metrics
     connector["lastSynced"] = "Just now"
+    if ingested_at:
+        connector["lastSuccessfulIngestionAt"] = ingested_at
     if signal_strength is not None:
         connector["signalStrength"] = signal_strength
     db.org_connector_set(org_id, connector_id, connector)
@@ -105,6 +109,10 @@ def update_connector_metrics_from_run(
         inputs = payload.get("inputs") or {}
         if not isinstance(inputs, dict):
             inputs = {}
+
+        completed_at = payload.get("completedAt")
+        if not isinstance(completed_at, str) or not completed_at.strip():
+            completed_at = db.now_iso()
 
         system_set = {system.lower() for system in systems}
 
@@ -139,7 +147,13 @@ def update_connector_metrics_from_run(
 
         signal_label = "Benefit signals" if is_strs else "Lending signals"
 
-        if "salesforce" in system_set:
+        has_salesforce = (
+            "salesforce" in system_set
+            or "ncino" in system_set
+            or any(system.startswith("salesforce_") for system in system_set)
+        )
+
+        if has_salesforce:
             if is_strs:
                 _update_connector(
                     org_id,
@@ -149,6 +163,7 @@ def update_connector_metrics_from_run(
                         {"label": "Benefit Assignments", "value": _metric_value(assignments)},
                     ],
                     signal_strength=min(100, sf_evidence_count * 20) if sf_evidence_count else None,
+                    ingested_at=completed_at,
                 )
             else:
                 _update_connector(
@@ -159,6 +174,7 @@ def update_connector_metrics_from_run(
                         {"label": "Covenants", "value": _metric_value(covenants)},
                     ],
                     signal_strength=min(100, sf_evidence_count * 20) if sf_evidence_count else None,
+                    ingested_at=completed_at,
                 )
 
         if "servicenow" in system_set:
@@ -169,6 +185,7 @@ def update_connector_metrics_from_run(
                     {"label": "Incidents (90d)", "value": _metric_value(sn_incident_count)},
                     {"label": signal_label, "value": _metric_value(sn_signal_count)},
                 ],
+                ingested_at=completed_at,
             )
 
         if "jira" in system_set or "jira_confluence" in system_set:
@@ -179,6 +196,7 @@ def update_connector_metrics_from_run(
                     {"label": "Issues (90d)", "value": _metric_value(jira_issue_count)},
                     {"label": signal_label, "value": _metric_value(jira_signal_count)},
                 ],
+                ingested_at=completed_at,
             )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Connector metrics update failed (non-blocking): %s", exc)

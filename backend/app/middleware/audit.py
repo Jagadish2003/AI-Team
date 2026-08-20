@@ -131,6 +131,56 @@ INGESTION_CHECKPOINT_RESET = "ingestion_checkpoint_reset"
 # match. The dedicated decision-history table is the domain record; this event
 # also places the action in the organisation-wide audit stream.
 RUNBOOK_MATCH_DECIDED = "runbook_match_decided"
+# 2.0-C1 T2 (AT-827): an owner disabled or re-enabled a discovery pack for the org.
+# The dedicated pack_state_history table is the domain record; this event places the
+# transition in the organisation-wide audit stream. Snake_case per this module's
+# convention — the telemetry counterpart is "pack.state_changed" (app/telemetry.py).
+PACK_STATE_CHANGED = "pack_state_changed"
+# 2.0-C2 T2 (AT-832): a checklist-driven pack certification review was recorded.
+# The pack_certification_reviews table is the domain record (who reviewed what,
+# against which criteria); this event places the decision in the organisation-wide
+# audit stream, which is what makes 2.0-C2 AC5's "auditable" true from both ends.
+# Telemetry counterpart: "pack.certification_reviewed" (app/telemetry.py).
+PACK_CERTIFICATION_REVIEWED = "pack_certification_reviewed"
+# 2.0-C2 T4 (AT-834): an owner changed the org's pack certification activation
+# floor (e.g. to "Certified only"). This event is the ONLY durable history of that
+# change — the policy table holds current state, not a timeline — which is why the
+# audit entry matters more here than for most settings.
+PACK_CERTIFICATION_POLICY_CHANGED = "pack_certification_policy_changed"
+# 2.0-C3 T4 (AT-839): an owner installed an authored pack from a signed bundle.
+# Records the bundle digest and the publisher key that vouched for it, so "which
+# bytes were installed into this org, by whom, and on whose signature" is
+# answerable from the audit stream alone.
+# Telemetry counterpart: "pack.installed" (app/telemetry.py).
+PACK_INSTALLED = "pack_installed"
+# 2.0-C3 T4 (AT-839): an owner activated or withdrew an installed authored pack.
+# Distinct from PACK_STATE_CHANGED, which is the lifecycle of a REGISTERED pack —
+# collapsing the two would make "an installed partner pack went live here" and "a
+# first-party pack was re-enabled" indistinguishable in the trail.
+PACK_ACTIVATION_CHANGED = "pack_activation_changed"
+# 2.0-C4 T3 (AT-844): an owner migrated this org's saved run configuration off a
+# DEPRECATED pack onto its declared replacement, or reverted such a migration. The
+# append-only migration ledger is the domain record (which fields moved, and their
+# previous values); these events place the two transitions in the organisation-wide
+# audit stream, which is what parent-story AC4 requires of them.
+# Telemetry counterparts: "pack.migration_applied" / "pack.migration_reverted".
+PACK_MIGRATION_APPLIED = "pack_migration_applied"
+PACK_MIGRATION_REVERTED = "pack_migration_reverted"
+# 2.0-C4 T4 (AT-845): a pack's announced deprecation grace period ended, so the
+# platform moved it to safe-disabled through 2.0-C1's path. Deliberately NOT
+# `pack_state_changed`: "the vendor retired this pack on the announced date" and "an
+# owner turned this pack off" have different remedies (migrate vs. re-enable), and a
+# reviewer must be able to tell them apart without inferring it from the actor.
+# Telemetry counterpart: "pack.deprecation_disabled" (app/telemetry.py).
+PACK_DEPRECATION_DISABLED = "pack_deprecation_disabled"
+# 2.0-C4 T5 (AT-846): this org came under a pack's deprecation terms — the FIRST of
+# the story's three transitions, and the one that had no audit record before. A
+# declaration lives in the registry and is global; this is the org-scoped moment it
+# actually bears on a customer (their pack selection was resolved for a run while a
+# superseded pack was in it). Written once per (org, pack, declared terms), so moving
+# a grace date or changing the replacement re-announces but a repeat run does not.
+# Telemetry counterpart: "pack.deprecation_announced" (app/telemetry.py).
+PACK_DEPRECATION_ANNOUNCED = "pack_deprecation_announced"
 # 2.0-B1 T4: a signed evidence-export bundle was generated. The bundle leaves the
 # deployment (auditors/regulators/board packs), so WHO exported WHAT and WHEN is
 # itself audit-relevant. There is no request-logging middleware in this app — a
@@ -284,6 +334,15 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     SCHEMA_DISCOVERED,
     INGESTION_CHECKPOINT_RESET,
     RUNBOOK_MATCH_DECIDED,
+    PACK_STATE_CHANGED,
+    PACK_CERTIFICATION_REVIEWED,
+    PACK_CERTIFICATION_POLICY_CHANGED,
+    PACK_INSTALLED,
+    PACK_ACTIVATION_CHANGED,
+    PACK_MIGRATION_APPLIED,
+    PACK_MIGRATION_REVERTED,
+    PACK_DEPRECATION_DISABLED,
+    PACK_DEPRECATION_ANNOUNCED,
     EVIDENCE_EXPORT_GENERATED,
     USAGE_REPORT_EXPORTED,
     OPPORTUNITY_LIFECYCLE_TRANSITIONED,

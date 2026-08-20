@@ -42,6 +42,14 @@ function ranking(overrides: Partial<OpportunityRanking> = {}): OpportunityRankin
 }
 
 describe('RankingAdjustmentPanel', () => {
+  it('does not render a movement indicator when older payloads omit moved', () => {
+    const preA3 = ranking({ moved: undefined } as unknown as Partial<OpportunityRanking>);
+
+    render(<RankingAdjustmentPanel ranking={preA3} />);
+
+    expect(screen.queryByTestId('ranking-adjustment-panel')).toBeNull();
+  });
+
   it('renders a capped adjustment even when moved is zero', () => {
     render(<RankingAdjustmentPanel ranking={ranking()} />);
 

@@ -50,10 +50,18 @@ def test_org_on_run_inputs_is_honoured(monkeypatch):
     assert exc.value.status_code == 404
 
 
-def test_legacy_untagged_run_is_not_filtered(monkeypatch):
-    """A run created before org-tagging carries no org — it is not hidden."""
+def test_legacy_untagged_run_is_a_404(monkeypatch):
+    """A run created before org-tagging carries no org, so its ownership cannot be
+    confirmed — and a signed evidence export must never attest to a run it cannot
+    prove belongs to the requesting tenant. Fail closed: a missing org stamp is the
+    same indistinguishable 404 as a cross-org or unknown run. (Serving it would let
+    any authenticated caller mint a bundle stamping THEIR org onto another tenant's
+    evidence — the 2.0 review's CRITICAL finding.)"""
     monkeypatch.setattr(routes.db, "run_get", lambda rid: {"id": rid})
-    assert routes._require_run_in_org("run_legacy", "org_a")["id"] == "run_legacy"
+    with pytest.raises(HTTPException) as exc:
+        routes._require_run_in_org("run_legacy", "org_a")
+    assert exc.value.status_code == 404
+    assert "not found" in str(exc.value.detail)
 
 
 # ── error mapping — never an unsigned bundle ────────────────────────────────

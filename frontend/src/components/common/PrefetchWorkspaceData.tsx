@@ -102,7 +102,11 @@ export default function PrefetchWorkspaceData() {
     if (!token || connectors.length === 0) return;
     for (const connector of connectors) {
       if (connector.status !== 'connected') continue;
-      warm(cacheKeys.connectorTokenStatus(connector.id), () => fetchTokenStatus(connector.id));
+      warm(cacheKeys.connectorTokenStatus(connector.id), () =>
+        connector.id === 'salesforce'
+          ? fetchTokenStatus(connector.id, { ensureValid: true })
+          : fetchTokenStatus(connector.id),
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, connectors]);

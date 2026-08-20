@@ -386,6 +386,78 @@ class TestAC3EditDelete:
         remove_content(retrieval_org, [("confluence", "ENG:200")])
         assert retrieve(retrieval_org, "payments", k=5, source_filter=["confluence"]) == []
 
+    def test_ac3_sharepoint_page_survives_the_real_freshness_lifecycle(
+        self, retrieval_org, monkeypatch
+    ):
+        """AC3 for SHAREPOINT, through the freshness path rather than around it.
+
+        The pre-existing AC3 case is Confluence-only, and AC1 proves SharePoint
+        indexing by calling ``ingest_content`` and retrieving in the same breath —
+        before anything marks a chunk stale. Neither exercises the lifecycle a real
+        run performs, where ``change_runner`` emits ``artifact_changed`` AFTER the
+        hand-off has already written fresh chunks:
+
+            hand-off writes chunks -> change event -> mark stale + enqueue
+                                  -> refresh resolves -> chunks current again
+
+        Two defects lived in that gap. The change event was attributed to
+        ``connector_id`` (``sharepoint_content``) while the chunks are indexed under
+        ``sharepoint``, so the stale-mark matched nothing and the queue row parked
+        under a source system with no resolver; and the resolver could not parse a
+        ``:page:`` id even when reached. This test fails if either returns.
+        """
+        from app.retrieval import freshness, refresh, store
+        from app.retrieval.api import retrieve
+        from app.retrieval.default_resolvers import _resolve_sharepoint
+
+        artifact_id = "S-eng:page:pg-onboarding"
+        monkeypatch.setenv("INGEST_MODE", "offline")  # resolver reads the fixture
+        refresh.register_content_resolver("sharepoint", _resolve_sharepoint)
+
+        ingest_content(retrieval_org, [
+            ContentArtifact(
+                source_system="sharepoint", source_artifact=artifact_id,
+                content="engineering onboarding guide", content_type="prose",
+                source_timestamp="2026-06-11T08:05:00Z",
+                provenance={"origin": "observed", "site_id": "S-eng"},
+            ),
+        ])
+        embedder.embed_pending_for_org(retrieval_org)
+        assert retrieve(retrieval_org, "onboarding", k=5, source_filter=["sharepoint"])
+
+        # Emit the change the way a REAL run does — through change_runner, driven by
+        # the ingestor's own attributes. Calling freshness.on_artifact_changed
+        # directly would hand it the right source system by hand and prove nothing
+        # about attribution, which is half of what this test exists to pin.
+        from discovery.ingest import change_runner
+        from discovery.ingest.sharepoint_content import SharePointContentIngestor
+
+        change_runner._emit_artifact_changed(
+            retrieval_org,
+            SharePointContentIngestor.connector_id,          # 'sharepoint_content'
+            [{"artifact_id": artifact_id, "change_kind": "updated"}],
+            retrieval_source_system=getattr(
+                SharePointContentIngestor, "retrieval_source_system", None
+            ),
+        )
+
+        # It must actually land: attributed to sharepoint_content this marked ZERO
+        # rows and the page silently kept serving pre-change content forever.
+        assert store.count_stale(retrieval_org) > 0, (
+            "the change event marked no chunks stale — freshness is attributed to a "
+            "source system the chunks are not indexed under"
+        )
+        assert retrieve(retrieval_org, "onboarding", k=5, source_filter=["sharepoint"]) == []
+
+        # The refresh must RESOLVE the page id, not park it.
+        result = refresh.refresh_pending_for_org(retrieval_org)
+        assert result.refreshed >= 1, f"page id was not resolved: {result}"
+
+        embedder.embed_pending_for_org(retrieval_org)
+        assert store.count_stale(retrieval_org) == 0
+        hits = retrieve(retrieval_org, "onboarding", k=5, source_filter=["sharepoint"])
+        assert hits and hits[0].source_artifact == artifact_id
+
 
 @_RETRIEVAL
 class TestAC7EndToEnd:

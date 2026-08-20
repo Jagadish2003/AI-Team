@@ -179,7 +179,10 @@ KNOWN_AUDIT_GAPS: Dict[str, str] = {
     "POST /api/db-connectors/{connector_id}/scope": "Native-DB table/column scope unaudited. Owner: D4 T1 follow-up.",
     # -- Connector create / edit (D4 names this explicitly) -----------------
     # -- Run lifecycle ------------------------------------------------------
-    "POST /api/runs/{run_id}/compute": "Run computation unaudited. Owner: D4 T1 follow-up.",
+    # POST /api/runs/{run_id}/compute closed the ratchet in 2.0-C4: it is the third
+    # run-start edge (after /stack-builder/launch and routes_sprint4_t2) and now
+    # emits RUN_STARTED with source="compute". Removed from this list rather than
+    # re-worded — the gap list may only shrink.
     "POST /api/runs/{run_id}/replay": "Replay re-serves artifacts and can reset decisions; unaudited. Owner: D4 T1 follow-up.",
     "DELETE /api/stack-builder/setup-state/{org_id}": "Setup-state deletion unaudited (the SAVE emits setup_state_saved). Owner: D4 T1 follow-up.",
     # -- Analyst / lifecycle ------------------------------------------------
@@ -196,7 +199,13 @@ KNOWN_AUDIT_GAPS: Dict[str, str] = {
 # find no violation, and pass — reporting coverage for unbuilt work.
 
 ACTIONS_PENDING_ROUTES: Dict[str, str] = {
-    "pack activate/disable/rollback": "Pack governance routes land in 2.0-C1; no route exists on this branch.",
+    # NOTE: "pack activate/disable/rollback" is deliberately NOT listed here any
+    # more. 2.0-C1/C3 shipped PUT /api/packs/{pack_id}/state (disable/enable),
+    # PUT /api/packs/{pack_id}/version (rollback/restore) and
+    # PUT /api/packs/installed/{pack_id}/activation, which emit
+    # pack_state_changed / pack_activation_changed, so the entry claiming "no
+    # route exists on this branch" had become false. It is now covered by
+    # TestD4NamedActions.test_every_named_action_with_a_route_audits.
     # NOTE: "entity merge/unmerge" is deliberately NOT listed here any more. 2.0-B2
     # shipped POST /api/entity-merges/apply, POST /api/entities/{entity_id}/unmerge,
     # /unmerge-all, and POST /api/entity-unmerges/{unmerge_id}/release, which emit
@@ -215,6 +224,22 @@ ACTIONS_PENDING_ROUTES: Dict[str, str] = {
 
 #: The subset of :data:`ACTIONS_PENDING_ROUTES` that is genuinely already audited.
 _PENDING_BUT_ACTUALLY_AUDITED = {"learning adjustment/reset"}
+
+#: Path fragments that would indicate a pending action's routes have LANDED —
+#: declared per action, and required to cover every pending entry.
+#:
+#: This exists because the previous staleness guard hard-coded the substring
+#: ``"activate"`` while the routes that actually shipped are ``.../state``,
+#: ``.../version`` and ``.../activation``. "activation" does not contain
+#: "activate", so the guard could never fire: the pack entry went on claiming
+#: "no route exists on this branch" across the whole of 2.0-C1..C4 while eight
+#: pack routes were live. A per-action fragment list keeps the check honest for
+#: EVERY pending entry instead of one hand-written substring, and
+#: ``test_pending_actions_really_have_no_route`` requires the two dicts' keys to
+#: match so a new pending entry cannot be added without one.
+PENDING_ACTION_PATH_FRAGMENTS: Dict[str, Tuple[str, ...]] = {
+    "learning adjustment/reset": ("/api/learning/adjustment",),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -602,6 +627,17 @@ class TestD4NamedActions:
                 "POST /api/entities/{entity_id}/unmerge-all",
                 "POST /api/entity-unmerges/{unmerge_id}/release",
             ],
+            # 2.0-C1/C3: the three edges D4's "pack activate/disable/rollback"
+            # names. Disable/enable and rollback/restore are one idempotent PUT
+            # each (the body carries the target), and activation is the authored-
+            # pack edge. The other pack routes (install, certification review,
+            # certification policy, migration apply/revert) are not part of this
+            # named action but are audited and covered by the sweep above.
+            "pack activate/disable/rollback": [
+                "PUT /api/packs/{pack_id}/state",
+                "PUT /api/packs/{pack_id}/version",
+                "PUT /api/packs/installed/{pack_id}/activation",
+            ],
         }
         audited, _, _, _ = _classified()
         live = {route_key(m, path) for m, path, _ in _state_changing_routes()}
@@ -625,17 +661,54 @@ class TestD4NamedActions:
             + "\n".join(f"  {u}" for u in sorted(unaudited))
         )
 
-    def test_pack_actions_have_no_route_yet(self):
-        """Records the ABSENCE, so the pending list cannot quietly become stale
-        once 2.0-C1 lands: when the pack-governance routes appear, the sweep above
-        starts reporting them and this test's premise fails.
+    def test_pending_actions_really_have_no_route(self):
+        """The ratchet that makes ACTIONS_PENDING_ROUTES self-invalidating.
 
-        Entity merge/unmerge was in the same boat until 2.0-B2 shipped its routes;
-        it is now covered by test_every_named_action_with_a_route_audits, so the
-        entity clause is deliberately gone from here (mirroring how export
-        generation graduated out of ACTIONS_PENDING_ROUTES)."""
+        A pending entry asserts "D4 names this action and no route exists yet".
+        That claim decays the moment the routes ship, and a decayed entry is worse
+        than no entry: it reports the absence as *recorded and understood* while
+        real state-changing routes go unmentioned. So the entry must fail as soon
+        as its routes appear, forcing whoever ships them to graduate it into
+        ``named_action_routes`` above (as entity merge/unmerge, export generation
+        and pack governance each were).
+
+        The predecessor of this test tried to do that for packs with a hard-coded
+        ``"activate"`` substring and silently could not: the shipped paths are
+        ``.../state``, ``.../version`` and ``.../activation``, none of which
+        contain "activate". It passed while eight audited pack routes were live.
+        Declared fragments plus a key-parity check remove that failure mode for
+        every pending entry rather than fixing the one instance.
+        """
+        missing_fragments = set(ACTIONS_PENDING_ROUTES) - set(PENDING_ACTION_PATH_FRAGMENTS)
+        assert not missing_fragments, (
+            "Every ACTIONS_PENDING_ROUTES entry needs PENDING_ACTION_PATH_FRAGMENTS "
+            "so its absence stays checkable:\n"
+            + "\n".join(f"  {a}" for a in sorted(missing_fragments))
+        )
+        orphan_fragments = set(PENDING_ACTION_PATH_FRAGMENTS) - set(ACTIONS_PENDING_ROUTES)
+        assert not orphan_fragments, (
+            "PENDING_ACTION_PATH_FRAGMENTS names actions that are no longer "
+            "pending — drop them with the entry they belonged to:\n"
+            + "\n".join(f"  {a}" for a in sorted(orphan_fragments))
+        )
+
         live = {path for _, path, _ in _state_changing_routes()}
-        assert not [p for p in live if "/packs/" in p and "activate" in p]
+        stale: List[str] = []
+        for action, fragments in PENDING_ACTION_PATH_FRAGMENTS.items():
+            if action in _PENDING_BUT_ACTUALLY_AUDITED:
+                continue
+            landed = sorted(
+                path for path in live if any(f in path for f in fragments)
+            )
+            if landed:
+                stale.append(f"{action}: {', '.join(landed)}")
+
+        assert not stale, (
+            "ACTIONS_PENDING_ROUTES claims no route exists for these actions, but "
+            "state-changing routes are live. Graduate each into "
+            "named_action_routes and assert it audits:\n"
+            + "\n".join(f"  {s}" for s in stale)
+        )
 
     def test_learning_adjustment_is_actually_audited(self):
         """The one pending-list entry claiming to be already covered — verified,
@@ -737,6 +810,11 @@ class TestRegistryGovernance:
             "run_completed",       # run completion emits telemetry only
             "user_login",          # see AUDIT_EXEMPT_ROUTES['/api/auth/login']
         }
+        # NOTE: pack_migration_applied / pack_migration_reverted are NOT listed
+        # here. They are emitted by routes_pack_migration; they only appeared dead
+        # while both went through one helper that took the event type as a
+        # parameter, which this sweep cannot resolve statically. Fixed at the
+        # source (two literal call sites), not by declaring them dead.
         assert set(dead) == expected_dead, (
             "The set of registered-but-never-emitted audit types changed.\n"
             f"  now: {dead}\n  expected: {sorted(expected_dead)}\n"

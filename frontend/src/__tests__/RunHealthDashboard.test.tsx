@@ -165,6 +165,13 @@ describe("RunHealthDashboardPage", () => {
     expect(screen.getByTestId("panel-connectors")).toHaveClass("ring-accent/30");
   });
 
+  it("does not draw the accent highlight ring around the Runs panel", async () => {
+    renderPage("/run-health?panel=runs");
+
+    const panel = await screen.findByTestId("panel-runs");
+    expect(panel).not.toHaveClass("ring-accent/30");
+  });
+
   // The Content-and-Freshness and Packs panels are hidden from the dashboard, but
   // their health reads still run so both keep feeding the tenant summary and the
   // Attention Strip — hiding a card must not make a degraded tenant read healthy.

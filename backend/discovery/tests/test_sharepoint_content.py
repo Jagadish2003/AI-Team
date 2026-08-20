@@ -17,6 +17,7 @@ Run:
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import List, Optional
 
 from app.provenance import OBSERVED
@@ -275,6 +276,122 @@ def test_edited_page_is_re_ingested_on_the_next_run():
     )
     assert result.ok
     assert sub.artifact_ids == {_ONBOARDING}  # only the edited page re-handed
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Deletion / archival propagation (R18-A5 AC3, second half)
+# ─────────────────────────────────────────────────────────────────────────────
+class FakeRemover:
+    """Stands in for ``retrieval.remove_content`` — records every removal."""
+
+    def __init__(self):
+        self.removed: List[tuple] = []
+
+    def __call__(self, org_id: str, pairs):
+        pairs = list(pairs)
+        self.removed.extend(pairs)
+        return SimpleNamespace(
+            artifacts_removed=len(pairs), chunks_removed=len(pairs)
+        )
+
+
+def _run_with_remover(store, substrate, remover, *, ingestor=None):
+    return ingest_sharepoint_content(
+        ORG,
+        ingestor=ingestor,
+        ingest_fn=substrate,
+        remove_fn=remover,
+        read_checkpoint=store.read,
+        save_checkpoint=store.save,
+    )
+
+
+def test_deleted_page_is_tombstoned_and_its_chunks_removed():
+    """A page that disappears from a site we can still read leaves retrieval."""
+    store = Store()
+    _run(store, FakeSubstrate())  # first load establishes the known-id set
+
+    class MissingPageIngestor(SharePointContentIngestor):
+        def _raw_pages(self, org_id, site_id):
+            return [
+                p for p in super()._raw_pages(org_id, site_id)
+                if p.get("id") != "pg-onboarding"
+            ]
+
+    remover = FakeRemover()
+    result = _run_with_remover(
+        store, FakeSubstrate(), remover, ingestor=MissingPageIngestor()
+    )
+
+    assert result.ok
+    assert remover.removed == [(SOURCE_SYSTEM, _ONBOARDING)]
+    assert result.artifacts_removed == 1
+
+
+def test_a_tombstoned_page_is_not_re_tombstoned_on_the_next_run():
+    """The id is dropped from the checkpoint, so the deletion is reported once."""
+    store = Store()
+    _run(store, FakeSubstrate())
+
+    class MissingPageIngestor(SharePointContentIngestor):
+        def _raw_pages(self, org_id, site_id):
+            return [
+                p for p in super()._raw_pages(org_id, site_id)
+                if p.get("id") != "pg-onboarding"
+            ]
+
+    _run_with_remover(store, FakeSubstrate(), FakeRemover(), ingestor=MissingPageIngestor())
+
+    second = FakeRemover()
+    _run_with_remover(store, FakeSubstrate(), second, ingestor=MissingPageIngestor())
+    assert second.removed == []
+
+
+def test_losing_a_sites_grant_tombstones_its_content_without_reading_it():
+    """AC4 still holds on the deletion path: the ungranted site is never read."""
+    store = Store()
+    first = FakeSubstrate()
+    _run(store, first)
+    known = set(first.artifact_ids)
+    assert known
+
+    read_sites: List[str] = []
+
+    class NoGrantIngestor(SharePointContentIngestor):
+        def _accessible_sites(self, org_id):
+            return []          # every grant withdrawn
+
+        def _raw_pages(self, org_id, site_id):  # pragma: no cover — must not run
+            read_sites.append(site_id)
+            return super()._raw_pages(org_id, site_id)
+
+    remover = FakeRemover()
+    result = _run_with_remover(
+        store, FakeSubstrate(), remover, ingestor=NoGrantIngestor()
+    )
+
+    assert result.ok
+    assert {a for _s, a in remover.removed} == known
+    assert read_sites == []    # the ungranted site's content was never fetched
+
+
+def test_unchanged_estate_tombstones_nothing():
+    """The negative control: deletion detection must not fire on a quiet run, or
+    every stable page would be dropped from retrieval on every run."""
+    store = Store()
+    _run(store, FakeSubstrate())
+
+    remover = FakeRemover()
+    result = _run_with_remover(store, FakeSubstrate(), remover)
+
+    assert result.ok
+    assert remover.removed == []
+    assert result.artifacts_removed == 0
+
+
+def test_connector_declares_that_it_reports_deletes():
+    """``reports_deletes`` is the contract's honesty flag — it must match reality."""
+    assert SharePointContentIngestor.reports_deletes is True
 
 
 def test_substrate_failure_does_not_advance_the_checkpoint():

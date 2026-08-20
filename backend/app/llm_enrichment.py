@@ -406,6 +406,16 @@ def build_grounded_opp_prompt(
     """
     observed = graph_context.observed_summary or "No directly observed entities for this finding."
     truncation_note = (graph_context.truncation_note or "").strip()
+    # 2.0-B3 T3 (AC3): when the assembled sources materially disagree, the prompt
+    # names the disagreement and instructs the model not to settle it. Additive in
+    # exactly the way the T3-S16-A causal section is: with no disagreement the
+    # section is absent and the prompt is byte-for-byte what it was before.
+    contradiction_note = (getattr(graph_context, "contradiction_note", "") or "").strip()
+    contradiction_section = (
+        f"=== SOURCE DISAGREEMENTS ===\n{contradiction_note}\n"
+        if contradiction_note
+        else ""
+    )
     output_intro = (
         "Produce JSON with the fields below. No preamble, no markdown - JSON only."
         if causal_context is not None
@@ -426,7 +436,7 @@ Corroboration: {signal_ctx.get("corroboration_label", "Not corroborated across s
 === DIRECTLY OBSERVED ENTITIES AND RELATIONSHIPS ===
 {observed}
 {truncation_note}
-
+{contradiction_section}
 === DOMAIN CONTEXT ===
 {pack_llm_context or "No additional domain context available."}
 

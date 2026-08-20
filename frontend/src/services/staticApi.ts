@@ -24,7 +24,8 @@ export type TokenStatus = 'connected' | 'needs_refresh' | 'needs_auth' | 'refres
 
 export interface TokenStatusResponse {
   status: TokenStatus;
-  // Backend currently returns only `status`; kept optional for forward-compat.
+  // Live endpoint returns the access-token expiry. Optional keeps compatibility
+  // with older deployments while letting the card re-check at the exact expiry.
   expires_at?: string | null;
 }
 
@@ -32,8 +33,14 @@ export function fetchConnectors(): Promise<Connector[]> {
   return apiGet<Connector[]>("/api/connectors");
 }
 
-export function fetchTokenStatus(connectorId: string): Promise<TokenStatusResponse> {
-  return apiGet<TokenStatusResponse>(`/api/connectors/${connectorId}/token-status`);
+export function fetchTokenStatus(
+  connectorId: string,
+  options: { ensureValid?: boolean } = {},
+): Promise<TokenStatusResponse> {
+  const query = options.ensureValid ? '?ensure_valid=true' : '';
+  return apiGet<TokenStatusResponse>(
+    `/api/connectors/${connectorId}/token-status${query}`,
+  );
 }
 
 /**

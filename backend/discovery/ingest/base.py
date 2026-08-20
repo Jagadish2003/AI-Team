@@ -200,6 +200,30 @@ class ChangeBasedIngestor(abc.ABC):
     #: still emitted). See ``discovery.ingest.conversation_content``.
     manages_retrieval_freshness: bool = False
 
+    #: The retrieval ``source_system`` this connector's artifacts are INDEXED under,
+    #: when it differs from :attr:`connector_id`. DEFAULT None: the two are the same
+    #: (documents, git, Confluence — whose content rides the ``confluence`` reach
+    #: ingestor — and the SharePoint reach connector).
+    #:
+    #: They diverge for a DEEP-CONTENT connector that owns its own checkpoint:
+    #: ``sharepoint_content`` is a distinct ``connector_id`` (so its checkpoint
+    #: cannot race the reach connector's) while its pages and lists are indexed
+    #: under ``source_system='sharepoint'``. The freshness subscriber keys on
+    #: ``(org_id, source_system, source_artifact)``, so without this the change event
+    #: is attributed to ``sharepoint_content``: the stale-mark matches ZERO chunk
+    #: rows and the queue row is filed under a source system with no registered
+    #: resolver, leaving it ``no_resolver`` and PENDING forever. That is precisely
+    #: the "park an unresolvable row in the retrieval refresh queue" failure the
+    #: ``produces_retrieval_content`` note below calls out — reached here by a
+    #: different route, and silently, because nothing downstream can tell an
+    #: unresolvable row from a merely slow one.
+    #:
+    #: Affects the FRESHNESS notification only. The ``ingestion.artifact_changed``
+    #: telemetry event keeps the real ``connector_id``, because that event reports
+    #: which connector observed the change — a different question from which
+    #: substrate partition holds the chunks.
+    retrieval_source_system: Optional[str] = None
+
     #: MSP-B1 — does this connector's records correspond to RETRIEVAL artifacts at
     #: all? DEFAULT True: a change record's ``artifact_id`` is a retrieval
     #: ``source_artifact``, so the runner emits one ``ingestion.artifact_changed``

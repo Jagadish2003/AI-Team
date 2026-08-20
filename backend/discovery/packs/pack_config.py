@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 # ── Pack registry ─────────────────────────────────────────────────────────────
 
 _PACKS_DIR = Path(__file__).parent
+# 2.0-C1 T3 (AT-828): config artifacts of PRIOR pack versions that remain runnable.
+# See versions/README.md — the archive is what makes rollback honest rather than a
+# version stamp that lies about which behaviour actually executed.
+_VERSIONS_DIR = _PACKS_DIR / "versions"
 
 PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
 
@@ -42,6 +46,39 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "Service Cloud",
         "domain":        "service_cloud",
         "pack_domain":   "service_cloud",
+        # 2.0-C1 T1 (AT-826): platform-capability range + required normalised
+        # concepts. See COMPATIBILITY_KEY below and pack_compatibility.py.
+        "compatibility": {
+            "minPlatformVersion": "1.0.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts":   ["case_workflow"],
+            "optionalConcepts":   ["cross_system_link"],
+        },
+        # 2.0-C2 T1 (AT-831): certification metadata. Signed by CloudFulcrum — see
+        # CERTIFICATION_KEY above and pack_certification.py.
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "Service Cloud detectors, evidence discipline, Salesforce "
+                    "service terminology, and scorer calibration."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "Qfv6UmzZjcHillO69QwDAd/ii6IMzEug53F00N/fSQ+fAMwulKsSRSOBcSBTEYaiVohWe7otgQY9uZxpPI0pBg==",
+            },
+        },
         "detectors": [
             "discovery.detectors.repetition",
             "discovery.detectors.handoff_friction",
@@ -64,6 +101,37 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "nCino Lending",
         "domain":        "ncino",
         "pack_domain":   "ncino",
+        "compatibility": {
+            "minPlatformVersion": "1.0.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts":   ["loan_origination_workflow"],
+            "optionalConcepts":   ["case_workflow", "cross_system_link"],
+        },
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "nCino lending detectors, evidence discipline, banking "
+                    "terminology, scorer calibration, and the no-automated-credit"
+                    "-decision compliance guardrail."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                    "compliance_guardrails",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "ov5cfGllurB91X864BzTM0URZeSKzgUdZsmCDI1qrxtCAUKTcuPtP0gxzud0E+y5TgiNAhLmUaL/1zqIInfSDA==",
+            },
+        },
         "detectors": [
             "discovery.detectors.loan_origination_routing_friction",
             "discovery.detectors.covenant_tracking_gap", 
@@ -127,6 +195,52 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "Financial Services Cloud",
         "domain":        "financial_services_cloud",
         "pack_domain":   "financial_services_cloud",
+        # 2.0-C1 T1 compatibility. Added late: this pack (2.0-D1 T1) and the
+        # compatibility gate (2.0-C1 T1) were built on separate branches, and the
+        # merge left FSC as the only registered pack with no declaration — which
+        # the structural guard reports, correctly, as a build failure.
+        #
+        # Mirrors `ncino` deliberately. FSC's registry entry was copied from
+        # ncino's shape in T1 (same Salesforce connector, same BFSI domain family,
+        # same compliance posture), and its detectors read the same case/approval
+        # workflow surface, so the platform floor and concept set are the same
+        # question with the same answer. Choosing anything else here would be
+        # inventing a requirement no FSC code expresses.
+        "compatibility": {
+            "minPlatformVersion": "1.0.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts":   ["case_workflow"],
+            "optionalConcepts":   ["cross_system_link"],
+        },
+        # 2.0-C2 T1 certification. Declared COMMUNITY because that is the truth:
+        # this pack has had no certification review and carries no CloudFulcrum
+        # signature. Every other first-party pack is `certified` and signed, so FSC
+        # is genuinely uncertified rather than merely undeclared — 2.0-D1 shipped it
+        # without going through 2.0-C2's review.
+        #
+        # Declaring it explicitly is strictly better than leaving it absent: the
+        # effective level is `community` either way (that is the documented
+        # default), but an explicit declaration is a statement rather than an
+        # omission, and it satisfies the registry-completeness guard.
+        #
+        # CONSEQUENCE, stated rather than discovered later: under an org policy that
+        # restricts activation to Certified (2.0-C2 T4), this pack is refused. That
+        # is correct — it has not been certified.
+        #
+        # TO CERTIFY: run a review (POST /api/packs/{id}/certification/reviews), then
+        # issue the signature with
+        #   PACK_CERTIFICATION_SIGNING_KEY=... python scripts/sign_pack_certifications.py --sign
+        # and replace this block with the signed `certified` one. That key is release
+        # tooling, deliberately absent from this repo, so the signature cannot be
+        # produced here.
+        "certification": {
+            "level": "community",
+            "certifyingEntity": "",
+            "reviewDate": "",
+            "reviewedAgainstPlatformVersion": "",
+            "scope": {},
+            "signature": {},
+        },
         "detectors": [
             "discovery.detectors.fsc_servicing_request_recurrence",
             "discovery.detectors.fsc_referral_handoff_friction",
@@ -176,6 +290,38 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "STRS Benefits Administration",
         "domain":        "strs_benefits",
         "pack_domain":   "strs_benefits",
+        "compatibility": {
+            "minPlatformVersion": "1.0.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts":   ["benefit_administration_workflow"],
+            # STRS corroborates against Jira/ServiceNow when connected.
+            "optionalConcepts":   ["cross_system_link"],
+        },
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "STRS benefit-administration detectors, evidence discipline, "
+                    "member-services terminology, scorer calibration, and the "
+                    "no-automated-benefit-decision compliance guardrail."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                    "compliance_guardrails",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "msWGygHbpWAhbsLU7z6Wt6QiGIHxxAxSkmf5Gs2+OAah5/UZn5oGsNLPpQxzybLgZ7iKigsnlsL7QqkhtAVpAg==",
+            },
+        },
         "detectors": [
             "discovery.detectors.application_stall",
             "discovery.detectors.benefit_election_deadline",
@@ -201,6 +347,35 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "SQL Server Operational Signals",
         "domain":        "sqlserver_opsignal",
         "pack_domain":   "sqlserver_opsignal",
+        "compatibility": {
+            "minPlatformVersion": "1.0.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts":   ["db_operational_signal"],
+            "optionalConcepts":   ["cross_system_link"],
+        },
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "SQL Server operational-signal detectors, evidence discipline, "
+                    "IT-operations terminology, and scorer calibration."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "EMx21tys0xShGqHjCnHKNTGpALIna5HprJnHRwCdp2GgjbiDfowWaxTovvm7lDHeHvNv0qa1mZoD/y/3fuM7BQ==",
+            },
+        },
         "detectors": [
             "discovery.detectors.db_ticket_volume_surge",
             "discovery.detectors.db_sla_breach_rate",
@@ -228,6 +403,38 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "GitHub Engineering Signals",
         "domain":        "github_engineering",
         "pack_domain":   "github_engineering",
+        "compatibility": {
+            "minPlatformVersion": "1.0.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts":   ["code_activity_signal"],
+            # Jira corroboration elevates PR-bottleneck confidence when present.
+            "optionalConcepts":   ["cross_system_link"],
+        },
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "GitHub engineering-signal detectors, evidence discipline, "
+                    "engineering-operations terminology, scorer calibration, and "
+                    "the no-automated-merge compliance guardrail."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                    "compliance_guardrails",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "dZhxwl9WMMFeUJLIt38ZNs8TgeaYLPJs7FFm2T7gRgNmwoamd2PQkG18NVu0fLXmNdu/KegpAAzqB75rplVODQ==",
+            },
+        },
         "detectors": [
             "discovery.detectors.github_pr_bottleneck",
             "discovery.detectors.github_commit_concentration",
@@ -252,6 +459,39 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "Enterprise Operations Intelligence",
         "domain":        "enterprise_ops",
         "pack_domain":   "enterprise_ops",
+        # Findings emerge from the GAP between ServiceNow incidents and Jira
+        # issues, so the cross-system link is a HARD requirement here, not an
+        # optional corroborator: without it there is nothing for this pack to see.
+        "compatibility": {
+            "minPlatformVersion": "1.0.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts":   ["incident_workflow", "cross_system_link"],
+            "optionalConcepts":   [],
+        },
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "Cross-system enterprise-operations detectors, evidence "
+                    "discipline, operations-leadership terminology, and scorer "
+                    "calibration."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "tBhUu0oy7tJeCMBDn8Ummb5Bmb7gDiJoTCimslXZ1xnfovNbGQb96aFjXVx7zOOW7EIvAPzs+Q/O/7UT0McSAQ==",
+            },
+        },
         "detectors": [
             "discovery.detectors.ent_incident_resolution_lag",
             "discovery.detectors.ent_change_incident_correlation",
@@ -283,6 +523,51 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "Cloud Operations",
         "domain":        "cloud_ops",
         "pack_domain":   "cloud_ops",
+        # 2.0-C1 T1 (AT-826): this pack's detectors read the MSP-B4 deterministic
+        # signatures and group-routing history plus the MSP-B0/B7 operational-event
+        # stream, so those are HARD requirements and the range floor is the MSP
+        # release. MSP-B3 (CMDB) and MSP-B5 (runbooks) are declared OPTIONAL
+        # because the pack degrades honestly without them by design — the
+        # recurrence stays unlocated (MSP-B4 AC5) and the runbook leg downgrades to
+        # "runbook match unavailable" (MSP-B6 T6). Declaring them as required would
+        # misreport a graceful degradation as an incompatibility.
+        "compatibility": {
+            "minPlatformVersion": "1.9.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts": [
+                "incident_workflow",
+                "resolution_signature",
+                "incident_identity_signature",
+                "assignment_group_routing",
+                "operational_event",
+            ],
+            "optionalConcepts": ["cmdb_dependency", "runbook_match"],
+        },
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "Cloud-operations detectors, the MSP-B6 four-part finding "
+                    "contract and causal gate, NOC terminology, and the "
+                    "config-driven ops-impact scorer calibration."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                    "aggregation_floor",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "v8EJRihCPB8BuJOj+sRGl0zVPifpVUwIJgUpprWg0UEyzzRJ8pN0wkMkZi6S7yLdrUN8UTt/4Z6jhE4K8zKAAQ==",
+            },
+        },
         # MSP-B6 T2 (AT-737) record/stream detectors + T3 (AT-738) shared-CI hotspot.
         "detectors": [
             "discovery.detectors.cloud_ops_recurring_resolution_loop",
@@ -298,6 +583,29 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         # terminology set load from this external file, not from code — a config
         # change alters behaviour with no code deploy. See cloud_ops_config.py.
         "config_path":   str(_PACKS_DIR / "cloud_ops_pack_config.json"),
+        # 2.0-C1 T3 (AT-828): PRIOR versions that remain runnable, newest first.
+        # Each entry carries the real behaviour of that version — its archived
+        # config artifact AND its detector list — so a run pinned to it executes
+        # 1.1.0 rather than being stamped 1.1.0 while running 1.2.0. 1.1.0 is
+        # MSP-B6 T4's state: the five Section-2 detectors, before MSP-B5 wiring
+        # added the documentation-gap detector. 1.0.0 is deliberately NOT offered
+        # (it was the T1 scaffold with ZERO detectors — see versions/README.md).
+        "versionHistory": [
+            {
+                "version": "1.1.0",
+                "configPath": str(
+                    _VERSIONS_DIR / "cloud_ops_pack_config.v1.1.0.json"
+                ),
+                "detectors": [
+                    "discovery.detectors.cloud_ops_recurring_resolution_loop",
+                    "discovery.detectors.cloud_ops_alert_triage_toil",
+                    "discovery.detectors.cloud_ops_reassignment_ping_pong",
+                    "discovery.detectors.cloud_ops_queue_ageing",
+                    "discovery.detectors.cloud_ops_shared_ci_hotspot",
+                ],
+                "note": "MSP-B6 T4 (AT-739) — before the MSP-B5 documentation-gap detector",
+            },
+        ],
         "llm_context": (
             "Managed cloud-operations (NOC) analysis. "
             "Speak NOC language: alerts, incidents, runbooks, MTTR, toil, escalation. "
@@ -326,10 +634,48 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "Security Operations",
         "domain":        "security_ops",
         "pack_domain":   "security_ops",
+        # 2.0-C1 T1 (AT-826): consumes MSP-B11's SecOps workflow signal, so both
+        # SecOps concepts are hard requirements and the floor is the MSP release.
+        # MSP-B3's CMDB is optional — the shared-infra concentration detector
+        # narrows with it and still emits without it.
+        "compatibility": {
+            "minPlatformVersion": "1.9.0",
+            "maxPlatformVersion": None,
+            "requiredConcepts": [
+                "security_incident_workflow",
+                "vulnerability_workflow",
+            ],
+            "optionalConcepts": ["cmdb_dependency", "incident_workflow"],
+        },
         # Second sibling of the Cloud-Operations pack on the same template model.
         # MSP-B12 T2 (Section 1) detectors — consume only MSP-B11's SecOps workflow
         # signal (sn_data['secops'] / ['vulnerability_response']) + B3's
         # sn_data['cmdb']. Invoked via the runner's uniform pack-dispatch branch.
+        "certification": {
+            "level":                          "certified",
+            "certifyingEntity":               "CloudFulcrum",
+            "reviewDate":                     "2026-07-31",
+            "reviewedAgainstPlatformVersion": "2.0.0",
+            "scope": {
+                "summary": (
+                    "Security-operations detectors, evidence discipline, SecOps "
+                    "terminology, scorer calibration, and the MSP-B11 aggregation "
+                    "floor that forbids host x vulnerability enumeration."
+                ),
+                "criteria": [
+                    "declarative_manifest_review",
+                    "evidence_discipline",
+                    "terminology",
+                    "calibration_sanity",
+                    "aggregation_floor",
+                ],
+            },
+            "signature": {
+                "keyId":     "cloudfulcrum-pack-signing-2026",
+                "algorithm": "ed25519",
+                "value":     "PyXpslUI87jVdYfJ7MaQ6Fr+U0vWAse5X7bCwbKWeVdEUFxRQH5MSYNwzqMvm0BaEMX/5/f4x2RfkaAlbV4hAg==",
+            },
+        },
         "detectors": [
             "discovery.detectors.security_ops_remediation_recurrence",
             "discovery.detectors.security_ops_security_it_pingpong",
@@ -343,6 +689,26 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         # load from this external file, not from code — a config change alters
         # behaviour with no code deploy (see security_ops_config.py).
         "config_path":   str(_PACKS_DIR / "security_ops_pack_config.json"),
+        # 2.0-C1 T3 (AT-828): prior runnable versions, newest first. 1.1.0 is
+        # MSP-B12 T2's state — the five Section-1 detectors with that release's
+        # calibration. 1.0.0 (the T1 scaffold, zero detectors) is deliberately not
+        # offered as a rollback target; see versions/README.md.
+        "versionHistory": [
+            {
+                "version": "1.1.0",
+                "configPath": str(
+                    _VERSIONS_DIR / "security_ops_pack_config.v1.1.0.json"
+                ),
+                "detectors": [
+                    "discovery.detectors.security_ops_remediation_recurrence",
+                    "discovery.detectors.security_ops_security_it_pingpong",
+                    "discovery.detectors.security_ops_sla_deferral_ageing",
+                    "discovery.detectors.security_ops_shared_infra_concentration",
+                    "discovery.detectors.security_ops_sir_triage_toil",
+                ],
+                "note": "MSP-B12 T2 — the five Section-1 detectors",
+            },
+        ],
         # Model-context hint for LLM enrichment. Security-derived content only
         # participates in AI-assisted assembly under in-boundary / customer-tenant
         # model modes; under hosted-AI mode the pack runs deterministic detectors and
@@ -390,6 +756,131 @@ DEFAULT_PACK = "service_cloud"
 # logic changes. DEFAULT_PACK_VERSION is the fallback for a pack that has not
 # declared one explicitly.
 DEFAULT_PACK_VERSION = "1.0.0"
+
+# 2.0-C1 T1 (AT-826): the registry key each pack declares its compatibility under.
+# Shape (all four keys optional; see platform_capabilities.py for the vocabulary):
+#
+#   "compatibility": {
+#       "minPlatformVersion": "1.9.0",     # inclusive floor;  None ⇒ no floor
+#       "maxPlatformVersion": None,        # inclusive ceiling; None ⇒ open-ended
+#       "requiredConcepts":   [...],       # gating — an unmet concept refuses activation
+#       "optionalConcepts":   [...],       # advisory — the pack degrades honestly without these
+#   }
+#
+# The gate lives in pack_compatibility.py, not here: this module stays the
+# declaration surface (like packVersion) so a pack's requirements are read in the
+# same place as the rest of its config.
+COMPATIBILITY_KEY = "compatibility"
+
+# 2.0-C1 T3 (AT-828): the registry key listing PRIOR pack versions that remain
+# runnable, newest first. Each entry declares the real behaviour of that version:
+#
+#   {
+#       "version":    "1.1.0",              # must differ from the current packVersion
+#       "configPath": ".../pack_config.v1.1.0.json",   # archived artifact (see versions/)
+#       "detectors":  [...],                # that version's detector list
+#       "note":       "free-text provenance",
+#   }
+#
+# A pack with NO versionHistory has no rollback target and rollback is refused with
+# that reason named — the platform declines to pretend it can serve behaviour it no
+# longer has. Only config-driven packs (cloud_ops, security_ops) can currently
+# declare history; a code-only pack would have to externalise its calibration first.
+VERSION_HISTORY_KEY = "versionHistory"
+
+# 2.0-C2 T1 (AT-831): the registry key each pack declares its certification under.
+# Shape (see pack_certification.py for the vocabulary and the verification rules):
+#
+#   "certification": {
+#       "level":                          "certified" | "partner" | "community",
+#       "certifyingEntity":               "CloudFulcrum",
+#       "reviewDate":                     "2026-07-31",       # ISO date of the review
+#       "reviewedAgainstPlatformVersion": "2.0.0",            # platform capability version
+#       "scope": {
+#           "summary":  "what the review covered",
+#           "criteria": ["evidence_discipline", ...],         # AT-832's checklist ids
+#       },
+#       "signature": {                    # required for certified/partner ONLY
+#           "keyId":     "cloudfulcrum-pack-signing-2026",
+#           "algorithm": "ed25519",
+#           "value":     "<base64 signature over the canonical payload>",
+#       },
+#   }
+#
+# The signature is what stops the label being self-applied: everything above except
+# the signature block itself is inside the signed payload, so no field can be edited
+# after issuance without invalidating it. A certified/partner claim that does not
+# verify is reported as community, with the reason named.
+#
+# As with COMPATIBILITY_KEY, the gate lives elsewhere (pack_certification.py) and this
+# module stays the declaration surface.
+CERTIFICATION_KEY = "certification"
+
+# Fallback for a pack that declares no certification block. Community is the honest
+# default: an undeclared pack has not been reviewed by anybody, and community is
+# precisely the label for that — so the absence of a declaration is never an error.
+DEFAULT_PACK_CERTIFICATION: Dict[str, Any] = {
+    "level": "community",
+    "certifyingEntity": "",
+    "reviewDate": "",
+    "reviewedAgainstPlatformVersion": "",
+    "scope": {"summary": "", "criteria": []},
+    "signature": {"keyId": "", "algorithm": "", "value": ""},
+}
+
+# 2.0-C4 T1 (AT-842): the registry key a pack declares its DEPRECATION under.
+# Shape (see pack_deprecation.py for the phases and the evaluation rules):
+#
+#   "deprecation": {
+#       "status":           "deprecated",          # "active" (default) | "deprecated"
+#       "versions":         ["1.1.0"],             # [] / omitted ⇒ EVERY version
+#       "reason":           "Superseded by ...",   # required for a real notice
+#       "deprecatedOn":     "2026-08-01",          # ISO date the notice starts
+#       "gracePeriodDays":  90,                    # derives graceEndsOn from deprecatedOn
+#       "graceEndsOn":      "2026-10-30",          # authoritative end date, if known
+#       "replacement": {                           # optional — the migration path
+#           "packId":     "cloud_ops",
+#           "minVersion": "1.2.0",
+#           "notes":      "free-text migration guidance",
+#       },
+#   }
+#
+# Declare EITHER gracePeriodDays OR graceEndsOn; declaring neither is a legitimate
+# "deprecated, no removal date announced yet" state that surfaces the notice and
+# never auto-disables the pack.
+#
+# As with COMPATIBILITY_KEY and CERTIFICATION_KEY, the rules live elsewhere
+# (pack_deprecation.py) and this module stays the declaration surface. Unlike
+# certification there is no signature: a deprecation is the registry shipper stating
+# that its OWN pack is superseded, so there is no third-party claim to protect.
+DEPRECATION_KEY = "deprecation"
+
+# Fallback for a pack that declares no deprecation block — not deprecated. The
+# overwhelmingly common case, so the absence of a declaration is never an error.
+DEFAULT_PACK_DEPRECATION: Dict[str, Any] = {
+    # Empty means UNDECLARED, which pack_deprecation resolves to "active" — kept
+    # distinct from an explicit "active" so it can tell a pack that says nothing
+    # from one that says "not deprecated", and so a block that carries a reason and
+    # a date but forgot its status is read as the notice it plainly is.
+    "status": "",
+    "versions": [],
+    "reason": "",
+    "deprecatedOn": "",
+    "gracePeriodDays": None,
+    "graceEndsOn": "",
+    "replacement": {"packId": "", "minVersion": "", "notes": ""},
+}
+
+# Fallback for a pack that has not declared a "compatibility" block. Deliberately
+# PERMISSIVE (no bounds, no required concepts) so an undeclared pack behaves
+# exactly as it did before AT-826 — the declaration is enforced by a structural
+# test over PACK_REGISTRY, not by silently refusing to run an undeclared pack.
+DEFAULT_PACK_COMPATIBILITY: Dict[str, Any] = {
+    "minPlatformVersion": None,
+    "maxPlatformVersion": None,
+    "requiredConcepts": [],
+    "optionalConcepts": [],
+}
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -464,6 +955,341 @@ def get_pack_config_path(pack_id: Optional[str] = None) -> Optional[str]:
     config change alters behaviour with no code deploy (AC2).
     """
     return get_pack(pack_id).get("config_path")
+
+
+def get_pack_compatibility_declaration(
+    pack_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return a pack's declared compatibility block (2.0-C1 T1 / AT-826).
+
+    Always returns a complete block: a pack that declares nothing (or declares a
+    partial block) is filled from ``DEFAULT_PACK_COMPATIBILITY``, so callers never
+    need to handle a missing key. Concept lists are normalised to de-duplicated,
+    order-preserving lists of non-empty strings.
+
+    Resolution follows ``get_pack()`` — an unknown pack id reads the DEFAULT
+    pack's declaration, exactly as it reads the default pack's detectors, so an
+    unknown id is never refused on compatibility grounds it does not have.
+    """
+    declared = get_pack(pack_id).get(COMPATIBILITY_KEY) or {}
+    if not isinstance(declared, dict):
+        declared = {}
+
+    def _concepts(key: str) -> List[str]:
+        raw = declared.get(key, DEFAULT_PACK_COMPATIBILITY[key])
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, (list, tuple)):
+            return []
+        seen: set[str] = set()
+        out: List[str] = []
+        for entry in raw:
+            if not isinstance(entry, str):
+                continue
+            concept = entry.strip()
+            if not concept or concept in seen:
+                continue
+            seen.add(concept)
+            out.append(concept)
+        return out
+
+    def _bound(key: str) -> Optional[str]:
+        raw = declared.get(key, DEFAULT_PACK_COMPATIBILITY[key])
+        if not isinstance(raw, str):
+            return None
+        bound = raw.strip()
+        return bound or None
+
+    return {
+        "minPlatformVersion": _bound("minPlatformVersion"),
+        "maxPlatformVersion": _bound("maxPlatformVersion"),
+        "requiredConcepts": _concepts("requiredConcepts"),
+        "optionalConcepts": _concepts("optionalConcepts"),
+    }
+
+
+def get_pack_certification_declaration(
+    pack_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return a pack's declared certification block (2.0-C2 T1 / AT-831).
+
+    Always returns a complete, normalised block: a pack that declares nothing (or a
+    partial block) is filled from ``DEFAULT_PACK_CERTIFICATION``, so callers never
+    handle a missing key — an undeclared pack reads as ``community``, which is the
+    honest label for "nobody has vouched for this".
+
+    Normalisation is deliberately conservative and lossless-in-shape, because the
+    result is the input to the SIGNED payload: strings are stripped, the level is
+    lower-cased, and ``scope.criteria`` is de-duplicated order-preservingly. Nothing
+    is invented or defaulted into a signed field — an absent value stays empty, so a
+    signature can never cover something the pack did not actually declare.
+
+    Resolution follows ``get_pack()``, so an unknown pack id reads the DEFAULT pack's
+    certification, exactly as it reads its detectors.
+    """
+    declared = get_pack(pack_id).get(CERTIFICATION_KEY) or {}
+    if not isinstance(declared, dict):
+        declared = {}
+
+    def _string(source: Dict[str, Any], key: str) -> str:
+        raw = source.get(key)
+        return raw.strip() if isinstance(raw, str) else ""
+
+    scope_raw = declared.get("scope")
+    if not isinstance(scope_raw, dict):
+        scope_raw = {}
+    criteria_raw = scope_raw.get("criteria")
+    if isinstance(criteria_raw, str):
+        criteria_raw = [criteria_raw]
+    if not isinstance(criteria_raw, (list, tuple)):
+        criteria_raw = []
+    seen: set[str] = set()
+    criteria: List[str] = []
+    for entry in criteria_raw:
+        if not isinstance(entry, str):
+            continue
+        item = entry.strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        criteria.append(item)
+
+    signature_raw = declared.get("signature")
+    if not isinstance(signature_raw, dict):
+        signature_raw = {}
+
+    return {
+        "level": (
+            _string(declared, "level").lower()
+            or DEFAULT_PACK_CERTIFICATION["level"]
+        ),
+        "certifyingEntity": _string(declared, "certifyingEntity"),
+        "reviewDate": _string(declared, "reviewDate"),
+        "reviewedAgainstPlatformVersion": _string(
+            declared, "reviewedAgainstPlatformVersion"
+        ),
+        "scope": {
+            "summary": _string(scope_raw, "summary"),
+            "criteria": criteria,
+        },
+        "signature": {
+            "keyId": _string(signature_raw, "keyId"),
+            "algorithm": _string(signature_raw, "algorithm").lower(),
+            "value": _string(signature_raw, "value"),
+        },
+    }
+
+
+def get_pack_deprecation_declaration(
+    pack_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return a pack's declared deprecation block (2.0-C4 T1 / AT-842).
+
+    Always returns a complete block: a pack that declares nothing (or a partial
+    block) is filled from ``DEFAULT_PACK_DEPRECATION``, so callers never handle a
+    missing key. An undeclared ``status`` is reported as EMPTY rather than
+    ``"active"``, so ``pack_deprecation`` can tell "said nothing" (resolve to active,
+    or infer a notice from the rest of the block) from an explicit "not deprecated".
+
+    Normalisation only cleans shapes, it never repairs meaning: strings are stripped,
+    the status is lower-cased, ``versions`` is de-duplicated order-preservingly, and
+    ``gracePeriodDays`` is passed through UNCHANGED when it is not a whole number so
+    that ``pack_deprecation`` can name it as a defect rather than have it silently
+    disappear. Inventing a missing reason or grace date here would hide exactly the
+    declaration mistakes the structural tests exist to catch.
+
+    Resolution follows ``get_pack()``, so an unknown pack id reads the DEFAULT pack's
+    deprecation, exactly as it reads its detectors.
+    """
+    declared = get_pack(pack_id).get(DEPRECATION_KEY) or {}
+    if not isinstance(declared, dict):
+        declared = {}
+
+    def _string(source: Dict[str, Any], key: str) -> str:
+        raw = source.get(key)
+        return raw.strip() if isinstance(raw, str) else ""
+
+    versions_raw = declared.get("versions")
+    if isinstance(versions_raw, str):
+        versions_raw = [versions_raw]
+    if not isinstance(versions_raw, (list, tuple)):
+        versions_raw = []
+    seen: set[str] = set()
+    versions: List[str] = []
+    for entry in versions_raw:
+        if not isinstance(entry, str):
+            continue
+        version = entry.strip()
+        if not version or version in seen:
+            continue
+        seen.add(version)
+        versions.append(version)
+
+    replacement_raw = declared.get("replacement")
+    if not isinstance(replacement_raw, dict):
+        replacement_raw = {}
+
+    return {
+        # Empty ⇒ undeclared. pack_deprecation resolves that to "active", or infers
+        # "deprecated" when the rest of the block is populated.
+        "status": _string(declared, "status").lower(),
+        "versions": versions,
+        "reason": _string(declared, "reason"),
+        "deprecatedOn": _string(declared, "deprecatedOn"),
+        # Passed through as declared — a non-integer is a defect to be NAMED by
+        # pack_deprecation, not something to coerce away here.
+        "gracePeriodDays": declared.get("gracePeriodDays"),
+        "graceEndsOn": _string(declared, "graceEndsOn"),
+        "replacement": {
+            "packId": _string(replacement_raw, "packId"),
+            "minVersion": _string(replacement_raw, "minVersion"),
+            "notes": _string(replacement_raw, "notes"),
+        },
+    }
+
+
+def get_pack_version_history(pack_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Prior runnable versions of a pack, newest first (2.0-C1 T3 / AT-828).
+
+    Each entry is normalised to ``{version, configPath, detectors, note}``. Entries
+    without a usable ``version`` are dropped, and an entry whose version equals the
+    pack's CURRENT ``packVersion`` is dropped too — the current version is served
+    from the pack's own config, never from the archive, so listing it would create
+    two sources of truth for one version.
+
+    Returns ``[]`` for a pack that declares no history (no rollback target).
+    """
+    pack = get_pack(pack_id)
+    declared = pack.get(VERSION_HISTORY_KEY) or []
+    if not isinstance(declared, (list, tuple)):
+        return []
+    current = str(pack.get("packVersion", DEFAULT_PACK_VERSION))
+
+    history: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in declared:
+        if not isinstance(entry, dict):
+            continue
+        version = str(entry.get("version") or "").strip()
+        if not version or version == current or version in seen:
+            continue
+        seen.add(version)
+        detectors = entry.get("detectors")
+        history.append(
+            {
+                "version": version,
+                "configPath": (
+                    str(entry["configPath"]).strip()
+                    if isinstance(entry.get("configPath"), str)
+                    and str(entry["configPath"]).strip()
+                    else None
+                ),
+                "detectors": (
+                    [str(d) for d in detectors if str(d).strip()]
+                    if isinstance(detectors, (list, tuple))
+                    else None
+                ),
+                "note": entry.get("note"),
+            }
+        )
+    return history
+
+
+def get_pack_version_entry(
+    pack_id: Optional[str], version: str
+) -> Optional[Dict[str, Any]]:
+    """The archived history entry for one prior version, or ``None`` if not archived."""
+    wanted = str(version or "").strip()
+    if not wanted:
+        return None
+    for entry in get_pack_version_history(pack_id):
+        if entry["version"] == wanted:
+            return entry
+    return None
+
+
+def get_rollbackable_versions(pack_id: Optional[str] = None) -> List[str]:
+    """Version strings this pack can be rolled back to, newest first."""
+    return [entry["version"] for entry in get_pack_version_history(pack_id)]
+
+
+def resolve_pack_at_version(
+    pack_id: Optional[str], version: Optional[str] = None
+) -> Dict[str, Any]:
+    """The pack config AS IT BEHAVES at ``version`` (2.0-C1 T3 / AT-828).
+
+    ``version`` ``None`` (or equal to the current ``packVersion``) returns the
+    current registry config unchanged, so an un-pinned pack is byte-identical to
+    before rollback existed.
+
+    For a pinned PRIOR version, returns a COPY of the pack with that version's real
+    behaviour substituted — ``packVersion``, ``detectors``, and ``config_path`` —
+    plus ``pinnedVersion`` so a consumer can tell a pinned resolution from a normal
+    one. The registry itself is never mutated.
+
+    Raises :class:`PackVersionUnavailable` for a version with no archived entry:
+    serving the CURRENT behaviour under an older stamp would be a lie, and silently
+    ignoring the pin would make rollback untrustworthy.
+    """
+    pack = get_pack(pack_id)
+    current = str(pack.get("packVersion", DEFAULT_PACK_VERSION))
+    wanted = str(version or "").strip()
+    if not wanted or wanted == current:
+        return pack
+
+    entry = get_pack_version_entry(pack_id, wanted)
+    if entry is None:
+        raise PackVersionUnavailable(
+            pack_id=pack["packId"],
+            version=wanted,
+            available=get_rollbackable_versions(pack_id),
+            current=current,
+        )
+
+    resolved = dict(pack)
+    resolved["packVersion"] = entry["version"]
+    resolved["pinnedVersion"] = entry["version"]
+    if entry["detectors"] is not None:
+        resolved["detectors"] = list(entry["detectors"])
+    if entry["configPath"] is not None:
+        resolved["config_path"] = entry["configPath"]
+    return resolved
+
+
+class PackVersionUnavailable(LookupError):
+    """A requested pack version has no archived artifact, so it cannot be served.
+
+    ``str(exc)`` names the pack, the requested version, and the versions that ARE
+    available, so a refusal is actionable.
+    """
+
+    def __init__(
+        self,
+        *,
+        pack_id: str,
+        version: str,
+        available: List[str],
+        current: str,
+    ) -> None:
+        self.pack_id = pack_id
+        self.version = version
+        self.available = list(available)
+        self.current = current
+        if self.available:
+            options = (
+                f"Versions available for rollback: {', '.join(self.available)} "
+                f"(current: {current})."
+            )
+        else:
+            options = (
+                f"This pack has no archived prior versions, so it cannot be rolled "
+                f"back (current: {current})."
+            )
+        super().__init__(
+            f"Pack '{pack_id}' version {version!r} is not available to run. {options}"
+        )
+
+
 def is_strs_benefits_pack(pack_id: Optional[str] = None) -> bool:
     """
     Returns True when the active pack is STRS Benefits Administration.

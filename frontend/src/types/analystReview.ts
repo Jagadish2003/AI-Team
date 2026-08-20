@@ -56,6 +56,37 @@ export interface OpportunityCandidate {
   // same type), satisfying "every roadmap entry carries its packId".
   packId?: string;
   packVersion?: string;
+  // 2.0-C1 T2 (AT-827) — the producing pack's state TODAY, stamped at serve time.
+  // A finding is NEVER removed or rewritten when its pack is disabled; these two
+  // additive fields are how a reader can tell that the finding came from a pack
+  // that is no longer running. `packVersion` above still reports the version that
+  // produced it, so provenance is intact either way. Absent on responses served
+  // before the fields existed.
+  packState?: "active" | "disabled";
+  packStateLabel?: string;
+  // 2.0-C2 T3 (AT-833 / AC2): the certification level of the pack that produced
+  // this finding, so a board paper quoting it can say which level of pack it came
+  // from. Stamped at serve time and always the EFFECTIVE (signature-verified)
+  // level — an unverifiable Certified claim arrives as "community" (2.0-C2 AC1).
+  packCertificationLevel?: "certified" | "partner" | "community";
+  packCertificationLabel?: string;
+  // Valid badge, reviewed against an older platform version. Additive, never a
+  // downgrade.
+  packCertificationReviewDue?: boolean;
+  // 2.0-C4 T2 (AT-843 / AC1): the producing pack is being superseded. Stamped at
+  // serve time (like packState and the certification level, and unlike the
+  // immutable packVersion) and present ONLY for a deprecated pack, so a surface
+  // renders a notice or nothing. The finding itself is never altered.
+  packDeprecated?: boolean;
+  packDeprecationPhase?: "grace" | "grace_expired";
+  packDeprecationLabel?: string;
+  /** The one-sentence notice: reason, dates, and the replacement. */
+  packDeprecationNotice?: string;
+  /** The date support ends. Absent when no removal date has been announced. */
+  packDeprecationEndsOn?: string;
+  /** Absent when no replacement pack has been named. */
+  packDeprecationReplacementPackId?: string;
+  packDeprecationReplacementLabel?: string;
   // 2.0-A3 T2 — the bounded learned ranking adjustment (contract v1.18).
   // Additive and optional: absent when learning is off, not yet active, or on
   // responses served before this shipped. Base scoring is NOT affected —
@@ -79,7 +110,7 @@ export interface OpportunityRanking {
   baseImpact: number;
   adjustedRank: number;
   /** Positions moved; negative means it moved up the list. */
-  moved: number;
+  moved?: number;
   adjusted: boolean;
   caps: OpportunityRankingCaps;
   // Present only when a learned adjustment applied to this finding.

@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .learning_adjustment import RANK_SCOPE_RUN, adjust_ranking, base_order
 from .learning_adjustment_state import (
@@ -72,7 +72,7 @@ def _read_run_for_org(run_id: str) -> Dict[str, Any]:
         raise HTTPException(404, "run not found")
 
     run_org = _run_org_id(run if isinstance(run, dict) else {})
-    if run_org and run_org != get_current_org_id():
+    if run_org != get_current_org_id():
         raise HTTPException(404, "run not found")
     return run if isinstance(run, dict) else {}
 
@@ -82,9 +82,9 @@ class RecomputeRequest(BaseModel):
 
 
 class ResetRequest(BaseModel):
-    """Optional governance note for an Owner reset."""
+    """Required governance reason for an Owner reset."""
 
-    reason: Optional[str] = None
+    reason: str = Field(..., min_length=1, max_length=500)
 
 
 @router.get("", dependencies=[Depends(require_role("owner"))])
@@ -146,7 +146,7 @@ def post_recompute(
 
 @router.post("/reset", dependencies=[Depends(require_role("owner"))])
 def post_reset(
-    body: Optional[ResetRequest] = None,
+    body: ResetRequest,
     token: str = Depends(require_auth),
 ) -> Dict[str, Any]:
     """Reset the org's adjustment state to neutral.
@@ -154,12 +154,11 @@ def post_reset(
     Reset is a governance action, so it is Owner-only. It appends reset history
     and emits the audit event after the current state has been neutralised.
     """
-    payload = body or ResetRequest()
     try:
         return reset_adjustments(
             get_current_org_id(),
             actor_id=_get_user_id_from_token(token),
-            reason=payload.reason,
+            reason=body.reason,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -234,7 +233,7 @@ def explain_adjustment(
     )
 
     record = result.by_opportunity_id().get(opportunity_id)
-    if record is None or (not record.moved and not record.was_capped):
+    if record is None or (record.moved is None and not record.was_capped):
         raise HTTPException(404, "no ranking adjustment for this opportunity")
 
     return {

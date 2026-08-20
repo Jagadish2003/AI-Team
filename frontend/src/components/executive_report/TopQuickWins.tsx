@@ -3,10 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAnalystReviewContext } from '../../context/AnalystReviewContext';
 import { useRunContext } from '../../context/RunContext';
 import { OpportunityCandidate } from '../../types/analystReview';
-import {
-  isThinProjectionEvidence,
-  projectionBasisSummary,
-} from '../projection/ProjectionBasis';
+import { projectionBasisSummary } from '../projection/ProjectionBasis';
 import { RecommendationHeadline } from '../projection/ProjectionRecommendation';
 import { showRelease2ArcAUi } from '../../config/releaseFlags';
 
@@ -30,7 +27,6 @@ export default function TopQuickWins({ quickWins }: TopQuickWinsProps) {
       <div className="mt-3 space-y-2">
         {quickWins.map(o => {
           const basisSummary = showRelease2ArcAUi ? projectionBasisSummary(o.projection) : null;
-          const thinEvidence = showRelease2ArcAUi && isThinProjectionEvidence(o.projection);
 
           return (
             <button
@@ -53,11 +49,6 @@ export default function TopQuickWins({ quickWins }: TopQuickWinsProps) {
                   className="mt-2 text-xs leading-relaxed text-muted"
                 >
                   {basisSummary}
-                </div>
-              )}
-              {thinEvidence && (
-                <div className="mt-1 text-xs leading-relaxed text-amber-600">
-                  Thin evidence - projection band is wider because evidence is limited.
                 </div>
               )}
             </button>
