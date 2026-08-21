@@ -71,18 +71,26 @@ below moved from unverified to verified on this run:
 | R5 | The **real** adapter (not curl) embeds through it | 3 vectors, dim 768 |
 | R6 | HP-2.3 reachability probe under `customer_hosted` | posture `ok` — the deployment boots |
 | R7 | The model name resolves, so HP-2.4's check ENGAGES | stamp `in_boundary:nomic-embed-text`, declared dimension found — guard active, not skipped |
+| R8 | **The whole substrate, end to end** (`scripts/verify_retrieval_substrate.py`) | all checks passed — real chunking, real gateway embedding, real pgvector, real `retrieve()` |
+| R9 | Semantic ranking actually works | the relevant runbook ranked first at similarity **0.8023** |
+| R10 | One vector space across the index | `dimension(s)=[768]` — no mixing |
+| R11 | Cross-tenant isolation on live vectors | org B leakage **0** for the same artifact id and topic |
+| R12 | **Generation** through the real adapter | `llama3.2:1b` served, `generate()` returned `ok=True`, `provider=in_boundary`, real text |
+| R13 | Reachability is NOT availability | with the generation model *not yet pulled*, the probe still reported `ok` while `generate()` failed on a 404 — the probe opens a TCP connection and never calls a model, by design |
 
 R1 and R4 are the ones that matter: had either failed, **nothing would be indexed** while
-runs completed and reported healthy.
+runs completed and reported healthy. R8 is the one that settles it — it is the only check
+here that proves a chunk survives the entire journey (handover → chunk → embed → index →
+search) rather than proving one stage in isolation.
 
 ### STILL NOT verified
 
 - **vLLM, entirely.** It requires a CUDA GPU and does not run meaningfully on Apple
   Silicon, so [`ON_PREM_VLLM.md`](./ON_PREM_VLLM.md) remains validated only against the
   stub. It needs a Linux GPU host.
-- **Generation model behaviour.** Only the embedding model was pulled; the generation path
-  is proven reachable (R6) but no generation model was served. Nothing here is a model
-  recommendation in any case.
+- **Generation quality.** `llama3.2:1b` was served only to prove the transport (R12); a 1B
+  model's output quality is not evaluated here and nothing in this document is a model
+  recommendation.
 - Whether `num_ctx` truncation affects your corpus (see
   [Context window](#context-window--the-quiet-truncation-risk)).
 - Any embedding model other than `nomic-embed-text`, and any Ollama version other than
@@ -95,7 +103,7 @@ runs completed and reported healthy.
 |---|---|---|---|
 | Ollama server | 0.32.15 (macOS arm64) | 2026-08-21 | pass — R1–R7 above |
 | Embedding model + tag | `nomic-embed-text:latest` (`0a109f422b47`, 274 MB) | 2026-08-21 | pass — 768 dims, batches of 64 |
-| Generation model + tag | not served | — | untested |
+| Generation model + tag | `llama3.2:1b` (`baf6a787fdff`, 1.3 GB) | 2026-08-21 | pass — transport only, quality not assessed |
 
 ---
 
