@@ -39,7 +39,8 @@ case "$DB_ENV" in
 esac
  
 if [[ -z "$SELECTED_URL" ]]; then
-  echo "Error: ${DB_ENV^^}_DATABASE_URL is empty or missing in .env." >&2
+  db_env_upper=$(echo "$DB_ENV" | tr '[:lower:]' '[:upper:]')
+  echo "Error: ${db_env_upper}_DATABASE_URL is empty or missing in .env." >&2
   exit 1
 fi
  
@@ -81,7 +82,8 @@ mask_url() {
   echo "${rest%%\?*}"        # drop ?params    -> host:port/db
 }
  
-echo "Set DATABASE_URL in .env to ${DB_ENV^^}_DATABASE_URL"
+db_env_upper=$(echo "$DB_ENV" | tr '[:lower:]' '[:upper:]')
+echo "Set DATABASE_URL in .env to ${db_env_upper}_DATABASE_URL"
 echo "  -> $(mask_url "$SELECTED_URL")"
 # Default AWS region for the SDK. The AWS Event Connector's hub "Test connection"
 # has no region field, so boto3 needs a region from the environment to sign the
@@ -91,6 +93,6 @@ echo "  -> $(mask_url "$SELECTED_URL")"
 #export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 #export AWS_REGION="${AWS_REGION:-$AWS_DEFAULT_REGION}"
 
-echo "Starting AgentIQ backend against ${DB_ENV^^} database"
+echo "Starting AgentIQ backend against ${db_env_upper} database"
 #echo "  AWS region -> ${AWS_DEFAULT_REGION}"
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
