@@ -403,6 +403,21 @@ def run_trackb_and_persist(
     }
     errors: Dict[str, str] = {}
 
+    # HP-2.6 (AC5): record the model-provider posture this run ran under, BEFORE
+    # the pipeline, so every exit path — including the "no data ingested" failure
+    # below — carries it. Reads HP-2.3's cached startup posture; never probes,
+    # never raises. Without it a run that lost its AI narrative or its retrieval
+    # evidence to an unreachable provider polls as complete and every consumer
+    # downstream believes it.
+    try:
+        from .run_completeness import stamp_provider_posture
+
+        stamp_provider_posture(run)
+    except Exception:  # noqa: BLE001 — a posture stamp must never break a run
+        logger.warning(
+            "run %s: model provider posture not recorded", run_id, exc_info=True
+        )
+
     try:
         # Single-ingest: the discovery runner is the SOLE place enterprise systems
         # are ingested. The old _probe_systems pre-pass ingested Salesforce/

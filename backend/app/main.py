@@ -200,6 +200,15 @@ def _validate_org_approval_config() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # HP-2 T1: resolve the deployment profile FIRST. It answers "who runs this
+    # deployment" (saas | customer_hosted) and is the gate the boundary rules in
+    # HP-2.2 / HP-2.3 / HP-2.5 consult, so a bad value must stop the process here
+    # rather than surface on whichever request first consults it. Unset is 'saas'
+    # (unchanged for every existing deployment); an unrecognised value raises.
+    # Orthogonal to _is_production() — see app.deployment_profile.
+    from .deployment_profile import validate_deployment_profile
+
+    logger.info("Deployment profile: %s", validate_deployment_profile())
     # Only enforce secret presence when REQUIRE_CONNECTOR_SECRETS=1 (production).
     # Dev and test environments run without connector secrets set.
     if os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1":
@@ -247,6 +256,16 @@ async def lifespan(app: FastAPI):
         validate_trusted_keys_config()
     except Exception:  # pragma: no cover - diagnostics must never block startup
         logger.warning("pack bundle trust-anchor validation skipped", exc_info=True)
+    # HP-2.4: refuse at startup when the configured embedding model's output
+    # dimension differs from what is already stored under the active model stamp —
+    # previously a runtime storage error on the first write. It lives here rather
+    # than inside validate_provider_config() because it spans two layers: the
+    # model gateway owns provider config and deliberately touches no database,
+    # while this needs the retrieval store. Skips silently on a first run, an
+    # unknown model, or an unreadable store; raises only on a proven conflict.
+    from .retrieval.dimension_guard import validate_embedding_dimensions
+
+    validate_embedding_dimensions()
     # T2-S12-A: surface Oracle/PostgreSQL driver install issues at startup.
     _verify_db_driver_imports()
     # Ensure the temporal signal_snapshots table exists. A fresh dev.db is built
@@ -541,12 +560,26 @@ def api_health() -> Dict[str, Any]:
     except Exception as exc:
         logger.warning("health check: database connectivity failed: %s", exc)
         db_status = "error"
-    healthy = db_status == "ok"
+    # HP-2.5: a deployment whose configured model provider is unreachable reported
+    # 'healthy' here, while producing findings with no AI narrative and no
+    # retrieval evidence. The posture is whatever HP-2.3 resolved at startup —
+    # this NEVER re-probes (that would make a public endpoint a lever against the
+    # customer's own model server) and reports no endpoint host (this route is
+    # public; see app/model_provider_health.py).
+    from .model_provider_health import degrades_overall_health, model_provider_health
+
+    providers = model_provider_health()
+    # Only a REACHABILITY failure degrades the verdict. 'unknown' means nobody
+    # looked; a missing credential or unconfigured endpoint already refuses boot
+    # under customer_hosted, and is a supported configuration under saas (LLM
+    # enrichment is optional — the deterministic fallbacks work without a key).
+    # The check itself still reports each of those honestly.
+    healthy = db_status == "ok" and not degrades_overall_health(providers)
     return {
         "ok": healthy,
         "ts": now_iso(),
         "status": "healthy" if healthy else "unhealthy",
-        "checks": {"database": {"status": db_status}},
+        "checks": {"database": {"status": db_status}, "model_providers": providers},
     }
 
 

@@ -40,7 +40,7 @@ user/password, and native DB connection credentials.
 |---|---|
 | Database | `DATABASE_URL` (+ `DEV_/PROD_/TEST_DATABASE_URL` selectors) |
 | Vault key | `CREDENTIAL_VAULT_KEY` — deliberately stays in env: it encrypts the vault's contents, so storing it in the database it protects would be circular. Env or the customer's secrets manager only. |
-| CORS / server | `CORS_ORIGINS`, `DEV_JWT`, `JWT_SECRET`, `OAUTH_STATE_SECRET`, `ENVIRONMENT` |
+| CORS / server | `CORS_ORIGINS`, `DEV_JWT`, `JWT_SECRET`, `OAUTH_STATE_SECRET`, `ENVIRONMENT`, `DEPLOYMENT_PROFILE` |
 | OAuth app registrations | `OAUTH_REDIRECT_URI`, `OAUTH_FRONTEND_BASE_URL`, `{CONNECTOR}_CLIENT_ID` / `{CONNECTOR}_CLIENT_SECRET` (the deployment's OAuth **app**, not any client's token), tenant IDs |
 | Model gateway | `ANTHROPIC_API_KEY`, `MODEL_*_PROVIDER`, `IN_BOUNDARY_*`, `CUSTOMER_TENANT_*` (dev fallback only — production customer-tenant key is vaulted) |
 | Email / licensing / flags | `SMTP_*`, `EMAIL_*`, `LICENSE_*`, feature flags (e.g. `INFERRED_RELATIONSHIPS_ENABLED`) |
@@ -200,6 +200,298 @@ the connector makes (`cloudwatch:DescribeAlarmHistory`, `events:ListRules`/`Desc
 `boto3` is a lazy, live-only dependency (offline runs and tests never import it).
 
 ---
+
+## `DEPLOYMENT_PROFILE` — who runs this deployment 
+
+A deployment declares **who operates it** with one env var. This is the gate the HP-2
+boundary rules consult; it is read only by `backend/app/deployment_profile.py`.
+
+| Value | Meaning |
+|---|---|
+| `saas` (default) | CloudFulcrum operates the deployment. Reaching an internet endpoint is ordinary, so the model gateway may keep a cloud-calling default. |
+| `customer_hosted` | The customer operates it inside their own boundary — on-prem, air-gapped, or under a data-residency constraint. A call that leaves the boundary must be a **configured choice, never an inherited default**. |
+
+**Unset or blank resolves to `saas`**, so every deployment that predates this variable is
+unaffected. **Any other value is refused at startup** with a message naming the variable,
+the offending value and the valid values.
+
+That refusal is deliberately the opposite posture to `NETWORK_PROFILE` below, which
+degrades an unknown value to its safe default. The safe direction differs: an unknown
+`NETWORK_PROFILE` degrades toward the *full* experience, so the worst case is a connect
+flow that is offered and fails. An unknown `DEPLOYMENT_PROFILE` degrading to `saas` would
+hand a customer-hosted deployment the cloud-calling default it exists to refuse — so a
+typo such as `on_prem` or `customer-hosted` must fail loudly rather than silently
+reinstate the defect. The vocabulary is closed; `on_prem` is **not** an alias.
+
+### What the profile gates today (HP-2 T2)
+
+The model gateway's provider default. Under `saas`, an unset `MODEL_GENERATION_PROVIDER` /
+`MODEL_EMBEDDING_PROVIDER` resolves to `hosted` exactly as before. Under `customer_hosted`
+there is **no default** — either variable left unset fails startup with a message naming
+both variables and the valid values (`hosted`, `in_boundary`, `customer_tenant`).
+
+Left at defaults, an air-gapped deployment previously produced findings with no AI
+narrative and no retrieval evidence *while reporting healthy*: generation failed on DNS and
+degraded silently to `llmGenerated=False`, and the hosted embedding path returned `[]`, so
+nothing indexed and every retrieval came back empty. Refusing to boot replaces a run that
+looks fine with a message that says which variable to set.
+
+Setting `hosted` **deliberately** in a customer-hosted deployment is still allowed — the
+rule removes the inherited cloud call, not the option. (HP-3 audits the resulting
+transmission.)
+
+```bash
+# Customer-hosted, model served in-boundary by Ollama or vLLM:
+DEPLOYMENT_PROFILE=customer_hosted
+MODEL_GENERATION_PROVIDER=in_boundary
+MODEL_EMBEDDING_PROVIDER=in_boundary
+IN_BOUNDARY_BASE_URL=http://ollama.internal:11434
+```
+
+### Startup posture probe (HP-2 T3)
+
+Refusing to *inherit* a cloud provider does not prove the provider that *was*
+configured works. A deployment pointed at an in-boundary model server nobody started
+still booted, still reported healthy, and still produced findings with no AI narrative
+and no retrieval evidence.
+
+At startup each role is now checked, cheapest-first, and the **first failing check is
+reported**:
+
+| Check | Fails when | Reported status |
+|---|---|---|
+| `endpoint_configuration` | the provider is selected but no endpoint URL is set | `unavailable` |
+| `credential_presence` | a provider that *requires* a credential has none | `unavailable` |
+| `reachability` | a TCP connect to the endpoint host/port does not open | `unavailable` |
+
+A TCP connect, not a model call — a model call costs money, needs a valid credential,
+and could not distinguish "unreachable" from "wrong key". **One attempt, no retries**:
+a retrying probe would reproduce the startup hang this exists to make loud.
+
+`credential_presence` is checked *before* reachability, because a connect to a host with
+no credential configured succeeds and would report `ok` for a provider whose every call
+is about to be rejected. For `in_boundary` a credential is **not** required — Ollama and
+vLLM are commonly unauthenticated, so a missing key there is normal, not a fault.
+
+| | `customer_hosted` | `saas` |
+|---|---|---|
+| Unhealthy role | **startup fails** | logged, reported unhealthy, boot continues |
+| `unknown` role | boot continues | boot continues |
+
+`unknown` never blocks boot: it means the posture was not established (probing disabled,
+or a provider that declares nothing to probe), and refusing to boot over an unmeasured
+provider would turn "we did not look" into "it is broken".
+
+```bash
+MODEL_PROVIDER_PROBE_TIMEOUT_SECONDS=3   # seconds per attempt; 0 disables probing
+```
+
+Probing is also skipped when `AGENTIQ_DISABLE_BACKGROUND_JOBS=1`. Statuses come from the
+platform's one canonical set (`app/degradation.py`) — no new vocabulary. The posture is
+resolved once at startup and cached; reading it never re-probes, so a health check can
+never become a denial-of-service lever pointed at the customer's own model server.
+
+### Health reflects model posture (HP-2 T5)
+
+`GET /api/health` reported `healthy` on database connectivity alone, so a deployment
+whose configured model provider was unreachable looked entirely fine while producing
+findings with no AI narrative and no retrieval evidence.
+
+It now carries the startup posture:
+
+```json
+{
+  "ok": false,
+  "ts": "...",
+  "status": "unhealthy",
+  "checks": {
+    "database": {"status": "ok"},
+    "model_providers": {
+      "status": "unavailable",
+      "roles": {
+        "generation": {"provider": "in_boundary", "status": "ok",          "check": "reachability", "probed": true},
+        "embedding":  {"provider": "in_boundary", "status": "unavailable", "check": "reachability", "probed": true}
+      }
+    }
+  }
+}
+```
+
+The legacy `{ok, ts}` fields and the `database` check are unchanged, so existing
+consumers keep working.
+
+**Only a `reachability` failure flips the top-level verdict.** Everything else is
+reported honestly in the check but does not degrade it, and each exclusion has a reason:
+
+| Posture | Reported as | Degrades `status`? | Why |
+|---|---|---|---|
+| reachability failure | `unavailable` | **yes** | something the deployment was configured to talk to cannot be reached |
+| missing credential | `unavailable` | no | already refuses boot under `customer_hosted`; under `saas` LLM enrichment is optional by design — the deterministic fallbacks work with no `ANTHROPIC_API_KEY` |
+| endpoint not configured | `unavailable` | no | same reasoning |
+| not probed / no posture | `unknown` | no | nobody looked; calling a deployment broken for that is the mirror image of the defect being fixed |
+
+A health endpoint that cries wolf is one nobody reads, which is why the degrading set is
+narrow — but the check's own status is always the honest one.
+
+**Two things this endpoint deliberately does not do.** It is a *public* route (no
+credential required), so it reports **no endpoint host** — an in-boundary model host is
+internal network topology, and the full detail stays in the startup log where HP-2 T3
+already writes it at WARNING. And it **never re-probes**: it reads the posture resolved at
+startup, so it cannot become a lever pointed at the customer's own model server.
+
+### Embedding-dimension consistency (HP-2 T4)
+
+The pgvector column is deliberately an unqualified `vector` with **no fixed dimension**,
+so `nomic-embed-text` (768), `mxbai-embed-large` (1024), `all-MiniLM-L6-v2` (384) and
+BGE-large (1024) all work today with no schema migration and no re-embed. **That does not
+change.**
+
+What was missing was any check that the *configured* model emits the dimension already
+stored under the active `(embedding_model, embedding_model_version)` stamp. A mismatch
+used to appear as a storage error on the first write. It is now refused at startup, with a
+message naming both dimensions, the model identity and version, and how many chunks and
+orgs are affected.
+
+Supported models and their declared output dimensions
+(`backend/app/retrieval/embedding_dimensions.py` — add a row to extend, no migration
+needed):
+
+| Model | Dimensions | Basis |
+|---|---|---|
+| `all-MiniLM-L6-v2` | 384 | published |
+| `bge-small-en-v1.5` | 384 | published |
+| `nomic-embed-text` | 768 | published |
+| `bge-base-en-v1.5` | 768 | published |
+| `mxbai-embed-large` | 1024 | published |
+| `bge-large-en-v1.5` | 1024 | published |
+| `bge-large-en` | 1024 | published |
+| `text-embedding-3-small` | 1536 | measured |
+| `text-embedding-ada-002` | 1536 | published |
+| `text-embedding-3-large` | 3072 | published |
+
+`text-embedding-3-small` is the only `measured` row because it is the shipped configuration
+and its vectors were counted directly; every other basis is `published`, taken from the
+model's own documentation. The basis cell carries the code's vocabulary verbatim and nothing
+else, so this table stays literally comparable to `MODEL_DIMENSIONS` — the contract gate
+parses these rows, and an annotation inside the cell would silently drop the row from the
+comparison rather than failing it.
+
+An Ollama tag is folded (`nomic-embed-text:latest` is the same model and the same vector
+space). A model **absent** from the table has no declared dimension, so the check is
+skipped for it — an unknown model is not a mismatch.
+
+**Skipped is not passed**, and the two are logged distinctly: a first run with nothing
+embedded, an unknown model, and an unreadable store all skip. Only a proven conflict
+refuses, and it refuses in **both** profiles — unlike the reachability probe above this is
+not environmental, the configured model simply cannot write into this index.
+
+**On the remedy:** the R18-B2 T5 managed backfill does **not** fix this. It re-embeds
+vectors stamped by a *non-active* model, and the conflicting rows already carry the active
+stamp, so it would run and change nothing. Either repin the model to the one that produced
+the stored vectors, or change the model **version** so those rows become non-active and
+the backfill can reach them.
+
+> **The on-prem templates are now written (HP-2 T7):**
+> [`ON_PREM_OLLAMA.md`](./ON_PREM_OLLAMA.md) and [`ON_PREM_VLLM.md`](./ON_PREM_VLLM.md). Both
+> restate the table above, and `backend/tests/contract/test_hp2_onprem_templates.py` pins all
+> three copies — the two templates and **this document** — to `MODEL_DIMENSIONS`
+> bidirectionally, so they cannot drift apart. A restated dimension nobody checks is exactly
+> the artifact that goes stale silently, and a wrong number here has no way of being
+> discovered by the operator who sizes a model server against it.
+
+### On-prem configuration templates (HP-2 T7)
+
+Everything above describes *behaviour*. What an on-prem operator actually needs is a recipe,
+so `deployment/` carries one per supported self-hosted model server:
+
+| Template | Server | Covers |
+|---|---|---|
+| [`ON_PREM_OLLAMA.md`](./ON_PREM_OLLAMA.md) | Ollama | generation + embeddings, one host, **different hosts**, mixed, embeddings-only |
+| [`ON_PREM_VLLM.md`](./ON_PREM_VLLM.md) | vLLM | the same, plus the two-process topology vLLM requires |
+
+Each is a complete, copy-pasteable `.env` block — not a list of variables to assemble — and
+each sets `DEPLOYMENT_PROFILE=customer_hosted` together with **both** provider variables,
+because under the rule above a template that omits either describes a deployment that refuses
+to boot.
+
+**Different hosts is the normal case, not a variant.** Generation wants a GPU; embeddings are
+cheap and belong next to the database. vLLM makes it unavoidable — it serves one model per
+process. The per-role overrides exist for exactly this and are **complete URLs including the
+path**; they are never joined to `IN_BOUNDARY_BASE_URL`:
+
+```bash
+IN_BOUNDARY_BASE_URL=
+IN_BOUNDARY_GENERATION_ENDPOINT=http://vllm-gen.internal:8000/v1/chat/completions
+IN_BOUNDARY_EMBEDDING_ENDPOINT=http://vllm-embed.internal:8000/v1/embeddings
+```
+
+Each role is probed at its own endpoint and reported independently, so a failure names *which*
+host is down rather than merely that something is.
+
+**The dimension table is restated, never re-derived.**
+`backend/app/retrieval/embedding_dimensions.py` stays the single source, and
+`backend/tests/contract/test_hp2_onprem_templates.py` pins each copy to it in **both**
+directions — a documented row must match the name, dimension and basis (re-checked through
+`declared_dimension()`, the function the startup guard itself calls), and every declared model
+must appear in every copy. Adding a model to the code without documenting it fails CI; so does
+changing a documented number. The same gate pins the `IN_BOUNDARY_*` variable names against
+`in_boundary_config` (both directions), the context-window arithmetic against
+`chunking.MAX_CHUNK_CHARS`, and the documented embedding batch size against the code default.
+
+**Validation status is stated, not implied.** The configuration path was exercised end to end
+through the real gateway adapter against a local stub speaking the same HTTP surface — 32
+checks covering both roles, both hosts, the credential being optional, the startup refusal
+under `customer_hosted`, and the reachability escape hatch, each scenario in its own
+interpreter so no `.env` value could stand in for one under test. **No Ollama or vLLM binary
+was installed**, so each template carries an explicit verified / NOT-verified split, a blank
+version table for a real-server run to fill in, and a `Verify on your deployment` checklist.
+The contract gate fails the build if any of those three is deleted: that deletion is the only
+way the claim could become dishonest without anyone editing a sentence.
+
+**Two failure modes the templates document because the path was actually run.** Neither is
+discoverable from provider documentation, and both are silent in the data:
+
+- **A server that returns fewer vectors than inputs discards the whole batch.** The adapter
+  requires one vector per input; anything less returns `[]`, so **nothing is indexed** while
+  the run completes and reports healthy. The only signal is an `embedding response count
+  mismatch` WARNING. The retrieval worker sends up to `RETRIEVAL_EMBED_BATCH_SIZE` texts
+  (default 64) per request, so a server that cannot batch is in this state permanently until
+  the variable is set to 1. Both templates make a three-input `curl` the highest-priority
+  checklist item for this reason.
+- **The model name an operator naturally types often has no declared dimension**, so the
+  startup check *skips* rather than protecting them. Namespace prefixes and `:tag` suffixes
+  are folded, so `nomic-embed-text:latest`, `BAAI/bge-large-en-v1.5` and
+  `sentence-transformers/all-MiniLM-L6-v2` all resolve — but Ollama's short tags
+  `all-minilm` / `bge-large`, and the versioned ids `nomic-ai/nomic-embed-text-v1.5` /
+  `mixedbread-ai/mxbai-embed-large-v1`, do not. The models are fine; the names are not
+  resolvable. Remedies per server (`ollama cp`, `--served-model-name`, or a one-line table
+  row) are tabulated in each template.
+
+**Context window is a real constraint, not a footnote.** `MAX_CHUNK_CHARS = 2000` is roughly
+500 tokens of English prose, which fits a 512-token model only just — and code, JSON and
+non-Latin content tokenise denser. A 512-token model is silently truncating (Ollama) or
+rejecting (vLLM) part of a code corpus. Prefer an 8192-context model such as
+`nomic-embed-text` unless the corpus is short English prose.
+
+**Startup ordering will catch someone.** Under `customer_hosted` an unreachable endpoint fails
+boot, and a vLLM process can take minutes to load weights. Gate AgentIQ on the model server's
+health, or set `MODEL_PROVIDER_PROBE_TIMEOUT_SECONDS=0` and accept losing the check that
+exists to stop a silently-degraded deployment.
+
+### `DEPLOYMENT_PROFILE` is not `ENVIRONMENT`
+
+The two answer different questions and neither derives the other:
+
+| | `DEPLOYMENT_PROFILE` | `ENVIRONMENT=production` |
+|---|---|---|
+| Question | Who runs it? | Is this process production? |
+| Governs | Whether a call may leave the boundary by default | Credential rules, fail-closed invites, dev-bypass suppression |
+| Read via | `get_deployment_profile()` / `is_customer_hosted()` | `is_production()` |
+
+A **customer-hosted staging box** is `customer_hosted` and **not** production: its boundary
+is real (so it must not inherit a cloud default), while it is not subject to production
+credential rules that assume a managed secret store. A SaaS production box is the mirror
+case. Deriving either from the other gets one of those two deployments wrong.
 
 ## No-Public-Inbound Deployments (R18-A3)
 

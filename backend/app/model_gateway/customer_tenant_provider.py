@@ -77,11 +77,14 @@ import urllib.request
 from typing import Any, List, Optional, Tuple
 
 from app.model_gateway._interface import (
+    ROLE_EMBEDDING,
     GenerationRequest,
     GenerationResult,
     ModelProvider,
+    ProviderProbeTarget,
 )
 from app.model_gateway.customer_tenant_config import (
+    CONFIG_KEY_API_KEY,
     CONFIG_KEY_DEPLOYMENT,
     CONFIG_KEY_EMBEDDING_DEPLOYMENT,
     CONFIG_KEY_EMBEDDING_ENDPOINT,
@@ -303,6 +306,31 @@ class CustomerTenantModelProvider(ModelProvider):
             },
         )
         return vectors
+
+    def probe_target(self, role: str) -> ProviderProbeTarget:
+        """HP-2.3 startup probe target — per role.
+
+        The credential IS required: this is the customer's own managed model
+        service (Azure OpenAI and similar), which authenticates every request, so
+        a missing key means every call 401s. Only presence and the variable NAME
+        are reported — the value is resolved from the vault and never surfaced.
+        """
+        cfg = CustomerTenantConfig()
+        endpoint = (
+            cfg.embedding_endpoint() if role == ROLE_EMBEDDING else cfg.generation_endpoint()
+        )
+        role_key = (
+            CONFIG_KEY_EMBEDDING_ENDPOINT
+            if role == ROLE_EMBEDDING
+            else CONFIG_KEY_GENERATION_ENDPOINT
+        )
+        return ProviderProbeTarget(
+            endpoint=endpoint or None,
+            endpoint_config_keys=(CONFIG_KEY_ENDPOINT, role_key),
+            credential_required=True,
+            credential_present=cfg.has_credential(),
+            credential_config_key=CONFIG_KEY_API_KEY,
+        )
 
     def embedding_identity(self) -> "tuple[str, str]":
         """Stamp identity/version for customer-tenant vectors (R18-B1 T3 / AC8).

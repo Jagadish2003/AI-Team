@@ -10,6 +10,39 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 
+#: The two roles a provider can serve, resolved independently (R16-D1 T2).
+ROLE_GENERATION: str = "generation"
+ROLE_EMBEDDING: str = "embedding"
+
+
+@dataclass(frozen=True)
+class ProviderProbeTarget:
+    """What HP-2.3's startup probe needs to know about one provider role.
+
+    Carries **no secret value** — only whether a credential is required and
+    whether one is present, plus the config key NAMES so a failure message can
+    tell an operator which variable to set. The endpoint is a non-secret URL.
+
+    Attributes:
+        endpoint: URL to probe, or ``None`` when the provider has nothing
+            reachable to probe (either it needs no endpoint, or none is
+            configured — ``endpoint_config_keys`` is what a message names then).
+        endpoint_config_keys: env var names that would supply the endpoint.
+        credential_required: whether every call fails without a credential.
+            ``False`` for in-boundary servers, which are commonly unauthenticated
+            (Ollama and vLLM need no key), so a missing credential there is normal
+            rather than a fault.
+        credential_present: whether one is configured. Never the value.
+        credential_config_key: env var name that supplies it, for the message.
+    """
+
+    endpoint: Optional[str] = None
+    endpoint_config_keys: tuple = ()
+    credential_required: bool = False
+    credential_present: bool = True
+    credential_config_key: Optional[str] = None
+
+
 @dataclass
 class GenerationRequest:
     """Parameters for a single text-generation call."""
@@ -104,3 +137,22 @@ class ModelProvider(ABC):
         path, which must never block a run.
         """
         return (self.name, "")
+
+    def probe_target(self, role: str) -> ProviderProbeTarget:
+        """Describe what to probe for ``role`` at startup (HP-2.3).
+
+        ``role`` is ``ROLE_GENERATION`` or ``ROLE_EMBEDDING``; a provider serving
+        both may expose a different endpoint for each (the in-boundary adapter
+        supports generation and embeddings on different hosts).
+
+        Resolved live, like every other config accessor here, so a repin takes
+        effect without a restart. Returns non-secret data only — see
+        :class:`ProviderProbeTarget`.
+
+        The default describes nothing to probe, so a provider with no network
+        endpoint (or a future provider added before it implements this) is simply
+        not probed rather than reported as broken. Must never raise — the caller
+        treats a raising target as "cannot determine", but a provider should not
+        make it guess.
+        """
+        return ProviderProbeTarget()

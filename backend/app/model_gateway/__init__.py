@@ -32,8 +32,17 @@ Design rules (from R16-D1 spec)
 
 Provider resolution  (T2 — R16-D1 §3)
 ---------------------------------------
-  MODEL_GENERATION_PROVIDER  env var (default: 'hosted')
-  MODEL_EMBEDDING_PROVIDER   env var (default: 'hosted')
+  MODEL_GENERATION_PROVIDER  env var (default: 'hosted' — SaaS profile only)
+  MODEL_EMBEDDING_PROVIDER   env var (default: 'hosted' — SaaS profile only)
+
+  HP-2 T2: the default is conditional on the DEPLOYMENT PROFILE. Under
+  ``DEPLOYMENT_PROFILE=customer_hosted`` there is NO default — an unset
+  variable raises ``MissingProviderConfiguration`` at startup instead of
+  inheriting 'hosted', which calls api.anthropic.com. In a deployment that sits
+  inside the customer's boundary, a call that leaves it must be a configured
+  choice and never an inherited one. Under 'saas' (the default profile)
+  resolution is unchanged. ``_configured_provider_name()`` is the single place
+  that fallback is decided.
 
   Both are resolved independently at call time.  Setting generation to one
   value and embedding to another works without conflict (T2-AC3).
@@ -50,8 +59,9 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 
+from app.deployment_profile import is_customer_hosted
 from app.model_gateway._interface import (
     GenerationRequest,
     GenerationResult,
@@ -66,6 +76,8 @@ logger = logging.getLogger(__name__)
 
 _ENV_GENERATION: str = "MODEL_GENERATION_PROVIDER"
 _ENV_EMBEDDING: str = "MODEL_EMBEDDING_PROVIDER"
+#: The SaaS default. HP-2 T2 makes this conditional on the deployment profile —
+#: see :func:`_default_provider_name`. Never read it directly.
 _DEFAULT_PROVIDER: str = "hosted"
 
 # Telemetry event types emitted by the gateway call paths (R16-D1 T5 / AT-366).
@@ -96,6 +108,100 @@ def register_provider(provider: ModelProvider) -> None:
     _PROVIDER_REGISTRY[provider.name] = provider
 
 
+class MissingProviderConfiguration(ValueError):
+    """No model provider is configured, and this deployment has no default.
+
+    HP-2 T2. Raised only under the ``customer_hosted`` deployment profile, where
+    inheriting a cloud-calling default is the defect HP-2 removes. A
+    ``ValueError`` subclass so callers that already handle the gateway's
+    configuration errors generically keep working.
+    """
+
+
+def _default_provider_name() -> Optional[str]:
+    """The provider applied when the env var is unset — or ``None`` if there is none.
+
+    HP-2 T2, story item 1. The SaaS default is ``hosted``, which reaches
+    ``api.anthropic.com``. Under ``customer_hosted`` there is deliberately NO
+    default: the deployment sits in the customer's boundary (on-prem, air-gapped,
+    or data-residency constrained), so a call that leaves it must be a configured
+    choice and never an inherited one.
+
+    Resolved live, so this tracks the profile the way every other reader in this
+    package tracks its env var.
+    """
+    if is_customer_hosted():
+        return None
+    return _DEFAULT_PROVIDER
+
+
+def _configured_provider_name(env_var: str) -> str:
+    """The provider name configured in ``env_var``, applying the profile default.
+
+    The SINGLE place the ``MODEL_*_PROVIDER`` fallback is decided — before HP-2
+    T2 the same ``os.getenv(var, _DEFAULT_PROVIDER)`` line appeared in four
+    places, which is the shape that lets one copy drift.
+
+    Under ``saas`` the behaviour is byte-identical to before HP-2: unset yields
+    ``hosted``, and any set value (including a blank or whitespace one) is passed
+    through to :func:`_resolve_provider` exactly as it was, so a blank var still
+    fails with the existing "not a registered model provider" message rather than
+    silently becoming ``hosted`` (AC2).
+
+    Raises:
+        MissingProviderConfiguration: under ``customer_hosted`` when the variable
+            is unset or blank. The message names BOTH provider variables and
+            every valid value, because an operator who has to set one almost
+            always has to set the other, and the pair is the actual decision.
+    """
+    raw = os.environ.get(env_var)
+    if raw is not None and raw.strip():
+        # Deliberately NOT stripped: preserve the pre-HP-2 resolution exactly.
+        return raw
+
+    default = _default_provider_name()
+    if default is not None:
+        # SaaS: reproduce ``os.getenv(env_var, _DEFAULT_PROVIDER)`` EXACTLY. Only
+        # an ABSENT variable takes the default; a present-but-blank one is passed
+        # straight through so it still fails in _resolve_provider as an
+        # unregistered name, exactly as it did before HP-2. Treating blank as
+        # unset here would be a real behaviour change smuggled in under "no
+        # change to SaaS" — and it silently turns a typo into a cloud call.
+        return raw if raw is not None else default
+
+    # customer_hosted: no default exists, so an unset OR blank variable is a
+    # missing configuration rather than something to fall back from.
+    valid = ", ".join(f"'{n}'" for n in sorted(_PROVIDER_REGISTRY)) or "none registered"
+    raise MissingProviderConfiguration(
+        f"{env_var} is not set, and this deployment runs under "
+        f"DEPLOYMENT_PROFILE=customer_hosted, which has no default model "
+        f"provider. Set both {_ENV_GENERATION} and {_ENV_EMBEDDING} "
+        f"explicitly. Valid values: {valid}. There is no default here on "
+        f"purpose: the '{_DEFAULT_PROVIDER}' provider calls an external API, "
+        "and in a customer-hosted deployment a call that leaves the boundary "
+        "must be a configured choice, never an inherited one. Use "
+        "'in_boundary' for a model served inside the boundary (Ollama, vLLM, "
+        "any OpenAI-compatible endpoint), 'customer_tenant' for the "
+        f"customer's own managed model service, or '{_DEFAULT_PROVIDER}' to "
+        "deliberately accept the external call."
+    )
+
+
+def _configured_provider_name_or_none(env_var: str) -> Optional[str]:
+    """Like :func:`_configured_provider_name` but reports ``None`` instead of raising.
+
+    For :func:`resolve_provider_names`, whose documented contract is to describe
+    the configuration rather than refuse it. Under ``customer_hosted`` with the
+    variable unset the honest answer is "nothing is configured" — reporting
+    ``'{hosted}'`` there would put a provider into a run's reproducibility record
+    that the deployment would never have used.
+    """
+    try:
+        return _configured_provider_name(env_var)
+    except MissingProviderConfiguration:
+        return None
+
+
 def _resolve_provider(name: str, env_var: str) -> ModelProvider:
     """Look up ``name`` in the registry; raise ``ValueError`` with a helpful
     message if not found.
@@ -124,30 +230,39 @@ def _resolve_provider(name: str, env_var: str) -> ModelProvider:
 def get_generation_provider() -> ModelProvider:
     """Return the active text-generation provider.
 
-    Resolved independently from MODEL_GENERATION_PROVIDER (default: 'hosted').
+    Resolved independently from MODEL_GENERATION_PROVIDER (default: 'hosted' under
+    the SaaS profile; no default under customer_hosted — HP-2 T2).
     Changing this env var does not affect the embedding provider (T2-AC3).
 
     Raises:
         ValueError: when MODEL_GENERATION_PROVIDER names an unregistered provider.
+        MissingProviderConfiguration: under ``customer_hosted`` with the variable
+            unset. In a served process ``validate_provider_config()`` has already
+            refused at startup, so this path is reached only by an entry point
+            that skipped startup validation (a CLI script, a standalone worker) —
+            where a loud failure is still far better than silently calling out of
+            the boundary.
     """
-    name = os.getenv(_ENV_GENERATION, _DEFAULT_PROVIDER)
+    name = _configured_provider_name(_ENV_GENERATION)
     return _resolve_provider(name, _ENV_GENERATION)
 
 
 def get_embedding_provider() -> ModelProvider:
     """Return the active embedding provider.
 
-    Resolved independently from MODEL_EMBEDDING_PROVIDER (default: 'hosted').
+    Resolved independently from MODEL_EMBEDDING_PROVIDER (default: 'hosted' under
+    the SaaS profile; no default under customer_hosted — HP-2 T2).
     Changing this env var does not affect the generation provider (T2-AC3).
 
     Raises:
         ValueError: when MODEL_EMBEDDING_PROVIDER names an unregistered provider.
+        MissingProviderConfiguration: see :func:`get_generation_provider`.
     """
-    name = os.getenv(_ENV_EMBEDDING, _DEFAULT_PROVIDER)
+    name = _configured_provider_name(_ENV_EMBEDDING)
     return _resolve_provider(name, _ENV_EMBEDDING)
 
 
-def resolve_provider_names() -> tuple[str, str]:
+def resolve_provider_names() -> tuple[Optional[str], Optional[str]]:
     """The configured ``(generation, embedding)`` provider NAMES.
 
     Added for 2.0-D4 T3's run-reproducibility record, which needs to record WHICH
@@ -164,10 +279,16 @@ def resolve_provider_names() -> tuple[str, str]:
     Unlike :func:`get_generation_provider` this never raises for an unregistered
     name — it reports what is configured, and reporting an invalid configuration is
     more useful to a reproducibility record than refusing to describe the run.
+
+    HP-2 T2: under ``customer_hosted`` an unset variable reports ``None`` rather
+    than ``'hosted'``. There is no default in that profile, so naming one would
+    record a provider the deployment would never have used — the same reason
+    2.0-D4 T3 records an absent assembly-policy version as ``None`` with a reason
+    rather than a placeholder.
     """
     return (
-        os.getenv(_ENV_GENERATION, _DEFAULT_PROVIDER),
-        os.getenv(_ENV_EMBEDDING, _DEFAULT_PROVIDER),
+        _configured_provider_name_or_none(_ENV_GENERATION),
+        _configured_provider_name_or_none(_ENV_EMBEDDING),
     )
 
 
@@ -318,11 +439,20 @@ def validate_provider_config() -> None:
     the first model call — surfacing it as a ``ValueError`` at startup rather
     than mid-run (T2-AC4).
 
+    HP-2 T2 makes this the refusal point for a MISSING provider too, under the
+    ``customer_hosted`` profile. It belongs here rather than in the per-call
+    getters because the lifespan already calls this unconditionally: a
+    configuration error should stop the process, not surface as a runtime error
+    on whichever request first needs a model.
+
     Raises:
         ValueError: when either env var names an unregistered provider.
+        MissingProviderConfiguration: under ``customer_hosted`` when either
+            provider variable is unset — no cloud-calling default is inherited
+            (HP-2 AC1). Under ``saas`` unset still resolves to 'hosted' (AC2).
     """
-    gen_name = os.getenv(_ENV_GENERATION, _DEFAULT_PROVIDER)
-    emb_name = os.getenv(_ENV_EMBEDDING, _DEFAULT_PROVIDER)
+    gen_name = _configured_provider_name(_ENV_GENERATION)
+    emb_name = _configured_provider_name(_ENV_EMBEDDING)
     # Both calls raise ValueError on unknown names (T2-AC4).
     gen_provider = _resolve_provider(gen_name, _ENV_GENERATION)
     emb_provider = _resolve_provider(emb_name, _ENV_EMBEDDING)
@@ -405,6 +535,29 @@ def validate_provider_config() -> None:
         _ENV_EMBEDDING, emb_name,
     )
 
+    # HP-2.3: startup posture — endpoint configuration, credential presence, and
+    # a BOUNDED reachability probe per role. Extends this validator rather than
+    # adding a parallel one, so there stays exactly one startup validation entry
+    # point. Evaluation never raises and always records the posture (HP-2.5's
+    # health surface reads it); enforcement is separate and raises only under the
+    # customer_hosted profile, where there is no fallback.
+    #
+    # The evaluate/enforce split is why the try/except is scoped to evaluation
+    # only: a bug in probing must not block startup, but a DELIBERATE refusal
+    # must not be swallowed by the same guard.
+    posture = None
+    try:
+        posture = probe.evaluate_startup_posture(
+            gen_provider, emb_provider, _ENV_GENERATION, _ENV_EMBEDDING
+        )
+    except Exception:  # pragma: no cover - probing must never break startup
+        logger.warning(
+            "model_gateway: provider posture probe raised; posture unknown",
+            exc_info=True,
+        )
+    if posture is not None:
+        probe.enforce_startup_posture(posture)
+
 
 # ---------------------------------------------------------------------------
 # Bootstrap: register HostedModelProvider as the default 'hosted' provider at
@@ -429,6 +582,10 @@ def validate_provider_config() -> None:
 # this module, so there is no cycle.
 # ---------------------------------------------------------------------------
 
+# HP-2.3: imported here (not at the top) for the same reason as the providers —
+# probe.py imports from _interface, which is already in sys.modules by this point.
+# validate_provider_config() resolves the name at call time, not at def time.
+from app.model_gateway import probe  # noqa: E402
 from app.model_gateway.hosted_provider import HostedModelProvider as _HostedModelProvider  # noqa: E402
 from app.model_gateway.in_boundary_provider import InBoundaryModelProvider as _InBoundaryModelProvider  # noqa: E402
 from app.model_gateway.customer_tenant_provider import CustomerTenantModelProvider as _CustomerTenantModelProvider  # noqa: E402
@@ -441,11 +598,24 @@ register_provider(_CustomerTenantModelProvider())
 __all__ = [
     "GenerationRequest",
     "GenerationResult",
+    "MissingProviderConfiguration",
     "ModelProvider",
     "generate",
     "embed",
     "get_generation_provider",
     "get_embedding_provider",
+    "probe",
+    "provider_posture",
     "register_provider",
+    "resolve_provider_names",
     "validate_provider_config",
 ]
+
+
+def provider_posture():
+    """The startup provider posture (HP-2.3), or ``None`` if never evaluated.
+
+    Re-exported so HP-2.5's health surface reads the gateway's public interface
+    rather than reaching into a submodule.
+    """
+    return probe.provider_posture()

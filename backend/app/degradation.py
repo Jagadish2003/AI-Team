@@ -101,6 +101,16 @@ NATIVE_STATUS_MAP: Dict[str, str] = {
     "unavailable": STATUS_UNAVAILABLE,
     # discovery/ingest/operational_config.py
     "credential_missing": STATUS_UNAVAILABLE,
+    # app/model_gateway/probe.py (HP-2.3) — a configured model endpoint we could
+    # not open a connection to. UNAVAILABLE rather than FAILED: nothing was
+    # produced and the cause is the deployment's own network/config reach, which
+    # the customer can act on — the same reading as auth_failed/not_configured.
+    # FAILED is reserved for "we got through, and it broke".
+    "unreachable": STATUS_UNAVAILABLE,
+    # The reachability probe did not run (disabled, or suppressed under test
+    # isolation). NOT ok — an unmeasured provider is UNKNOWN by this module's
+    # standing rule.
+    "not_probed": STATUS_UNKNOWN,
     # run stages
     "degraded": STATUS_PARTIAL,
     "complete": STATUS_OK,

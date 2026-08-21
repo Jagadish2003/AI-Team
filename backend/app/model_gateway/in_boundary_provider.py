@@ -66,11 +66,14 @@ import urllib.request
 from typing import Any, List, Optional, Tuple
 
 from app.model_gateway._interface import (
+    ROLE_EMBEDDING,
     GenerationRequest,
     GenerationResult,
     ModelProvider,
+    ProviderProbeTarget,
 )
 from app.model_gateway.in_boundary_config import (
+    CONFIG_KEY_API_KEY,
     CONFIG_KEY_BASE_URL,
     CONFIG_KEY_EMBEDDING_ENDPOINT,
     CONFIG_KEY_EMBEDDING_MODEL,
@@ -277,6 +280,34 @@ class InBoundaryModelProvider(ModelProvider):
             },
         )
         return vectors
+
+    def probe_target(self, role: str) -> ProviderProbeTarget:
+        """HP-2.3 startup probe target — per role, since the two may differ.
+
+        The in-boundary adapter deliberately supports generation and embeddings on
+        DIFFERENT hosts, so each role is probed at its own endpoint.
+
+        ``credential_required`` is **False**: an in-boundary server is commonly
+        unauthenticated — Ollama and vLLM need no key — so treating a missing one
+        as a fault would fail startup on a correct on-prem deployment, which is
+        exactly the customer HP-2 exists to serve.
+        """
+        cfg = InBoundaryConfig()
+        endpoint = (
+            cfg.embedding_endpoint if role == ROLE_EMBEDDING else cfg.generation_endpoint
+        )
+        role_key = (
+            CONFIG_KEY_EMBEDDING_ENDPOINT
+            if role == ROLE_EMBEDDING
+            else CONFIG_KEY_GENERATION_ENDPOINT
+        )
+        return ProviderProbeTarget(
+            endpoint=endpoint or None,
+            endpoint_config_keys=(CONFIG_KEY_BASE_URL, role_key),
+            credential_required=False,
+            credential_present=cfg.has_credential(),
+            credential_config_key=CONFIG_KEY_API_KEY,
+        )
 
     def embedding_identity(self) -> "tuple[str, str]":
         """Stamp identity/version for in-boundary vectors (R18-B1 T3 / AC8).
