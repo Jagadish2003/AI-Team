@@ -56,31 +56,46 @@ Versions this verification ran against:
 | OS | Darwin 25.2.0 (arm64) |
 | Model server | **a local stub** speaking the same two HTTP paths — *not* Ollama |
 
-### NOT verified — requires a run against a real Ollama server
+### Verified against a REAL Ollama server (2026-08-21)
 
-**No Ollama binary was installed and no model was pulled during this work**, so the
-following are written from Ollama's documented behaviour and are **unproven here**. They are
-the checklist in [Verify on your deployment](#verify-on-your-deployment).
+Ollama 0.32.15 on macOS (Darwin 25.2.0, arm64), model `nomic-embed-text:latest`
+(digest `0a109f422b47`, 274 MB), pulled and served locally. The two highest-risk items
+below moved from unverified to verified on this run:
 
-- That your Ollama version's `/v1/embeddings` accepts a **JSON array** for `input` (batch
-  embedding). Verified check #16 above shows the consequence if it does not: the adapter
-  requires one vector per input and discards the entire batch otherwise, so **nothing is
-  indexed** while the run still completes. Older Ollama builds accepted only a single
-  string. This is the single highest-risk item on the list.
-- The exact `ollama pull` tag → dimension mapping for your pulled models. The dimension
-  **table** below is the platform's declaration; that your pulled tag emits that dimension
-  is a property of the model you pulled.
+| # | Check | Observed |
+|---|---|---|
+| R1 | `/v1/embeddings` accepts a **JSON array** for `input` | 3 inputs → **3 vectors** |
+| R2 | Returned vector length matches the declared dimension | **768**, equal to `MODEL_DIMENSIONS['nomic-embed-text']` |
+| R3 | `index` fields are returned in request order | `[0, 1, 2]` |
+| R4 | A batch at the worker's **default size** succeeds | 64 inputs → **64 vectors** (`RETRIEVAL_EMBED_BATCH_SIZE=64`) |
+| R5 | The **real** adapter (not curl) embeds through it | 3 vectors, dim 768 |
+| R6 | HP-2.3 reachability probe under `customer_hosted` | posture `ok` — the deployment boots |
+| R7 | The model name resolves, so HP-2.4's check ENGAGES | stamp `in_boundary:nomic-embed-text`, declared dimension found — guard active, not skipped |
+
+R1 and R4 are the ones that matter: had either failed, **nothing would be indexed** while
+runs completed and reported healthy.
+
+### STILL NOT verified
+
+- **vLLM, entirely.** It requires a CUDA GPU and does not run meaningfully on Apple
+  Silicon, so [`ON_PREM_VLLM.md`](./ON_PREM_VLLM.md) remains validated only against the
+  stub. It needs a Linux GPU host.
+- **Generation model behaviour.** Only the embedding model was pulled; the generation path
+  is proven reachable (R6) but no generation model was served. Nothing here is a model
+  recommendation in any case.
 - Whether `num_ctx` truncation affects your corpus (see
   [Context window](#context-window--the-quiet-truncation-risk)).
-- Generation model behaviour and quality. Nothing here is a model recommendation.
+- Any embedding model other than `nomic-embed-text`, and any Ollama version other than
+  0.32.15. Both are properties of what *you* pull and run — re-check R1 and R2 after
+  changing either.
 
 **Record your own versions here when you validate:**
 
 | Component | Version you ran | Date | Result |
 |---|---|---|---|
-| Ollama server | | | |
-| Embedding model + tag | | | |
-| Generation model + tag | | | |
+| Ollama server | 0.32.15 (macOS arm64) | 2026-08-21 | pass — R1–R7 above |
+| Embedding model + tag | `nomic-embed-text:latest` (`0a109f422b47`, 274 MB) | 2026-08-21 | pass — 768 dims, batches of 64 |
+| Generation model + tag | not served | — | untested |
 
 ---
 
