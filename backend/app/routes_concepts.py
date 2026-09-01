@@ -1,9 +1,13 @@
-"""2.0-B4 T2 — the normalised-concept mapping API (AC5's "visible to pack authors").
+"""2.0-B4 — the normalised-concept API (T2's AC5 surface + T6's published vocabulary).
 
-Four read-only endpoints:
+Six read-only endpoints. One of them is the PARTNER contract and the rest are internal
+reviewer surfaces, which is why they differ in what they expose:
 
+* ``GET /api/concepts/vocabulary``  — **the published partner vocabulary (T6)**: the
+  2.0-C3 handoff artifact, with a pinnable digest and deliberately NO mapper module
+  paths. See ``discovery/concepts/sdk_vocabulary.py`` for why that boundary exists.
 * ``GET /api/concepts/contracts``   — the concept set and its versioned mapping
-  contracts. What a pack author builds against (2.0-C3's vocabulary).
+  contracts.
 * ``GET /api/concepts/conformance`` — which connector supports which concept, and the
   mapper backing each claim.
 * ``GET /api/concepts/gaps``        — the declared gaps: concept-level and field-level,
@@ -11,6 +15,7 @@ Four read-only endpoints:
   missing" is one request rather than thirteen.
 * ``GET /api/concepts/connectors/{connector_id}`` — one connector's full position,
   including its outstanding work list.
+* ``GET /api/concepts/by-concept``  — the concept-first gap view alone.
 
 Why these are unauthenticated-by-org rather than org-scoped
 -----------------------------------------------------------
@@ -44,6 +49,7 @@ try:
         concept_gap_report, connector_gap_report, gap_summary,
     )
     from discovery.concepts.mappers import registry_summary
+    from discovery.concepts.sdk_vocabulary import publish_vocabulary, vocabulary_digest
 except ModuleNotFoundError:  # pragma: no cover - project-root execution
     from backend.discovery.concepts import conformance as conf
     from backend.discovery.concepts.contracts import contract_summary
@@ -51,6 +57,9 @@ except ModuleNotFoundError:  # pragma: no cover - project-root execution
         concept_gap_report, connector_gap_report, gap_summary,
     )
     from backend.discovery.concepts.mappers import registry_summary
+    from backend.discovery.concepts.sdk_vocabulary import (
+        publish_vocabulary, vocabulary_digest,
+    )
 
 
 router = APIRouter(
@@ -92,6 +101,41 @@ class ConceptGapsResponse(BaseModel):
     outstanding_count: int
     field_gap_count: int
     registry_behind_code: list
+
+
+class ConceptVocabularyResponse(BaseModel):
+    """The published partner vocabulary (2.0-B4 T6) — the 2.0-C3 handoff artifact.
+
+    Carries a ``digest`` a pack manifest can pin, and deliberately carries NO mapper
+    module paths: a partner gets capability, not an import path into our internals
+    (see ``discovery/concepts/sdk_vocabulary.py``).
+    """
+
+    digest: str
+    vocabulary_version: int
+    concept_set_version: int
+    contract_versions: Dict[str, int]
+    concepts: Dict[str, Any]
+    vocabularies: Dict[str, Any]
+    availability: Dict[str, Any]
+    source_families: list
+    stability_contract: list
+    breaking_change_rules: list
+    sdk_handoff: Dict[str, Any]
+
+
+@router.get("/vocabulary", response_model=ConceptVocabularyResponse)
+def get_concept_vocabulary() -> ConceptVocabularyResponse:
+    """The published concept vocabulary a partner pack is authored against (T6).
+
+    Distinct from ``/conformance``, which serves the same underlying registry to an
+    INTERNAL reviewer and does name the mapper behind each claim. This surface is the
+    partner contract: availability, fields, closed vocabulary values, declared gaps, a
+    stability promise, and a digest to pin — with no implementation detail a partner
+    could couple to.
+    """
+    published = publish_vocabulary()
+    return ConceptVocabularyResponse(digest=vocabulary_digest(published), **published)
 
 
 @router.get("/contracts", response_model=ConceptContractsResponse)
